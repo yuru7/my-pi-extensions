@@ -19,7 +19,7 @@ export const DEFAULT_CONFIG: NotifyConfig = {
 };
 
 export function getConfigPath(home = homedir()): string {
-  return join(home, ".config", "pi", "notify-config.json");
+  return join(home, ".pi", "agent", "notify-settings.json");
 }
 
 export function isValidThreshold(value: unknown): value is number {

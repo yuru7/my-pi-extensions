@@ -106,7 +106,7 @@ describe("loadConfig / saveConfig", () => {
   });
 
   test("保存した設定を再ロードできる", () => {
-    const path = join(tempDir(), "pi", "notify-config.json");
+    const path = join(tempDir(), "agent", "notify-settings.json");
     saveConfig({ thresholdSeconds: 7, powershellPath: "powershell.exe" }, path);
     assert.deepEqual(loadConfig(path), {
       thresholdSeconds: 7,
@@ -116,10 +116,10 @@ describe("loadConfig / saveConfig", () => {
     assert.equal(written.thresholdSeconds, 7);
   });
 
-  test("設定パスは ~/.config/pi/notify-config.json", () => {
+  test("設定パスは ~/.pi/agent/notify-settings.json", () => {
     assert.equal(
       getConfigPath("/home/dev"),
-      join("/home/dev", ".config", "pi", "notify-config.json"),
+      join("/home/dev", ".pi", "agent", "notify-settings.json"),
     );
   });
 });

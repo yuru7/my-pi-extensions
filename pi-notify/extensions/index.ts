@@ -6,12 +6,14 @@ import {
   type NotifyConfig,
 } from "./config.ts";
 import {
-  formatCompletionMessage,
+  formatNotificationMessage,
+  NOTIFICATION_TITLE,
   notify,
   shouldNotify,
 } from "./notifier.ts";
 
 export interface NotifyRuntime {
+  capturePrompt: (prompt: string) => void;
   markStart: () => void;
   onSettled: () => Promise<boolean>;
 }
@@ -24,6 +26,7 @@ export interface NotifyRuntimeDeps {
 
 export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
   let runStartedAt: number | null = null;
+  let prompt: string | null = null;
   const now = deps.now ?? Date.now;
   const send =
     deps.notify ??
@@ -35,6 +38,11 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
     });
 
   return {
+    capturePrompt(nextPrompt) {
+      if (prompt === null) {
+        prompt = nextPrompt;
+      }
+    },
     markStart() {
       if (runStartedAt === null) {
         runStartedAt = now();
@@ -42,7 +50,9 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
     },
     async onSettled() {
       const startedAt = runStartedAt;
+      const capturedPrompt = prompt;
       runStartedAt = null;
+      prompt = null;
 
       if (startedAt === null) {
         return false;
@@ -56,8 +66,8 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
 
       try {
         await send(
-          "Pi",
-          formatCompletionMessage(elapsedSeconds),
+          NOTIFICATION_TITLE,
+          formatNotificationMessage(capturedPrompt ?? ""),
           config,
         );
       } catch {
@@ -75,6 +85,10 @@ export default function (pi: ExtensionAPI) {
 
   const runtime = createNotifyRuntime({
     getConfig: () => state.config,
+  });
+
+  pi.on("before_agent_start", async (event) => {
+    runtime.capturePrompt(event.prompt);
   });
 
   pi.on("agent_start", async () => {

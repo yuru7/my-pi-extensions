@@ -34,8 +34,24 @@ function warnOnce(key: string, message: string): void {
   console.error(`[pi-native-notify] ${message}`);
 }
 
-export function formatCompletionMessage(elapsedSeconds: number): string {
-  return `タスクが完了しました（${elapsedSeconds.toFixed(1)}秒）`;
+export const NOTIFICATION_TITLE = "Done - Pi";
+export const NOTIFICATION_MESSAGE_MAX_LENGTH = 50;
+const MESSAGE_ELLIPSIS = "…";
+const FALLBACK_MESSAGE = "タスクが完了しました";
+
+export function formatNotificationMessage(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (normalized === "") {
+    return FALLBACK_MESSAGE;
+  }
+
+  const chars = [...normalized];
+  if (chars.length <= NOTIFICATION_MESSAGE_MAX_LENGTH) {
+    return normalized;
+  }
+
+  const keep = NOTIFICATION_MESSAGE_MAX_LENGTH - MESSAGE_ELLIPSIS.length;
+  return `${chars.slice(0, keep).join("")}${MESSAGE_ELLIPSIS}`;
 }
 
 export function shouldNotify(
@@ -63,7 +79,7 @@ export function spawnDetached(invocation: CommandInvocation): void {
       if (invocation.command.includes("powershell")) {
         warnOnce(
           "powershell",
-          `PowerShell を実行できません (${invocation.command})。PATH を確認するか、~/.config/pi/notify-config.json の powershellPath を設定してください。`,
+          `PowerShell を実行できません (${invocation.command})。PATH を確認するか、~/.pi/agent/notify-settings.json の powershellPath を設定してください。`,
         );
         return;
       }

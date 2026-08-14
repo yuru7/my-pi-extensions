@@ -29,6 +29,7 @@ describe("/notify-settings", () => {
     const pi = createFakePi();
     factory(pi as never);
 
+    assert.equal(pi.events.has("before_agent_start"), true);
     assert.equal(pi.events.has("agent_start"), true);
     assert.equal(pi.events.has("agent_end"), false);
     assert.equal(pi.events.has("agent_settled"), true);

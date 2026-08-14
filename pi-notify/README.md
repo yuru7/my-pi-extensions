@@ -83,7 +83,7 @@ pi remove /absolute/path/to/my-pi-extensions/pi-notify
 設定ファイル:
 
 ```text
-~/.config/pi/notify-config.json
+~/.pi/agent/notify-settings.json
 ```
 
 例:
@@ -107,8 +107,8 @@ WSL で `powershell.exe` の場所を明示する場合:
 
 ## 通知メッセージ
 
-- タイトル: `Pi`
-- 本文: `タスクが完了しました（42.3秒）`
+- タイトル: `Done - Pi`
+- 本文: 対象プロンプト（改行は空白にまとめ、50文字を超える場合は省略。取れない場合は `タスクが完了しました`）
 
 ## Troubleshooting
 
@@ -145,7 +145,7 @@ GNOME / KDE / XFCE など、Desktop Notification Service が動いているこ�
 
 ### 設定ファイルが保存されない
 
-- `~/.config/pi/` への書き込み権限があるか確認してください
+- `~/.pi/agent/` への書き込み権限があるか確認してください
 - `/notify-settings` で不正値を入れるとファイルは更新されません
 
 ### 短いタスクで通知されない
