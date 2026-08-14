@@ -4,9 +4,10 @@ Pi の長時間タスクが完了したとき、利用中の OS へネイティ�
 
 リポジトリ: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
-完了判定には `agent_end` ではなく `agent_settled` を使います。retry、compaction 後の再実行、queued follow-up が残っている間は通知しません。一連の処理が本当に終わってから、経過時間が閾値以上の場合のみ知らせます。
+完了判定には `agent_end` ではなく `agent_settled` を使います。retry、compaction 後の再実行、queued follow-up が残っている間は通知しません。一連の処理が本当に終わってから、次のいずれかなら知らせます。
 
-デフォルトの閾値は **30秒** です。
+- ターミナルがフォーカスアウトしている（秒数は問わない）
+- 経過時間が閾値以上（デフォルト **30秒**。フォーカス中でも通知する）
 
 ## Supported platforms
 
@@ -78,7 +79,9 @@ pi remove /absolute/path/to/my-pi-extensions/pi-notify
 /notify-settings
 ```
 
-現在の秒数が表示され、新しい秒数を入力できます。`0` は有効で、すべての `agent_settled` を通知します。不正な値は拒否され、既存の設定は変わりません。
+現在の秒数が表示され、新しい秒数を入力できます。この値は「これ以上かかったら、フォーカス中でも通知する」閾値です。`0` は有効で、すべての `agent_settled` を通知します。不正な値は拒否され、既存の設定は変わりません。
+
+フォーカス判定は端末の DECSET 1004（`ESC[I` / `ESC[O`）を使います。対応していない端末では、フォーカスアウト扱いにはせず、経過時間の閾値だけが効きます。tmux では `set -g focus-events on` が必要です。
 
 設定ファイル:
 
@@ -150,7 +153,9 @@ GNOME / KDE / XFCE など、Desktop Notification Service が動いているこ�
 
 ### 短いタスクで通知されない
 
-デフォルトでは 30 秒未満の処理は通知しません。`/notify-settings` で閾値を下げてください。
+ターミナルを見ている間は、デフォルトでは 30 秒未満の処理を通知しません。別ウィンドウへ移っているときは短いタスクでも通知します。閾値を変えたい場合は `/notify-settings` を使ってください。
+
+tmux でフォーカスアウトが取れないときは `set -g focus-events on` を確認してください。
 
 ## 開発
 

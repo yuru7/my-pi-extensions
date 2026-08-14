@@ -57,8 +57,9 @@ export function formatNotificationMessage(prompt: string): string {
 export function shouldNotify(
   elapsedSeconds: number,
   thresholdSeconds: number,
+  unfocused = false,
 ): boolean {
-  return elapsedSeconds >= thresholdSeconds;
+  return unfocused || elapsedSeconds >= thresholdSeconds;
 }
 
 export function spawnDetached(invocation: CommandInvocation): void {

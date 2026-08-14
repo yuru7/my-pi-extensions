@@ -5,6 +5,7 @@ import {
   saveConfig,
   type NotifyConfig,
 } from "./config.ts";
+import { createFocusTracker, type FocusTracker } from "./focus.ts";
 import {
   formatNotificationMessage,
   NOTIFICATION_TITLE,
@@ -22,12 +23,18 @@ export interface NotifyRuntimeDeps {
   now?: () => number;
   getConfig: () => NotifyConfig;
   notify?: (title: string, message: string, config: NotifyConfig) => Promise<void>;
+  isUnfocused?: () => boolean;
+}
+
+export interface NotifyExtensionDeps {
+  focusTracker?: FocusTracker;
 }
 
 export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
   let runStartedAt: number | null = null;
   let prompt: string | null = null;
   const now = deps.now ?? Date.now;
+  const isUnfocused = deps.isUnfocused ?? (() => false);
   const send =
     deps.notify ??
     (async (title, message, config) => {
@@ -60,7 +67,13 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
 
       const elapsedSeconds = (now() - startedAt) / 1000;
       const config = deps.getConfig();
-      if (!shouldNotify(elapsedSeconds, config.thresholdSeconds)) {
+      if (
+        !shouldNotify(
+          elapsedSeconds,
+          config.thresholdSeconds,
+          isUnfocused(),
+        )
+      ) {
         return false;
       }
 
@@ -78,13 +91,25 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
   };
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
   const state = {
     config: loadConfig(),
   };
+  const focus = deps.focusTracker ?? createFocusTracker();
 
   const runtime = createNotifyRuntime({
     getConfig: () => state.config,
+    isUnfocused: () => focus.isUnfocused(),
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.hasUI) {
+      focus.attach();
+    }
+  });
+
+  pi.on("session_shutdown", async () => {
+    focus.detach();
   });
 
   pi.on("before_agent_start", async (event) => {

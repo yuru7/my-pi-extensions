@@ -27,6 +27,16 @@ describe("shouldNotify", () => {
     assert.equal(shouldNotify(0, 0), true);
     assert.equal(shouldNotify(0.1, 0), true);
   });
+
+  test("フォーカスアウトなら閾値未満でも通知する", () => {
+    assert.equal(shouldNotify(0, 30, true), true);
+    assert.equal(shouldNotify(1, 30, true), true);
+  });
+
+  test("フォーカス中なら閾値判定のまま", () => {
+    assert.equal(shouldNotify(29, 30, false), false);
+    assert.equal(shouldNotify(30, 30, false), true);
+  });
 });
 
 describe("formatNotificationMessage", () => {
@@ -56,6 +66,42 @@ describe("formatNotificationMessage", () => {
 });
 
 describe("createNotifyRuntime", () => {
+  test("フォーカスアウトなら閾値未満でも通知する", async () => {
+    let now = 0;
+    const sent: string[] = [];
+    const runtime = createNotifyRuntime({
+      now: () => now,
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => true,
+      notify: async (_title, message) => {
+        sent.push(message);
+      },
+    });
+
+    runtime.markStart();
+    now = 1000;
+    assert.equal(await runtime.onSettled(), true);
+    assert.deepEqual(sent, ["タスクが完了しました"]);
+  });
+
+  test("フォーカス中でも閾値以上なら通知する", async () => {
+    let now = 0;
+    const sent: string[] = [];
+    const runtime = createNotifyRuntime({
+      now: () => now,
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => false,
+      notify: async (_title, message) => {
+        sent.push(message);
+      },
+    });
+
+    runtime.markStart();
+    now = 30_000;
+    assert.equal(await runtime.onSettled(), true);
+    assert.deepEqual(sent, ["タスクが完了しました"]);
+  });
+
   test("閾値未満では通知しない", async () => {
     let now = 0;
     const sent: string[] = [];
