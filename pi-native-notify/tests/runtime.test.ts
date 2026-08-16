@@ -41,8 +41,8 @@ describe("shouldNotify", () => {
 
 describe("formatNotificationMessage", () => {
   test("空や空白のみなら完了メッセージにフォールバックする", () => {
-    assert.equal(formatNotificationMessage(""), "タスクが完了しました");
-    assert.equal(formatNotificationMessage("   \n\t  "), "タスクが完了しました");
+    assert.equal(formatNotificationMessage(""), "Task completed");
+    assert.equal(formatNotificationMessage("   \n\t  "), "Task completed");
   });
 
   test("改行を空白にまとめる", () => {
@@ -81,7 +81,7 @@ describe("createNotifyRuntime", () => {
     runtime.markStart();
     now = 1000;
     assert.equal(await runtime.onSettled(), true);
-    assert.deepEqual(sent, ["タスクが完了しました"]);
+    assert.deepEqual(sent, ["Task completed"]);
   });
 
   test("フォーカス中でも閾値以上なら通知する", async () => {
@@ -99,7 +99,7 @@ describe("createNotifyRuntime", () => {
     runtime.markStart();
     now = 30_000;
     assert.equal(await runtime.onSettled(), true);
-    assert.deepEqual(sent, ["タスクが完了しました"]);
+    assert.deepEqual(sent, ["Task completed"]);
   });
 
   test("閾値未満では通知しない", async () => {
@@ -134,7 +134,7 @@ describe("createNotifyRuntime", () => {
     now = 30_000;
     assert.equal(await runtime.onSettled(), true);
     assert.deepEqual(sent, [
-      { title: "Done - Pi", message: "タスクが完了しました" },
+      { title: "Done - Pi", message: "Task completed" },
     ]);
 
     assert.equal(await runtime.onSettled(), false);
@@ -181,7 +181,7 @@ describe("createNotifyRuntime", () => {
     runtime.markStart();
     now = 35_000;
     assert.equal(await runtime.onSettled(), true);
-    assert.deepEqual(sent, ["タスクが完了しました"]);
+    assert.deepEqual(sent, ["Task completed"]);
   });
 
   test("start なしの settled では通知しない", async () => {

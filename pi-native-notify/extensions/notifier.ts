@@ -37,7 +37,7 @@ function warnOnce(key: string, message: string): void {
 export const NOTIFICATION_TITLE = "Done - Pi";
 export const NOTIFICATION_MESSAGE_MAX_LENGTH = 50;
 const MESSAGE_ELLIPSIS = "…";
-const FALLBACK_MESSAGE = "タスクが完了しました";
+const FALLBACK_MESSAGE = "Task completed";
 
 export function formatNotificationMessage(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
@@ -73,25 +73,25 @@ export function spawnDetached(invocation: CommandInvocation): void {
       if (invocation.command === "notify-send") {
         warnOnce(
           "notify-send",
-          "notify-send が見つかりません。Linux では libnotify-bin をインストールしてください（例: sudo apt install libnotify-bin）。",
+          "notify-send was not found. On Linux, install libnotify-bin (for example: sudo apt install libnotify-bin).",
         );
         return;
       }
       if (invocation.command.includes("powershell")) {
         warnOnce(
           "powershell",
-          `PowerShell を実行できません (${invocation.command})。PATH を確認するか、~/.pi/agent/notify-settings.json の powershellPath を設定してください。`,
+          `Could not run PowerShell (${invocation.command}). Check PATH or set powershellPath in ~/.pi/agent/notify-settings.json.`,
         );
         return;
       }
       if (invocation.command === "osascript") {
-        warnOnce("osascript", "osascript を実行できませんでした。");
+        warnOnce("osascript", "Could not run osascript.");
         return;
       }
     }
     warnOnce(
       `spawn:${invocation.command}`,
-      `通知コマンドの起動に失敗しました: ${invocation.command}`,
+      `Failed to start the notification command: ${invocation.command}`,
     );
   });
   child.unref();

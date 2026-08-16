@@ -122,7 +122,7 @@ Changes take effect immediately after save. The value is kept across Pi restarts
 ## Notification message
 
 - Title: `Done - Pi`
-- Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `タスクが完了しました`)
+- Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `Task completed`)
 
 ## Troubleshooting
 

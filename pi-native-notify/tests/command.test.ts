@@ -38,7 +38,7 @@ describe("/notify-settings", () => {
     assert.equal(pi.commands.has("notify-settings"), true);
     assert.equal(
       pi.commands.get("notify-settings")?.description,
-      "ネイティブ通知の閾値を設定する",
+      "Set the native notification threshold",
     );
   });
 
@@ -66,7 +66,7 @@ describe("/notify-settings", () => {
     await handler("", ctx as never);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]?.[1], "error");
-    assert.match(notifications[0]?.[0] ?? "", /無効/);
+    assert.match(notifications[0]?.[0] ?? "", /Invalid/);
   });
 
   test("session_start でフォーカス追跡を開始し shutdown で停止する", async () => {

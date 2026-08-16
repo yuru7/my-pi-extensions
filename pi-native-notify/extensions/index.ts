@@ -129,7 +129,7 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
   });
 
   pi.registerCommand("notify-settings", {
-    description: "ネイティブ通知の閾値を設定する",
+    description: "Set the native notification threshold",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         return;
@@ -137,8 +137,8 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
 
       const current = state.config.thresholdSeconds;
       const input = await ctx.ui.input(
-        `Notify Settings — 通知閾値（現在: ${current}秒）。新しい秒数を入力`,
-        "0 以上の秒数（0 で常に通知）",
+        `Notify Settings — threshold (current: ${current}s). Enter a new value in seconds`,
+        "Seconds (0 or greater; 0 notifies always)",
       );
 
       if (input === undefined) {
@@ -148,7 +148,7 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
       const parsed = parseThresholdInput(input);
       if (parsed === undefined) {
         ctx.ui.notify(
-          "無効な値です。0以上の数値を入力してください。",
+          "Invalid value. Enter a number of 0 or greater.",
           "error",
         );
         return;
@@ -161,11 +161,11 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
       try {
         saveConfig(next);
       } catch {
-        ctx.ui.notify("設定ファイルを保存できませんでした。", "error");
+        ctx.ui.notify("Could not save the config file.", "error");
         return;
       }
       state.config = next;
-      ctx.ui.notify(`通知閾値を ${parsed} 秒に設定しました。`, "info");
+      ctx.ui.notify(`Notification threshold set to ${parsed} seconds.`, "info");
     },
   });
 }
