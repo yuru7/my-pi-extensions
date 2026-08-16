@@ -1,104 +1,106 @@
 # pi-native-notify
 
-Pi の長時間タスクが完了したとき、利用中の OS へネイティブ通知を送る Extension です。
+A Pi extension that sends a native OS notification when a long-running task completes.
 
-リポジトリ: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
+Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
-完了判定には `agent_end` ではなく `agent_settled` を使います。retry、compaction 後の再実行、queued follow-up が残っている間は通知しません。一連の処理が本当に終わってから、次のいずれかなら知らせます。
+> **Note:** The developer has only verified this extension on WSL2. Other platforms are implemented, but have not been tested on real devices by the author.
 
-- ターミナルがフォーカスアウトしている（秒数は問わない）
-- 経過時間が閾値以上（デフォルト **30秒**。フォーカス中でも通知する）
+Completion is detected with `agent_settled`, not `agent_end`. Notifications are not sent while a retry, a re-run after compaction, or a queued follow-up is still pending. After the full run has actually finished, a notification is sent when either of the following is true:
+
+- The terminal is unfocused (regardless of elapsed time)
+- Elapsed time is at or above the threshold (default **30 seconds**; notifies even while focused)
 
 ## Supported platforms
 
-| 環境 | 通知手段 |
+| Environment | Notification method |
 | --- | --- |
-| Windows | PowerShell 経由の Toast 通知 |
-| WSL | `powershell.exe` 経由で Windows 通知 |
+| Windows | Toast notification via PowerShell |
+| WSL | Windows notification via `powershell.exe` |
 | Linux | `notify-send` |
-| macOS | `osascript` の `display notification` |
+| macOS | `osascript` `display notification` |
 
-OS は自動判定します。WSL は通常の Linux とは区別し、Windows 通知を優先します。通知音は各 OS の標準通知設定に従います。
+The OS is detected automatically. WSL is treated separately from regular Linux and prefers Windows notifications. Notification sound follows each OS's standard notification settings.
 
 ## Requirements
 
 ### Windows / WSL
 
 - Windows PowerShell (`powershell.exe`)
-- WSL から使う場合は、Windows 側で通知が有効であること
-- `powershell.exe` が PATH に無い場合は、設定ファイルの `powershellPath` に絶対パスを書けます
+- When used from WSL, notifications must be enabled on the Windows side
+- If `powershell.exe` is not on PATH, set an absolute path in `powershellPath` in the config file
 
 ### Linux
 
-- `notify-send`（freedesktop.org Desktop Notifications）
-- Ubuntu / Debian の例: `sudo apt install libnotify-bin`
-- 未導入の場合は通知をスキップします。Pi の Agent 処理自体は失敗しません
+- `notify-send` (freedesktop.org Desktop Notifications)
+- Ubuntu / Debian example: `sudo apt install libnotify-bin`
+- If it is not installed, notifications are skipped. Pi's agent run itself does not fail
 
 ### macOS
 
-- `osascript`（標準搭載）
+- `osascript` (preinstalled)
 
-## インストール
+## Installation
 
 ```bash
 pi install npm:pi-native-notify
 ```
 
-インストール後、Pi を再起動するか `/reload` してください。`pi-package` キーワード付きのため、公開後は [Pi Packages](https://pi.dev/packages) にも掲載されます。
+After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
 
-### 更新 / 削除
+### Update / uninstall
 
 ```bash
 pi update npm:pi-native-notify
 pi remove npm:pi-native-notify
 ```
 
-### ローカルパスから入れる
+### Install from a local path
 
-このリポジトリは複数 Extension 用のモノレポです。開発中や未公開の状態では、`pi-notify/` をパッケージとして指定します。
+This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-native-notify/` package.
 
 ```bash
 git clone https://github.com/yuru7/my-pi-extensions.git
-pi install ./my-pi-extensions/pi-notify
+pi install ./my-pi-extensions/pi-native-notify
 ```
 
-すでにクローン済みなら、そのパスを指定してください。
+If you already have a clone, pass that path:
 
 ```bash
-pi install /absolute/path/to/my-pi-extensions/pi-notify
+pi install /absolute/path/to/my-pi-extensions/pi-native-notify
 ```
 
-一時的に試す場合:
+To try it temporarily:
 
 ```bash
-pi -e /absolute/path/to/my-pi-extensions/pi-notify
+pi -e /absolute/path/to/my-pi-extensions/pi-native-notify
 ```
 
-ローカルパスで入れている場合の更新は、リポジトリを `git pull` したあと Pi を再起動するか `/reload` してください。削除は次のとおりです。
+When installed from a local path, update by running `git pull` in the repository, then restart Pi or run `/reload`. Uninstall as follows:
 
 ```bash
-pi remove /absolute/path/to/my-pi-extensions/pi-notify
+pi remove /absolute/path/to/my-pi-extensions/pi-native-notify
 ```
 
 ## Configuration
 
-対話的に閾値を変える:
+Change the threshold interactively:
 
 ```text
 /notify-settings
 ```
 
-現在の秒数が表示され、新しい秒数を入力できます。この値は「これ以上かかったら、フォーカス中でも通知する」閾値です。`0` は有効で、すべての `agent_settled` を通知します。不正な値は拒否され、既存の設定は変わりません。
+The current number of seconds is shown, and you can enter a new value. This is the threshold for "notify even while focused if the run took at least this long". `0` is valid and notifies on every `agent_settled`. Invalid values are rejected and the existing setting is left unchanged.
 
-フォーカス判定は端末の DECSET 1004（`ESC[I` / `ESC[O`）を使います。対応していない端末では、フォーカスアウト扱いにはせず、経過時間の閾値だけが効きます。tmux では `set -g focus-events on` が必要です。
+Focus detection uses the terminal's DECSET 1004 (`ESC[I` / `ESC[O`). Terminals that do not support it are not treated as unfocused; only the elapsed-time threshold applies. In tmux, `set -g focus-events on` is required.
 
-設定ファイル:
+Config file:
 
 ```text
 ~/.pi/agent/notify-settings.json
 ```
 
-例:
+Example:
 
 ```json
 {
@@ -106,7 +108,7 @@ pi remove /absolute/path/to/my-pi-extensions/pi-notify
 }
 ```
 
-WSL で `powershell.exe` の場所を明示する場合:
+To set the `powershell.exe` path explicitly on WSL:
 
 ```json
 {
@@ -115,62 +117,62 @@ WSL で `powershell.exe` の場所を明示する場合:
 }
 ```
 
-保存後すぐに反映されます。Pi を再起動しても値は維持されます。
+Changes take effect immediately after save. The value is kept across Pi restarts.
 
-## 通知メッセージ
+## Notification message
 
-- タイトル: `Done - Pi`
-- 本文: 対象プロンプト（改行は空白にまとめ、50文字を超える場合は省略。取れない場合は `タスクが完了しました`）
+- Title: `Done - Pi`
+- Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `タスクが完了しました`)
 
 ## Troubleshooting
 
-### Windows で通知されない
+### No notification on Windows
 
-- 設定アプリで通知がオフになっていないか確認してください
-- フォーカス支援 / サイレント時間が有効だと表示されないことがあります
-- PowerShell 実行ポリシーではなく、この Extension は `-Command` で完結します。外部モジュールは不要です
+- Check that notifications are not turned off in Settings
+- Focus assist / quiet hours may hide notifications
+- This extension does not depend on PowerShell execution policy; it runs a self-contained `-Command`. No external modules are required
 
-### WSL から通知されない
+### No notification from WSL
 
-- Windows 側で通知が許可されているか確認してください
-- ターミナルから `powershell.exe -NoProfile -Command "echo ok"` が動くか確認してください
-- 動かない場合は `powershellPath` に絶対パスを設定してください
+- Check that notifications are allowed on the Windows side
+- From the terminal, confirm that `powershell.exe -NoProfile -Command "echo ok"` works
+- If it does not, set an absolute path in `powershellPath`
 
-### Linux で notify-send がない
+### notify-send is missing on Linux
 
-通知はスキップされ、初回のみ診断メッセージを出します。
+Notifications are skipped, and a diagnostic message is shown the first time only.
 
 ```bash
 sudo apt install libnotify-bin
 ```
 
-GNOME / KDE / XFCE など、Desktop Notification Service が動いていることも必要です。
+A Desktop Notification Service must also be running (GNOME / KDE / XFCE, and so on).
 
-### macOS で通知されない
+### No notification on macOS
 
-- システム設定 → 通知で、通知元（Script Editor / osascript）が許可されているか確認してください
-- ターミナルや IDE から起動していると、そのアプリの通知権限が必要になることがあります
+- In System Settings → Notifications, check that the notification source (Script Editor / osascript) is allowed
+- When launched from a terminal or IDE, that app's notification permission may be required
 
-### 通知音が鳴らない
+### No notification sound
 
-独自の音声再生はしません。OS の通知音設定を尊重します。
+This extension does not play its own sound. It respects the OS notification sound settings.
 
-### 設定ファイルが保存されない
+### Config file is not saved
 
-- `~/.pi/agent/` への書き込み権限があるか確認してください
-- `/notify-settings` で不正値を入れるとファイルは更新されません
+- Check that you have write permission to `~/.pi/agent/`
+- Invalid values entered via `/notify-settings` do not update the file
 
-### 短いタスクで通知されない
+### No notification for short tasks
 
-ターミナルを見ている間は、デフォルトでは 30 秒未満の処理を通知しません。別ウィンドウへ移っているときは短いタスクでも通知します。閾値を変えたい場合は `/notify-settings` を使ってください。
+While you are looking at the terminal, runs shorter than 30 seconds are not notified by default. If you have switched to another window, short tasks are still notified. Use `/notify-settings` to change the threshold.
 
-tmux でフォーカスアウトが取れないときは `set -g focus-events on` を確認してください。
+If unfocus is not detected in tmux, check `set -g focus-events on`.
 
-## 開発
+## Development
 
 ```bash
-cd pi-notify
+cd pi-native-notify
 node --test tests
 ```
 
-通知処理の失敗は Pi 本体の Agent 処理を失敗させません。
+Notification failures do not fail Pi's agent run.
