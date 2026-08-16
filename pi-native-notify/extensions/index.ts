@@ -12,6 +12,11 @@ import {
   notify,
   shouldNotify,
 } from "./notifier.ts";
+import {
+  formatNotifyTestReport,
+  runNotifyTest,
+  type NotifyTestResult,
+} from "./notify-test.ts";
 
 export interface NotifyRuntime {
   capturePrompt: (prompt: string) => void;
@@ -28,6 +33,7 @@ export interface NotifyRuntimeDeps {
 
 export interface NotifyExtensionDeps {
   focusTracker?: FocusTracker;
+  runNotifyTest?: (config: NotifyConfig) => Promise<NotifyTestResult>;
 }
 
 export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
@@ -126,6 +132,36 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
     } catch {
       // 通知処理の例外を Pi のイベントループへ漏らさない
     }
+  });
+
+  const runTest = deps.runNotifyTest ?? runNotifyTest;
+
+  pi.registerCommand("notify-test", {
+    description: "Send a test native notification and show detection details",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) {
+        return;
+      }
+
+      try {
+        const result = await runTest(state.config);
+        ctx.ui.setWidget("pi-native-notify-test", formatNotifyTestReport(result));
+        if (result.sent) {
+          ctx.ui.notify(
+            "Test notification sent. Check the OS notification.",
+            "info",
+          );
+          return;
+        }
+        if (result.error) {
+          ctx.ui.notify(result.error, "error");
+          return;
+        }
+        ctx.ui.notify("No notification backend for this platform.", "warning");
+      } catch {
+        ctx.ui.notify("Notification test failed.", "error");
+      }
+    },
   });
 
   pi.registerCommand("notify-settings", {

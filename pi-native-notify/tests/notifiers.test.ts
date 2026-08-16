@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildNotifyInvocation, notify } from "../extensions/notifier.ts";
+import { buildNotifyInvocation, notify, planNotify } from "../extensions/notifier.ts";
 import { buildLinuxNotifyInvocation } from "../extensions/notifiers/linux.ts";
 import { buildMacOSNotifyInvocation } from "../extensions/notifiers/macos.ts";
 import {
@@ -131,6 +131,22 @@ describe("buildNotifyInvocation routing", () => {
     );
     assert.ok(invocation);
     assert.equal(invocation.command, "osascript");
+  });
+
+  test("planNotify は環境とバックエンドを返す", () => {
+    const plan = planNotify(
+      { title: "Pi", message: "done" },
+      {
+        probe: {
+          platform: "linux",
+          env: { WSL_DISTRO_NAME: "Ubuntu" },
+        },
+        powershellPath: "powershell.exe",
+      },
+    );
+    assert.equal(plan.environment, "wsl");
+    assert.equal(plan.backend, "windows");
+    assert.equal(plan.invocation?.command, "powershell.exe");
   });
 
   test("spawn 失敗でも notify は例外を投げない", async () => {

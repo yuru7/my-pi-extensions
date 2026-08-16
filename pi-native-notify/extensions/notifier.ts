@@ -3,6 +3,8 @@ import {
   detectEnvironment,
   selectBackend,
   type EnvironmentProbe,
+  type NotifyBackend,
+  type NotifyEnvironment,
 } from "./environment.ts";
 import { buildLinuxNotifyInvocation } from "./notifiers/linux.ts";
 import { buildMacOSNotifyInvocation } from "./notifiers/macos.ts";
@@ -97,16 +99,17 @@ export function spawnDetached(invocation: CommandInvocation): void {
   child.unref();
 }
 
-export function buildNotifyInvocation(
-  notification: Notification,
-  options: NotifyOptions = {},
-): CommandInvocation | null {
-  const environment = detectEnvironment(options.probe);
-  const backend = selectBackend(environment);
-  if (backend === null) {
-    return null;
-  }
+export interface NotifyPlan {
+  environment: NotifyEnvironment;
+  backend: NotifyBackend | null;
+  invocation: CommandInvocation | null;
+}
 
+function buildBackendInvocation(
+  backend: NotifyBackend,
+  notification: Notification,
+  options: NotifyOptions,
+): CommandInvocation {
   switch (backend) {
     case "windows":
       return buildWindowsNotifyInvocation(
@@ -124,6 +127,30 @@ export function buildNotifyInvocation(
     case "macos":
       return buildMacOSNotifyInvocation(notification);
   }
+}
+
+export function planNotify(
+  notification: Notification,
+  options: NotifyOptions = {},
+): NotifyPlan {
+  const environment = detectEnvironment(options.probe);
+  const backend = selectBackend(environment);
+  if (backend === null) {
+    return { environment, backend: null, invocation: null };
+  }
+
+  return {
+    environment,
+    backend,
+    invocation: buildBackendInvocation(backend, notification, options),
+  };
+}
+
+export function buildNotifyInvocation(
+  notification: Notification,
+  options: NotifyOptions = {},
+): CommandInvocation | null {
+  return planNotify(notification, options).invocation;
 }
 
 export async function notify(

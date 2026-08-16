@@ -84,6 +84,14 @@ pi remove /absolute/path/to/my-pi-extensions/pi-native-notify
 
 ## Configuration
 
+Send a test notification and inspect detection:
+
+```text
+/notify-test
+```
+
+This sends a native notification immediately (the time threshold is ignored). Pi also shows diagnostic details: detected environment, notification backend, and the command that was used. The details stay in a widget above the editor until you run `/notify-test` again or reload.
+
 Change the threshold interactively:
 
 ```text
@@ -125,6 +133,10 @@ Changes take effect immediately after save. The value is kept across Pi restarts
 - Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `Task completed`)
 
 ## Troubleshooting
+
+### Debugging notifications
+
+Run `/notify-test`. If the OS notification does not appear, check the diagnostic details in Pi (environment, backend, command, and any error).
 
 ### No notification on Windows
 

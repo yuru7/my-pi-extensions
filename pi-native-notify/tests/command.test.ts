@@ -36,9 +36,14 @@ describe("/notify-settings", () => {
     assert.equal(pi.events.has("agent_end"), false);
     assert.equal(pi.events.has("agent_settled"), true);
     assert.equal(pi.commands.has("notify-settings"), true);
+    assert.equal(pi.commands.has("notify-test"), true);
     assert.equal(
       pi.commands.get("notify-settings")?.description,
       "Set the native notification threshold",
+    );
+    assert.equal(
+      pi.commands.get("notify-test")?.description,
+      "Send a test native notification and show detection details",
     );
   });
 
@@ -132,6 +137,128 @@ describe("/notify-settings", () => {
         notify: () => {},
       },
     } as never);
+    assert.equal(called, false);
+  });
+});
+
+describe("/notify-test", () => {
+  function createUi() {
+    const notifications: Array<[string, string]> = [];
+    const widgets = new Map<string, string[] | undefined>();
+    return {
+      notifications,
+      widgets,
+      ctx: {
+        hasUI: true,
+        ui: {
+          notify: (message: string, level: string) => {
+            notifications.push([message, level]);
+          },
+          setWidget: (key: string, content: string[] | undefined) => {
+            widgets.set(key, content);
+          },
+        },
+      },
+    };
+  }
+
+  test("送信成功なら診断と成功メッセージを出す", async () => {
+    const pi = createFakePi();
+    factory(pi as never, {
+      runNotifyTest: async () => ({
+        environment: "wsl",
+        platform: "linux",
+        backend: "windows",
+        invocation: {
+          command: "powershell.exe",
+          args: ["-NoProfile", "-Command", "script"],
+        },
+        wslDistro: "Ubuntu",
+        sent: true,
+      }),
+    });
+    const handler = pi.commands.get("notify-test")?.handler;
+    assert.ok(handler);
+
+    const ui = createUi();
+    await handler("", ui.ctx as never);
+
+    assert.equal(ui.notifications.length, 1);
+    assert.equal(ui.notifications[0]?.[1], "info");
+    assert.match(ui.notifications[0]?.[0] ?? "", /Test notification sent/);
+    const report = ui.widgets.get("pi-native-notify-test");
+    assert.ok(report);
+    assert.equal(report[1], "environment: wsl");
+    assert.equal(report[4], "backend: Windows toast (PowerShell)");
+    assert.equal(report.at(-1), "result: sent");
+  });
+
+  test("失敗なら error 通知を出す", async () => {
+    const pi = createFakePi();
+    factory(pi as never, {
+      runNotifyTest: async () => ({
+        environment: "linux",
+        platform: "linux",
+        backend: "linux",
+        invocation: { command: "notify-send", args: [] },
+        sent: false,
+        error: "command not found: notify-send",
+      }),
+    });
+    const handler = pi.commands.get("notify-test")?.handler;
+    assert.ok(handler);
+
+    const ui = createUi();
+    await handler("", ui.ctx as never);
+    assert.deepEqual(ui.notifications, [
+      ["command not found: notify-send", "error"],
+    ]);
+    assert.equal(
+      ui.widgets.get("pi-native-notify-test")?.at(-1),
+      "error: command not found: notify-send",
+    );
+  });
+
+  test("未対応環境なら warning を出す", async () => {
+    const pi = createFakePi();
+    factory(pi as never, {
+      runNotifyTest: async () => ({
+        environment: "unsupported",
+        platform: "freebsd",
+        backend: null,
+        invocation: null,
+        sent: false,
+      }),
+    });
+    const handler = pi.commands.get("notify-test")?.handler;
+    assert.ok(handler);
+
+    const ui = createUi();
+    await handler("", ui.ctx as never);
+    assert.deepEqual(ui.notifications, [
+      ["No notification backend for this platform.", "warning"],
+    ]);
+  });
+
+  test("hasUI が false のときは実行しない", async () => {
+    let called = false;
+    const pi = createFakePi();
+    factory(pi as never, {
+      runNotifyTest: async () => {
+        called = true;
+        return {
+          environment: "linux",
+          platform: "linux",
+          backend: "linux",
+          invocation: null,
+          sent: false,
+        };
+      },
+    });
+    const handler = pi.commands.get("notify-test")?.handler;
+    assert.ok(handler);
+
+    await handler("", { hasUI: false, ui: { notify: () => {} } } as never);
     assert.equal(called, false);
   });
 });
