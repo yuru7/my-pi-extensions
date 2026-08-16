@@ -40,7 +40,22 @@ OS は自動判定します。WSL は通常の Linux とは区別し、Windows �
 
 ## インストール
 
-このリポジトリは複数 Extension 用のモノレポです。`pi-notify` だけを入れるには、`pi-notify/` をパッケージとして指定します。
+```bash
+pi install npm:pi-native-notify
+```
+
+インストール後、Pi を再起動するか `/reload` してください。`pi-package` キーワード付きのため、公開後は [Pi Packages](https://pi.dev/packages) にも掲載されます。
+
+### 更新 / 削除
+
+```bash
+pi update npm:pi-native-notify
+pi remove npm:pi-native-notify
+```
+
+### ローカルパスから入れる
+
+このリポジトリは複数 Extension 用のモノレポです。開発中や未公開の状態では、`pi-notify/` をパッケージとして指定します。
 
 ```bash
 git clone https://github.com/yuru7/my-pi-extensions.git
@@ -59,13 +74,7 @@ pi install /absolute/path/to/my-pi-extensions/pi-notify
 pi -e /absolute/path/to/my-pi-extensions/pi-notify
 ```
 
-インストール後、Pi を再起動するか `/reload` してください。
-
-### 更新
-
-ローカルパスで入れている場合は、リポジトリを `git pull` したあと Pi を再起動するか `/reload` してください。
-
-### 削除
+ローカルパスで入れている場合の更新は、リポジトリを `git pull` したあと Pi を再起動するか `/reload` してください。削除は次のとおりです。
 
 ```bash
 pi remove /absolute/path/to/my-pi-extensions/pi-notify
