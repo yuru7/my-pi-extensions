@@ -4,16 +4,13 @@
   "description": "A Pi extension that sends a native OS notification when a long-running task completes",
   "keywords": [
     "pi-package",
-    "pi",
     "pi-coding-agent",
+    "pi-extension",
     "notifications"
   ],
   "license": "MIT",
   "author": "yuru7",
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yuru7/my-pi-extensions.git",
