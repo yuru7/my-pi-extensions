@@ -90,7 +90,7 @@ Send a test notification and inspect detection:
 /notify-test
 ```
 
-This sends a native notification immediately (the time threshold is ignored). Pi also shows diagnostic details: detected environment, notification backend, and the command that was used. The details stay in a widget above the editor until you run `/notify-test` again or reload.
+This sends a native notification immediately (the time threshold is ignored). Pi also shows diagnostic details in the chat: detected environment, notification backend, and the command that was used. The details are not sent to the model.
 
 Change the threshold interactively:
 

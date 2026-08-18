@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import factory from "../extensions/index.ts";
+import { NOTIFY_TEST_ENTRY_TYPE } from "../extensions/notify-test.ts";
 
 function createFakePi() {
   const events = new Map<string, (...args: never[]) => unknown>();
@@ -8,6 +9,8 @@ function createFakePi() {
     string,
     { description?: string; handler: (...args: never[]) => unknown }
   >();
+  const entries: Array<{ customType: string; data?: unknown }> = [];
+  const entryRenderers = new Map<string, unknown>();
 
   return {
     on(name: string, handler: (...args: never[]) => unknown) {
@@ -19,8 +22,16 @@ function createFakePi() {
     ) {
       commands.set(name, options);
     },
+    registerEntryRenderer(customType: string, renderer: unknown) {
+      entryRenderers.set(customType, renderer);
+    },
+    appendEntry(customType: string, data?: unknown) {
+      entries.push({ customType, data });
+    },
     events,
     commands,
+    entries,
+    entryRenderers,
   };
 }
 
@@ -37,6 +48,7 @@ describe("/notify-settings", () => {
     assert.equal(pi.events.has("agent_settled"), true);
     assert.equal(pi.commands.has("notify-settings"), true);
     assert.equal(pi.commands.has("notify-test"), true);
+    assert.equal(pi.entryRenderers.has(NOTIFY_TEST_ENTRY_TYPE), true);
     assert.equal(
       pi.commands.get("notify-settings")?.description,
       "Set the native notification threshold",
@@ -144,18 +156,13 @@ describe("/notify-settings", () => {
 describe("/notify-test", () => {
   function createUi() {
     const notifications: Array<[string, string]> = [];
-    const widgets = new Map<string, string[] | undefined>();
     return {
       notifications,
-      widgets,
       ctx: {
         hasUI: true,
         ui: {
           notify: (message: string, level: string) => {
             notifications.push([message, level]);
-          },
-          setWidget: (key: string, content: string[] | undefined) => {
-            widgets.set(key, content);
           },
         },
       },
@@ -186,11 +193,12 @@ describe("/notify-test", () => {
     assert.equal(ui.notifications.length, 1);
     assert.equal(ui.notifications[0]?.[1], "info");
     assert.match(ui.notifications[0]?.[0] ?? "", /Test notification sent/);
-    const report = ui.widgets.get("pi-native-notify-test");
-    assert.ok(report);
-    assert.equal(report[1], "environment: wsl");
-    assert.equal(report[4], "backend: Windows toast (PowerShell)");
-    assert.equal(report.at(-1), "result: sent");
+    const entry = pi.entries[0];
+    assert.equal(entry?.customType, NOTIFY_TEST_ENTRY_TYPE);
+    const lines = (entry?.data as { lines: string[] }).lines;
+    assert.equal(lines[1], "environment: wsl");
+    assert.equal(lines[4], "backend: Windows toast (PowerShell)");
+    assert.equal(lines.at(-1), "result: sent");
   });
 
   test("失敗なら error 通知を出す", async () => {
@@ -213,10 +221,8 @@ describe("/notify-test", () => {
     assert.deepEqual(ui.notifications, [
       ["command not found: notify-send", "error"],
     ]);
-    assert.equal(
-      ui.widgets.get("pi-native-notify-test")?.at(-1),
-      "error: command not found: notify-send",
-    );
+    const lines = (pi.entries[0]?.data as { lines: string[] }).lines;
+    assert.equal(lines.at(-1), "error: command not found: notify-send");
   });
 
   test("未対応環境なら warning を出す", async () => {

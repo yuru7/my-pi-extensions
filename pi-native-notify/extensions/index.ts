@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import {
   loadConfig,
   parseThresholdInput,
@@ -14,9 +15,14 @@ import {
 } from "./notifier.ts";
 import {
   formatNotifyTestReport,
+  NOTIFY_TEST_ENTRY_TYPE,
   runNotifyTest,
   type NotifyTestResult,
 } from "./notify-test.ts";
+
+interface NotifyTestEntryData {
+  lines: string[];
+}
 
 export interface NotifyRuntime {
   capturePrompt: (prompt: string) => void;
@@ -34,6 +40,34 @@ export interface NotifyRuntimeDeps {
 export interface NotifyExtensionDeps {
   focusTracker?: FocusTracker;
   runNotifyTest?: (config: NotifyConfig) => Promise<NotifyTestResult>;
+}
+
+function isNotifyTestEntryData(data: unknown): data is NotifyTestEntryData {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "lines" in data &&
+    Array.isArray(data.lines) &&
+    data.lines.every((line) => typeof line === "string")
+  );
+}
+
+function renderNotifyTestEntry(
+  entry: { data?: unknown },
+  _options: { expanded: boolean },
+  theme: {
+    fg: (name: string, text: string) => string;
+    bg: (name: string, text: string) => string;
+    bold: (text: string) => string;
+  },
+) {
+  const lines = isNotifyTestEntryData(entry.data) ? entry.data.lines : [];
+  const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  for (const [index, line] of lines.entries()) {
+    const styled = index === 0 ? theme.bold(theme.fg("accent", line)) : line;
+    box.addChild(new Text(styled, 0, 0));
+  }
+  return box;
 }
 
 export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
@@ -136,6 +170,8 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
 
   const runTest = deps.runNotifyTest ?? runNotifyTest;
 
+  pi.registerEntryRenderer(NOTIFY_TEST_ENTRY_TYPE, renderNotifyTestEntry);
+
   pi.registerCommand("notify-test", {
     description: "Send a test native notification and show detection details",
     handler: async (_args, ctx) => {
@@ -145,7 +181,9 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
 
       try {
         const result = await runTest(state.config);
-        ctx.ui.setWidget("pi-native-notify-test", formatNotifyTestReport(result));
+        pi.appendEntry(NOTIFY_TEST_ENTRY_TYPE, {
+          lines: formatNotifyTestReport(result),
+        } satisfies NotifyTestEntryData);
         if (result.sent) {
           ctx.ui.notify(
             "Test notification sent. Check the OS notification.",

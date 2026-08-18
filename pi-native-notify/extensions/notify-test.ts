@@ -13,6 +13,8 @@ export const TEST_NOTIFICATION: Notification = {
   message: "Native notification test",
 };
 
+export const NOTIFY_TEST_ENTRY_TYPE = "pi-native-notify-test";
+
 export const TEST_SPAWN_TIMEOUT_MS = 15_000;
 
 const BACKEND_LABEL: Record<NotifyBackend, string> = {
