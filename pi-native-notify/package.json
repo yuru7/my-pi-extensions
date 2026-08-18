@@ -1,6 +1,6 @@
 {
   "name": "pi-native-notify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A Pi extension that sends a native OS notification when a long-running task completes",
   "keywords": [
     "pi-package",
@@ -30,7 +30,9 @@
     "pack:check": "npm pack --dry-run"
   },
   "pi": {
-    "extensions": ["./extensions/index.ts"]
+    "extensions": [
+      "./extensions/index.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
