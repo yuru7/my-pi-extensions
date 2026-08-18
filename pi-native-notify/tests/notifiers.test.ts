@@ -7,6 +7,9 @@ import {
   buildWindowsNotifyInvocation,
   encodeNotificationPayload,
   resolvePowershellPath,
+  WINDOWS_POWERSHELL_APP_ID,
+  WINDOWS_TOAST_APP_ID,
+  WINDOWS_TOAST_APP_NAME,
 } from "../extensions/notifiers/windows.ts";
 
 const injection = {
@@ -35,6 +38,32 @@ describe("windows notifier", () => {
     assert.equal(script.includes("FromBase64String"), true);
     assert.equal(script.includes("CreateTextNode"), true);
     assert.equal(script.includes("ms-winsoundevent:Notification.Default"), true);
+  });
+
+  test("カスタム AUMID を登録し、失敗時は PowerShell へフォールバックする", () => {
+    const invocation = buildWindowsNotifyInvocation(
+      { title: "Done - Pi", message: "hello" },
+      "powershell.exe",
+      {
+        platform: "linux",
+        env: {},
+        exists: () => false,
+      },
+    );
+    const script = invocation.args.at(-1) ?? "";
+
+    assert.equal(script.includes("AppUserModelId"), true);
+    assert.equal(script.includes("DisplayName"), true);
+    assert.equal(script.includes("IconUri"), true);
+    assert.equal(script.includes("appLogoOverride"), true);
+    assert.match(
+      script,
+      /if \(-not \(Test-Path -LiteralPath \$iconFile\) -or \(\(Get-Item -LiteralPath \$iconFile\)\.LastWriteTime -lt \(Get-Date\)\.AddDays\(-1\)\)\) \{ \[IO\.File\]::WriteAllBytes/,
+    );
+    assert.equal(script.includes(WINDOWS_TOAST_APP_ID), true);
+    assert.equal(script.includes(WINDOWS_TOAST_APP_NAME), true);
+    assert.equal(script.includes(WINDOWS_POWERSHELL_APP_ID), true);
+    assert.match(script, /try \{[\s\S]*\$appId = 'Pi\.NativeNotify'[\s\S]*\} catch \{ \}/);
   });
 
   test("設定された powershellPath を優先する", () => {

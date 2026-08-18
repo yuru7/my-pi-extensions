@@ -131,6 +131,7 @@ Changes take effect immediately after save. The value is kept across Pi restarts
 
 - Title: `Done - Pi`
 - Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `Task completed`)
+- Windows / WSL toast identity: app name `Pi`, with a small π icon. This is registered per-user in the Windows registry (`HKCU`) so the toast does not appear as PowerShell
 
 ## Troubleshooting
 
@@ -147,8 +148,13 @@ Run `/notify-test`. If the OS notification does not appear, check the diagnostic
 ### No notification from WSL
 
 - Check that notifications are allowed on the Windows side
+- Windows may list a new sender named **Pi**. Allow it under Settings → System → Notifications
 - From the terminal, confirm that `powershell.exe -NoProfile -Command "echo ok"` works
 - If it does not, set an absolute path in `powershellPath`
+
+### Toast still shows as PowerShell
+
+The toast uses a custom AppId (`Pi.NativeNotify`). If that registry registration fails, it falls back to PowerShell. Run `/notify-test` and check whether the Windows toast script contains `AppUserModelId`. Group Policy that blocks HKCU writes can cause this fallback.
 
 ### notify-send is missing on Linux
 

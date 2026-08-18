@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { EntryRenderer, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import {
   loadConfig,
@@ -52,15 +52,7 @@ function isNotifyTestEntryData(data: unknown): data is NotifyTestEntryData {
   );
 }
 
-function renderNotifyTestEntry(
-  entry: { data?: unknown },
-  _options: { expanded: boolean },
-  theme: {
-    fg: (name: string, text: string) => string;
-    bg: (name: string, text: string) => string;
-    bold: (text: string) => string;
-  },
-) {
+const renderNotifyTestEntry: EntryRenderer = (entry, _options, theme) => {
   const lines = isNotifyTestEntryData(entry.data) ? entry.data.lines : [];
   const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
   for (const [index, line] of lines.entries()) {
@@ -68,7 +60,7 @@ function renderNotifyTestEntry(
     box.addChild(new Text(styled, 0, 0));
   }
   return box;
-}
+};
 
 export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
   let runStartedAt: number | null = null;
