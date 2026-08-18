@@ -19,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/yuru7/my-pi-extensions/issues"
   },
-  "homepage": "https://github.com/yuru7/my-pi-extensions/tree/main/pi-notify#readme",
+  "homepage": "https://github.com/yuru7/my-pi-extensions/tree/main/pi-native-notify#readme",
   "files": [
     "extensions",
     "README.md",
