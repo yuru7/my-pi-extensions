@@ -62,7 +62,7 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 
 If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those defaults on load.
 
-`--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
+On `/undo`, `/redo`, and `/tree`, files that changed after Pi's last write are not overwritten automatically. You get a selector: **No (Do not overwrite)** (default) or **Yes (Overwrite)**. Esc cancels the navigation. `--force` on `/undo` and `/redo` overwrites without asking.
 
 Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch restores the snapshot taken when you left it, or re-applies mutations if there is no snapshot. Leaf snapshots are saved when leaving a point, not after arriving. `/undo <N>` and `/redo` always restore from mutations, not from a leaf snapshot. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
 
@@ -73,40 +73,6 @@ pi install npm:pi-undo
 ```
 
 After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
-
-### Update / uninstall
-
-```bash
-pi update npm:pi-undo
-pi remove npm:pi-undo
-```
-
-### Install from a local path
-
-This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-undo/` package.
-
-```bash
-git clone https://github.com/yuru7/my-pi-extensions.git
-pi install ./my-pi-extensions/pi-undo
-```
-
-If you already have a clone, pass that path:
-
-```bash
-pi install /absolute/path/to/my-pi-extensions/pi-undo
-```
-
-To try it temporarily:
-
-```bash
-pi -e /absolute/path/to/my-pi-extensions/pi-undo
-```
-
-When installed from a local path, update by running `git pull` in the repository, then restart Pi or run `/reload`. Uninstall as follows:
-
-```bash
-pi remove /absolute/path/to/my-pi-extensions/pi-undo
-```
 
 ## Configuration
 
@@ -178,7 +144,21 @@ Virtual filesystems are skipped: `/proc`, `/sys`, `/dev`, `/run`, and Windows `\
 
 ## Safe restore
 
-After each recorded mutation, the post-change hash is stored. On undo, a file is skipped when the current hash does not match Pi's last write — usually because you edited it afterwards.
+After each recorded mutation, the post-change hash is stored. On restore, a file is treated as externally edited when the current hash does not match Pi's last write.
+
+`/undo`, `/redo`, and `/tree` ask before overwriting those files. **No (Do not overwrite)** is the default selection and keeps your edits. Move the selection to **Yes (Overwrite)** to overwrite. Esc cancels the navigation. `--force` on `/undo` and `/redo` skips the prompt and overwrites.
+
+```text
+Overwrite 2 files modified after Pi's last write?
+
+  src/config.ts
+  README.md
+
+→ No (Do not overwrite)
+  Yes (Overwrite)
+```
+
+If you keep **No (Do not overwrite)**, the restore summary still lists the skipped files:
 
 ```text
 Restored: 7 files

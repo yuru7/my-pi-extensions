@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { compensatingRestore, executeFilesystemRestore } from "../src/undo.ts";
+import {
+  compensatingRestore,
+  executeFilesystemRestore,
+  formatOverwriteSelectTitle,
+  overwriteSelectOptions,
+  planTreeRestore,
+} from "../src/undo.ts";
 import { indexFileChangingTurns, listUserTurns, parseOptionalForce, parseRequiredTurn, parseUndoArgs } from "../src/session.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
@@ -276,5 +282,63 @@ describe("undo restore", () => {
       harness.notifications.some((message) => message.text.includes("Bash snapshot limit reached")),
       true,
     );
+  });
+});
+
+describe("overwrite select", () => {
+  test("lists No before Yes so No is the default selection", () => {
+    assert.deepEqual(overwriteSelectOptions(), [
+      "No (Do not overwrite)",
+      "Yes (Overwrite)",
+    ]);
+  });
+
+  test("describes skipped files in the selector title", () => {
+    const title = formatOverwriteSelectTitle(["src/a.ts", "README.md"]);
+    assert.equal(title.startsWith("Overwrite 2 files modified after Pi's last write?"), true);
+    assert.equal(title.includes("src/a.ts"), true);
+    assert.equal(title.includes("README.md"), true);
+  });
+});
+
+describe("planTreeRestore", () => {
+  test("does not apply restores", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "notes.txt");
+    writeFileSync(file, "original");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "write",
+      toolCallId: "c1",
+      path: "notes.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(file, "pi");
+    await harness.snapshotter.finish("c1");
+    writeFileSync(file, "user");
+
+    const oldBranch = [
+      { id: "u1", message: { role: "user", content: "u1", timestamp: 1 } },
+      { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      { id: "u2", message: { role: "user", content: "u2", timestamp: 2 } },
+    ];
+    const newBranch = [{ id: "u1", message: { role: "user", content: "u1", timestamp: 1 } }];
+    const planned = planTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch,
+      newBranch,
+      newLeafId: "u1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+      useLeafCache: false,
+    });
+
+    assert.equal(readFileSync(file, "utf8"), "user");
+    assert.equal(planned.plan.skipped.length, 1);
+    assert.equal(planned.via, "mutations");
   });
 });

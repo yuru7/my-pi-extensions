@@ -26,8 +26,12 @@ import {
   diffPreview,
   executeFilesystemRestore,
   executeTreeRestore,
+  formatOverwriteSelectTitle,
   formatRestoreSummary,
   mutationsForTurns,
+  overwriteSelectOptions,
+  OVERWRITE_SELECT_YES,
+  planTreeRestore,
   buildRestorePlan,
 } from "../src/undo.ts";
 import {
@@ -174,6 +178,53 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     return { config, store, journal, snapshotter, sessionId };
   };
 
+  const confirmOverwriteIfNeeded = async (
+    ctx: {
+      hasUI?: boolean;
+      ui: {
+        select?: (title: string, options: string[]) => Promise<string | undefined>;
+        notify?: (message: string, type?: "info" | "warning" | "error") => void;
+      };
+    },
+    current: Runtime,
+    options: {
+      oldBranch: SessionEntryLike[];
+      newBranch: SessionEntryLike[];
+      newLeafId: string;
+      force: boolean;
+      useLeafCache: boolean;
+    },
+  ): Promise<{ force: boolean; cancelled: boolean }> => {
+    if (options.force || !current.config.safeRestore) {
+      return { force: options.force, cancelled: false };
+    }
+    const { plan } = planTreeRestore({
+      mutations: current.journal.mutations(),
+      oldBranch: options.oldBranch,
+      newBranch: options.newBranch,
+      newLeafId: options.newLeafId,
+      journal: current.journal,
+      store: current.store,
+      config: current.config,
+      force: false,
+      useLeafCache: options.useLeafCache,
+    });
+    if (plan.skipped.length === 0) {
+      return { force: false, cancelled: false };
+    }
+    if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
+      return { force: false, cancelled: false };
+    }
+    const choice = await ctx.ui.select(
+      formatOverwriteSelectTitle(plan.skipped),
+      overwriteSelectOptions(),
+    );
+    if (choice === undefined) {
+      return { force: false, cancelled: true };
+    }
+    return { force: choice === OVERWRITE_SELECT_YES, cancelled: false };
+  };
+
   pi.registerEntryRenderer(LIST_ENTRY, renderLines);
   pi.registerEntryRenderer(STATUS_ENTRY, renderLines);
   pi.registerEntryRenderer(DIFF_ENTRY, renderLines);
@@ -206,7 +257,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     runtime = undefined;
   });
 
-  pi.on("session_before_tree", async (event) => {
+  pi.on("session_before_tree", async (event, ctx) => {
     try {
       if (!runtime?.config.enabled) {
         return;
@@ -215,8 +266,26 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         return;
       }
       const oldLeafId = event.preparation?.oldLeafId;
+      const targetId = event.preparation?.targetId;
       if (!oldLeafId) {
         return;
+      }
+      if (!pendingUndoNav && targetId) {
+        const sessionManager = ctx.sessionManager as {
+          getBranch: (fromId?: string) => SessionEntryLike[];
+        };
+        const overwrite = await confirmOverwriteIfNeeded(ctx, runtime, {
+          oldBranch: sessionManager.getBranch(oldLeafId) as SessionEntryLike[],
+          newBranch: sessionManager.getBranch(targetId) as SessionEntryLike[],
+          newLeafId: targetId,
+          force: false,
+          useLeafCache: true,
+        });
+        if (overwrite.cancelled) {
+          return { cancel: true };
+        }
+        pendingTreeForce = overwrite.force;
+        pendingForceFlag = "/tree again and choose Yes";
       }
       const entries = captureTrackedStates(
         runtime.journal.mutations(),
@@ -279,6 +348,11 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           : "pi-undo: Could not restore files for /tree.",
         "warning",
       );
+    } finally {
+      if (!pendingUndoNav) {
+        pendingTreeForce = false;
+        pendingForceFlag = "/undo <N> --force";
+      }
     }
   });
 
@@ -452,11 +526,21 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       }
 
       const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
+      const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
+        oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+        newBranch: ctx.sessionManager.getBranch(turn.id) as SessionEntryLike[],
+        newLeafId: turn.id,
+        force: parsed.force,
+        useLeafCache: false,
+      });
+      if (overwrite.cancelled) {
+        return;
+      }
       const result = await navigateToLeaf(
         ctx,
         current,
         turn.id,
-        parsed.force,
+        overwrite.force,
         "/undo <N> --force",
       );
       if (result?.cancelled) {
@@ -485,7 +569,17 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         return;
       }
       await ctx.waitForIdle();
-      const result = await navigateToLeaf(ctx, current, target, parsed.force, "/redo --force");
+      const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
+        oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+        newBranch: ctx.sessionManager.getBranch(target) as SessionEntryLike[],
+        newLeafId: target,
+        force: parsed.force,
+        useLeafCache: false,
+      });
+      if (overwrite.cancelled) {
+        return;
+      }
+      const result = await navigateToLeaf(ctx, current, target, overwrite.force, "/redo --force");
       if (result?.cancelled) {
         ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
         return;

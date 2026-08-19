@@ -6,6 +6,12 @@ import factory from "../extensions/pi-undo.ts";
 import { DEFAULT_CONFIG, getConfigPath, getStoreRoot, loadConfig, saveConfig } from "../src/config.ts";
 import { SessionJournal } from "../src/mutation-journal.ts";
 import { ObjectStore } from "../src/store.ts";
+import {
+  formatOverwriteSelectTitle,
+  OVERWRITE_SELECT_NO,
+  OVERWRITE_SELECT_YES,
+  overwriteSelectOptions,
+} from "../src/undo.ts";
 import { cleanupTempDirs, tempDir } from "./helpers.ts";
 
 afterEach(() => {
@@ -563,6 +569,337 @@ describe("/undo command", () => {
     } as never);
 
     assert.equal(loadConfig(path).config.syncTree, true);
+  });
+});
+
+function userMessage(id: string, content: string, timestamp: number) {
+  return { id, message: { role: "user" as const, content, timestamp } };
+}
+
+function assistantTool(id: string, toolCallId: string) {
+  return {
+    id,
+    message: { role: "assistant" as const, content: [{ type: "toolCall", id: toolCallId }] },
+  };
+}
+
+function toolResult(id: string, toolCallId: string) {
+  return {
+    id,
+    message: { role: "toolResult" as const, toolCallId, toolName: "write" },
+  };
+}
+
+async function setupExternalEditUndo() {
+  const { pi, home } = setup();
+  const cwd = tempDir();
+  const file = join(cwd, "notes.txt");
+  writeFileSync(file, "original");
+  const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+  const original = store.put(Buffer.from("original"));
+  const afterPi = store.put(Buffer.from("pi"));
+  writeFileSync(file, "user");
+  new SessionJournal(store, "s1").appendMutation({
+    sessionId: "s1",
+    turnEntryId: "u1",
+    toolCallId: "c1",
+    toolName: "write",
+    path: file,
+    key: file,
+    pre: { kind: "file", sha256: original.sha256, size: original.bytes },
+    post: { kind: "file", sha256: afterPi.sha256, size: afterPi.bytes },
+    coverage: "exact",
+    timestamp: new Date().toISOString(),
+  });
+
+  const start = pi.events.get("session_start");
+  assert.ok(start);
+  await start(undefined as never, {
+    cwd,
+    hasUI: true,
+    sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+    ui: { notify() {} },
+  } as never);
+
+  const full = [
+    userMessage("u1", "write notes", 1),
+    assistantTool("a1", "c1"),
+    toolResult("r1", "c1"),
+    userMessage("u2", "just chatting", 2),
+  ];
+  const rolled = [userMessage("u1", "write notes", 1)];
+  let leafId = "u2";
+  const getBranch = (fromId?: string) => {
+    if (fromId === "u1") {
+      return rolled;
+    }
+    if (fromId === "u2") {
+      return full;
+    }
+    return leafId === "u1" ? rolled : full;
+  };
+  const sessionTree = pi.events.get("session_tree");
+  const sessionBeforeTree = pi.events.get("session_before_tree");
+  assert.ok(sessionTree);
+  assert.ok(sessionBeforeTree);
+
+  return {
+    pi,
+    file,
+    cwd,
+    getBranch,
+    getLeaf: () => leafId,
+    setLeaf: (id: string) => {
+      leafId = id;
+    },
+    sessionTree,
+    sessionBeforeTree,
+  };
+}
+
+describe("/undo overwrite prompt", () => {
+  test("/undo No keeps external edits", async () => {
+    const { pi, file, cwd, getBranch, getLeaf, setLeaf, sessionTree, sessionBeforeTree } =
+      await setupExternalEditUndo();
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    const selectCalls: Array<{ title: string; options: string[] }> = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        const oldLeafId = getLeaf();
+        await sessionBeforeTree(
+          { preparation: { targetId: id, oldLeafId } } as never,
+          ctx as never,
+        );
+        setLeaf(id);
+        await sessionTree({ newLeafId: id, oldLeafId, fromExtension: true } as never, ctx as never);
+        return {};
+      },
+      ui: {
+        select: async (title: string, options: string[]) => {
+          selectCalls.push({ title, options });
+          return OVERWRITE_SELECT_NO;
+        },
+        notify() {},
+      },
+    };
+
+    await undo("", ctx as never);
+
+    assert.equal(getLeaf(), "u1");
+    assert.equal(readFileSync(file, "utf8"), "user");
+    assert.equal(selectCalls.length, 1);
+    assert.deepEqual(selectCalls[0]?.options, overwriteSelectOptions());
+    assert.equal(selectCalls[0]?.title, formatOverwriteSelectTitle([file]));
+  });
+
+  test("/undo Yes overwrites external edits", async () => {
+    const { pi, file, cwd, getBranch, getLeaf, setLeaf, sessionTree } = await setupExternalEditUndo();
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        const oldLeafId = getLeaf();
+        setLeaf(id);
+        await sessionTree({ newLeafId: id, oldLeafId, fromExtension: true } as never, ctx as never);
+        return {};
+      },
+      ui: {
+        select: async () => OVERWRITE_SELECT_YES,
+        notify() {},
+      },
+    };
+
+    await undo("", ctx as never);
+
+    assert.equal(getLeaf(), "u1");
+    assert.equal(readFileSync(file, "utf8"), "original");
+  });
+
+  test("/undo --force overwrites without asking", async () => {
+    const { pi, file, cwd, getBranch, getLeaf, setLeaf, sessionTree } = await setupExternalEditUndo();
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    let asked = false;
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        const oldLeafId = getLeaf();
+        setLeaf(id);
+        await sessionTree({ newLeafId: id, oldLeafId, fromExtension: true } as never, ctx as never);
+        return {};
+      },
+      ui: {
+        select: async () => {
+          asked = true;
+          return OVERWRITE_SELECT_NO;
+        },
+        notify() {},
+      },
+    };
+
+    await undo("--force", ctx as never);
+
+    assert.equal(asked, false);
+    assert.equal(getLeaf(), "u1");
+    assert.equal(readFileSync(file, "utf8"), "original");
+  });
+
+  test("/undo cancel leaves conversation and files unchanged", async () => {
+    const { pi, file, cwd, getBranch, getLeaf } = await setupExternalEditUndo();
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    let navigated = false;
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async () => {
+        navigated = true;
+        return {};
+      },
+      ui: {
+        select: async () => undefined,
+        notify() {},
+      },
+    };
+
+    await undo("", ctx as never);
+
+    assert.equal(navigated, false);
+    assert.equal(getLeaf(), "u2");
+    assert.equal(readFileSync(file, "utf8"), "user");
+  });
+
+  test("/redo Yes overwrites external edits", async () => {
+    const { pi, file, cwd, getBranch, getLeaf, setLeaf, sessionTree } = await setupExternalEditUndo();
+    const undo = pi.commands.get("undo")?.handler;
+    const redo = pi.commands.get("redo")?.handler;
+    assert.ok(undo);
+    assert.ok(redo);
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        const oldLeafId = getLeaf();
+        setLeaf(id);
+        await sessionTree({ newLeafId: id, oldLeafId, fromExtension: true } as never, ctx as never);
+        return {};
+      },
+      ui: {
+        select: async () => OVERWRITE_SELECT_NO,
+        notify() {},
+      },
+    };
+
+    await undo("", ctx as never);
+    assert.equal(readFileSync(file, "utf8"), "user");
+
+    ctx.ui.select = async () => OVERWRITE_SELECT_YES;
+    await redo("", ctx as never);
+
+    assert.equal(getLeaf(), "u2");
+    assert.equal(readFileSync(file, "utf8"), "pi");
+  });
+
+  test("/tree No keeps external edits", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
+    const selectCalls: Array<{ title: string; options: string[] }> = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async (title: string, options: string[]) => {
+          selectCalls.push({ title, options });
+          return OVERWRITE_SELECT_NO;
+        },
+        notify() {},
+      },
+    };
+
+    const before = await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    assert.equal((before as { cancel?: boolean } | undefined)?.cancel, undefined);
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+      ctx as never,
+    );
+
+    assert.equal(selectCalls.length, 1);
+    assert.deepEqual(selectCalls[0]?.options, overwriteSelectOptions());
+    assert.equal(readFileSync(file, "utf8"), "user");
+  });
+
+  test("/tree Yes overwrites external edits", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async () => OVERWRITE_SELECT_YES,
+        notify() {},
+      },
+    };
+
+    await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+      ctx as never,
+    );
+
+    assert.equal(readFileSync(file, "utf8"), "original");
+  });
+
+  test("/tree cancel leaves conversation and files unchanged", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
+    let restored = false;
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async () => undefined,
+        notify() {},
+      },
+    };
+
+    const before = await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    assert.deepEqual(before, { cancel: true });
+    if (!(before as { cancel?: boolean }).cancel) {
+      restored = true;
+      await sessionTree(
+        { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+        ctx as never,
+      );
+    }
+
+    assert.equal(restored, false);
+    assert.equal(getLeaf(), "u2");
+    assert.equal(readFileSync(file, "utf8"), "user");
   });
 });
 

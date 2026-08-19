@@ -312,6 +312,23 @@ export function formatRestoreSummary(plan: RestorePlan, forceFlag: string): stri
   return lines.join("\n");
 }
 
+export const OVERWRITE_SELECT_NO = "No (Do not overwrite)";
+export const OVERWRITE_SELECT_YES = "Yes (Overwrite)";
+
+export function overwriteSelectOptions(): string[] {
+  return [OVERWRITE_SELECT_NO, OVERWRITE_SELECT_YES];
+}
+
+export function formatOverwriteSelectTitle(skipped: string[]): string {
+  const count = skipped.length;
+  const noun = count === 1 ? "file" : "files";
+  return [
+    `Overwrite ${count} ${noun} modified after Pi's last write?`,
+    "",
+    ...skipped.map((path) => `  ${path}`),
+  ].join("\n");
+}
+
 export function restoreActionLabel(action: RestoreAction): string {
   switch (action) {
     case "modify":
@@ -720,7 +737,7 @@ function buildLeafCachePlan(
   return summarizeRestorePlan(items);
 }
 
-export function executeTreeRestore(options: {
+export function planTreeRestore(options: {
   mutations: MutationRecord[];
   oldBranch: SessionEntryLike[];
   newBranch: SessionEntryLike[];
@@ -730,7 +747,7 @@ export function executeTreeRestore(options: {
   config: UndoConfig;
   force: boolean;
   useLeafCache?: boolean;
-}): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
+}): { plan: RestorePlan; via: "cache" | "mutations" | "noop" } {
   const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };
   const planOptions = {
     force: options.force,
@@ -743,8 +760,7 @@ export function executeTreeRestore(options: {
     const cached = options.journal.loadLeafSnapshot(options.newLeafId);
     if (cached && cached.length > 0) {
       const expectedByKey = piFileStatesOnBranch(options.mutations, options.oldBranch);
-      const plan = buildLeafCachePlan(cached, expectedByKey, planOptions);
-      return { ...commitRestorePlan(plan, options.store, options.config), via: "cache" };
+      return { plan: buildLeafCachePlan(cached, expectedByKey, planOptions), via: "cache" };
     }
   }
 
@@ -758,7 +774,25 @@ export function executeTreeRestore(options: {
   );
   const plan = mergeRestorePlans(undoPlan, redoPlan);
   if (plan.items.length === 0) {
-    return { plan: empty, transactionId: "", via: "noop" };
+    return { plan: empty, via: "noop" };
   }
-  return { ...commitRestorePlan(plan, options.store, options.config), via: "mutations" };
+  return { plan, via: "mutations" };
+}
+
+export function executeTreeRestore(options: {
+  mutations: MutationRecord[];
+  oldBranch: SessionEntryLike[];
+  newBranch: SessionEntryLike[];
+  newLeafId: string | null;
+  journal: SessionJournal;
+  store: ObjectStore;
+  config: UndoConfig;
+  force: boolean;
+  useLeafCache?: boolean;
+}): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
+  const planned = planTreeRestore(options);
+  if (planned.via === "noop") {
+    return { ...planned, transactionId: "" };
+  }
+  return { ...commitRestorePlan(planned.plan, options.store, options.config), via: planned.via };
 }
