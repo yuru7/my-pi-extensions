@@ -15,6 +15,12 @@ Pi mutations are snapshotted **before** the tool runs. Content is stored in a SH
 - Drops the assistant replies and tool calls after that message from the active conversation path (`navigateTree`, no branch summary)
 - Restores files that Pi changed from that turn onward, as far as snapshots allow
 
+### `/redo` — reverse the last `/undo`
+
+- Returns to the conversation point that was active immediately before `/undo` or `/undo <N>`
+- Restores files for that point, as far as snapshots allow
+- `/undo-start` cannot be redone
+
 ### `/undo-start` — session start
 
 - Restores every mutation this extension captured in the current session
@@ -34,6 +40,8 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /undo-start
 /undo-start --force
 /undo-status
+/redo
+/redo --force
 /undo:reset-setting
 /undo:clear-undo-store
 ```
@@ -46,6 +54,8 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 
 `/undo-status` shows store usage and how many turns and files this session has tracked.
 
+`/redo` returns to the conversation and files as they were immediately before the last `/undo` or `/undo <N>`. There is nothing to redo until an undo succeeds.
+
 `/undo:reset-setting` replaces the config file with the built-in defaults.
 
 `/undo:clear-undo-store` permanently deletes every snapshot, session journal, and undo journal under `~/.pi/agent/pi-undo/`, including the current session's undo history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
@@ -54,7 +64,7 @@ If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those def
 
 `--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
 
-Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch re-applies those mutations (or the snapshot taken when you left it). That includes going back with `/tree` after `/undo <N>`. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` always restores files.
+Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch re-applies those mutations (or the snapshot taken when you left it). That includes going back with `/tree` or `/redo` after `/undo <N>`. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
 
 ## Installation
 

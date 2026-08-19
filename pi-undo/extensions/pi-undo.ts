@@ -120,6 +120,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   let runtime: Runtime | undefined;
   let pendingTreeForce = false;
   let pendingUndoNav = false;
+  let pendingForceFlag = "/undo <N> --force";
   const notifyFallback: string[] = [];
 
   const show = (
@@ -230,6 +231,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
 
   pi.on("session_tree", async (event, ctx) => {
     const force = pendingTreeForce;
+    const forceFlag = pendingForceFlag;
     try {
       if (!runtime?.config.enabled) {
         return;
@@ -276,7 +278,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         show(
           ctx,
           RESULT_ENTRY,
-          formatRestoreSummary(plan, "/undo <N> --force").split("\n"),
+          formatRestoreSummary(plan, forceFlag).split("\n"),
         );
       }
     } catch (error) {
@@ -386,6 +388,40 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     ]);
   };
 
+  const navigateToLeaf = async (
+    ctx: {
+      sessionManager: { getBranch: () => SessionEntryLike[] };
+      navigateTree: (id: string, options?: { summarize?: boolean }) => Promise<{ cancelled?: boolean } | undefined>;
+      ui: { notify: (message: string, type?: "info" | "warning" | "error") => void };
+    },
+    current: Runtime,
+    leafId: string,
+    force: boolean,
+    forceFlag: string,
+  ) => {
+    pendingUndoNav = true;
+    pendingTreeForce = force;
+    pendingForceFlag = forceFlag;
+    try {
+      const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
+      if (currentLeafId) {
+        current.journal.saveLeafSnapshot(
+          currentLeafId,
+          captureTrackedStates(
+            current.journal.mutations(),
+            current.store,
+            maxFileSizeBytes(current.config),
+          ),
+        );
+      }
+      return await ctx.navigateTree(leafId, { summarize: false });
+    } finally {
+      pendingUndoNav = false;
+      pendingTreeForce = false;
+      pendingForceFlag = "/undo <N> --force";
+    }
+  };
+
   pi.registerCommand("undo", {
     description: "Undo files and conversation to a previous user turn",
     handler: async (args, ctx) => {
@@ -402,6 +438,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           "/undo-diff [N]",
           "/undo-start [--force]",
           "/undo-status",
+          "/redo [--force]",
           "/undo:reset-setting",
           "/undo:clear-undo-store",
         ]);
@@ -418,28 +455,46 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         return;
       }
 
-      pendingUndoNav = true;
-      pendingTreeForce = parsed.force;
-      try {
-        const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
-        if (currentLeafId) {
-          current.journal.saveLeafSnapshot(
-            currentLeafId,
-            captureTrackedStates(
-              current.journal.mutations(),
-              current.store,
-              maxFileSizeBytes(current.config),
-            ),
-          );
-        }
-        const result = await ctx.navigateTree(turn.id, { summarize: false });
-        if (result?.cancelled) {
-          ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
-        }
-      } finally {
-        pendingUndoNav = false;
-        pendingTreeForce = false;
+      const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
+      const result = await navigateToLeaf(
+        ctx,
+        current,
+        turn.id,
+        parsed.force,
+        "/undo <N> --force",
+      );
+      if (result?.cancelled) {
+        ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
+        return;
       }
+      if (currentLeafId && currentLeafId !== turn.id) {
+        current.journal.setRedoLeafId(currentLeafId);
+      }
+    },
+  });
+
+  pi.registerCommand("redo", {
+    description: "Restore conversation and files to the state before the last /undo",
+    handler: async (args, ctx) => {
+      const parsed = parseOptionalForce(args, "Usage: /redo [--force]");
+      if ("error" in parsed) {
+        ctx.ui.notify(parsed.error, "error");
+        return;
+      }
+      const current = ensureRuntime(ctx);
+      const target = current.journal.getRedoLeafId();
+      const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
+      if (!target || target === currentLeafId) {
+        ctx.ui.notify("Nothing to redo.", "error");
+        return;
+      }
+      await ctx.waitForIdle();
+      const result = await navigateToLeaf(ctx, current, target, parsed.force, "/redo --force");
+      if (result?.cancelled) {
+        ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
+        return;
+      }
+      current.journal.setRedoLeafId(undefined);
     },
   });
 

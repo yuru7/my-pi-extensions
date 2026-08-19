@@ -66,6 +66,7 @@ describe("/undo command", () => {
     assert.equal(pi.commands.has("undo-diff"), true);
     assert.equal(pi.commands.has("undo-start"), true);
     assert.equal(pi.commands.has("undo-status"), true);
+    assert.equal(pi.commands.has("redo"), true);
     assert.equal(pi.commands.has("undo:reset-setting"), true);
     assert.equal(pi.commands.has("undo:clear-undo-store"), true);
     assert.equal(
@@ -87,6 +88,10 @@ describe("/undo command", () => {
     assert.equal(
       pi.commands.get("undo-status")?.description,
       "Show pi-undo status for the current session",
+    );
+    assert.equal(
+      pi.commands.get("redo")?.description,
+      "Restore conversation and files to the state before the last /undo",
     );
     assert.equal(
       pi.commands.get("undo:reset-setting")?.description,
@@ -270,6 +275,133 @@ describe("/undo command", () => {
     await handler("2", ctx as never);
     assert.equal(navigatedTo, undefined);
     assert.equal(notifications.some((message) => message.includes("No undo point 2")), true);
+  });
+
+  test("/redo restores the leaf that was active before /undo", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-files",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const undo = pi.commands.get("undo")?.handler;
+    const redo = pi.commands.get("redo")?.handler;
+    assert.ok(undo);
+    assert.ok(redo);
+
+    let leafId = "u-chat";
+    const filesTurn = { id: "u-files", message: { role: "user", content: "edit files", timestamp: 1 } };
+    const chatTurn = { id: "u-chat", message: { role: "user", content: "just chatting", timestamp: 2 } };
+    const notifications: string[] = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => (leafId === "u-chat" ? [filesTurn, chatTurn] : [filesTurn]),
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        leafId = id;
+        return {};
+      },
+      ui: {
+        notify: (message: string) => {
+          notifications.push(message);
+        },
+      },
+    };
+
+    await redo("", ctx as never);
+    assert.equal(leafId, "u-chat");
+    assert.equal(notifications.some((message) => message.includes("Nothing to redo.")), true);
+
+    await undo("", ctx as never);
+    assert.equal(leafId, "u-files");
+
+    notifications.length = 0;
+    await redo("", ctx as never);
+    assert.equal(leafId, "u-chat");
+    assert.equal(notifications.some((message) => message.includes("Nothing to redo.")), false);
+
+    await redo("", ctx as never);
+    assert.equal(leafId, "u-chat");
+    assert.equal(notifications.some((message) => message.includes("Nothing to redo.")), true);
+  });
+
+  test("/redo is not armed when /undo is cancelled", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-files",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const undo = pi.commands.get("undo")?.handler;
+    const redo = pi.commands.get("redo")?.handler;
+    assert.ok(undo);
+    assert.ok(redo);
+
+    const notifications: string[] = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u-files", message: { role: "user", content: "edit files", timestamp: 1 } },
+          { id: "u-chat", message: { role: "user", content: "just chatting", timestamp: 2 } },
+        ],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      navigateTree: async () => ({ cancelled: true }),
+      ui: {
+        notify: (message: string) => {
+          notifications.push(message);
+        },
+      },
+    };
+
+    await undo("", ctx as never);
+    await redo("", ctx as never);
+    assert.equal(notifications.some((message) => message.includes("Nothing to redo.")), true);
   });
 
   test("writes the default config file when it is missing", async () => {

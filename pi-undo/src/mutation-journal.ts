@@ -60,6 +60,7 @@ export interface SessionMeta {
   lastSequence: number;
   bashCommands: number;
   bashPartial: number;
+  redoLeafId?: string;
 }
 
 export class SessionJournal {
@@ -162,6 +163,19 @@ export class SessionJournal {
       }
     }
     return pending;
+  }
+
+  getRedoLeafId(): string | undefined {
+    return this.meta.redoLeafId;
+  }
+
+  setRedoLeafId(leafId: string | undefined): void {
+    if (leafId === undefined) {
+      delete this.meta.redoLeafId;
+    } else {
+      this.meta.redoLeafId = leafId;
+    }
+    this.writeMeta();
   }
 
   saveLeafSnapshot(leafId: string, entries: LeafSnapshotEntry[]): void {
