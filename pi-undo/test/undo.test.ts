@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { compensatingRestore, executeFilesystemRestore } from "../src/undo.ts";
-import { indexFileChangingTurns, listUserTurns, parseUndoArgs } from "../src/session.ts";
+import { indexFileChangingTurns, listUserTurns, parseOptionalForce, parseRequiredTurn, parseUndoArgs } from "../src/session.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
@@ -12,14 +12,31 @@ afterEach(() => {
 
 describe("parseUndoArgs", () => {
   test("parses MVP commands", () => {
-    assert.deepEqual(parseUndoArgs(""), { kind: "list" });
+    assert.deepEqual(parseUndoArgs(""), { kind: "undo", n: 1, force: false });
+    assert.deepEqual(parseUndoArgs("--force"), { kind: "undo", n: 1, force: true });
     assert.deepEqual(parseUndoArgs("3"), { kind: "undo", n: 3, force: false });
     assert.deepEqual(parseUndoArgs("3 --force"), { kind: "undo", n: 3, force: true });
     assert.deepEqual(parseUndoArgs("--force 3"), { kind: "undo", n: 3, force: true });
-    assert.deepEqual(parseUndoArgs("diff 3"), { kind: "diff", n: 3 });
-    assert.deepEqual(parseUndoArgs("start"), { kind: "start", force: false });
-    assert.deepEqual(parseUndoArgs("start --force"), { kind: "start", force: true });
-    assert.deepEqual(parseUndoArgs("status"), { kind: "status" });
+    assert.deepEqual(parseUndoArgs("help"), { kind: "help" });
+    assert.equal(parseUndoArgs("diff 3").kind, "error");
+    assert.equal(parseUndoArgs("start").kind, "error");
+    assert.equal(parseUndoArgs("status").kind, "error");
+  });
+});
+
+describe("parseOptionalForce", () => {
+  test("accepts an optional --force flag", () => {
+    assert.deepEqual(parseOptionalForce("", "Usage: /undo-start [--force]"), { force: false });
+    assert.deepEqual(parseOptionalForce("--force", "Usage: /undo-start [--force]"), { force: true });
+    assert.equal("error" in parseOptionalForce("nope", "Usage: /undo-start [--force]"), true);
+  });
+});
+
+describe("parseRequiredTurn", () => {
+  test("defaults to turn 1 when omitted", () => {
+    assert.deepEqual(parseRequiredTurn("", "Usage: /undo-diff [N]"), { n: 1 });
+    assert.deepEqual(parseRequiredTurn("3", "Usage: /undo-diff [N]"), { n: 3 });
+    assert.equal("error" in parseRequiredTurn("3 extra", "Usage: /undo-diff [N]"), true);
   });
 });
 

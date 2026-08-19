@@ -36,6 +36,8 @@ import {
   formatClock,
   indexFileChangingTurns,
   listUserTurns,
+  parseOptionalForce,
+  parseRequiredTurn,
   parseUndoArgs,
   type SessionEntryLike,
 } from "../src/session.ts";
@@ -344,6 +346,46 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     return undefined;
   });
 
+  const ensureRuntime = (ctx: {
+    cwd: string;
+    sessionManager: { getSessionId: () => string };
+    ui?: { notify?: (message: string, type?: "info" | "warning" | "error") => void };
+  }): Runtime => {
+    if (!runtime) {
+      runtime = bindRuntime(ctx.sessionManager.getSessionId(), ctx.cwd, makeNotify(ctx));
+    }
+    return runtime;
+  };
+
+  const currentTurns = (
+    current: Runtime,
+    ctx: { sessionManager: { getBranch: () => SessionEntryLike[] } },
+  ) => {
+    const branch = ctx.sessionManager.getBranch() as SessionEntryLike[];
+    return {
+      branch,
+      turns: indexFileChangingTurns(listUserTurns(branch), current.journal.mutations()),
+    };
+  };
+
+  const showUndoList = (ctx: {
+    hasUI?: boolean;
+    cwd: string;
+    sessionManager: { getSessionId: () => string; getBranch: () => SessionEntryLike[] };
+    ui?: { notify?: (message: string, type?: "info" | "warning" | "error") => void };
+  }) => {
+    const current = ensureRuntime(ctx);
+    const { turns } = currentTurns(current, ctx);
+    if (turns.length === 0) {
+      show(ctx, LIST_ENTRY, ["No user turns in the current session."]);
+      return;
+    }
+    show(ctx, LIST_ENTRY, [
+      "Undo points (1 = newest):",
+      ...formatUndoTurnLines(turns, current.journal.mutations()),
+    ]);
+  };
+
   pi.registerCommand("undo", {
     description: "Undo files and conversation to a previous user turn",
     handler: async (args, ctx) => {
@@ -356,78 +398,23 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         show(ctx, LIST_ENTRY, [
           "/undo",
           "/undo <N> [--force]",
-          "/undo diff <N>",
-          "/undo start [--force]",
-          "/undo status",
+          "/undo-list",
+          "/undo-diff [N]",
+          "/undo-start [--force]",
+          "/undo-status",
           "/undo:reset-setting",
           "/undo:clear-undo-store",
         ]);
         return;
       }
-      if (!runtime) {
-        runtime = bindRuntime(ctx.sessionManager.getSessionId(), ctx.cwd, makeNotify(ctx));
-      }
-
-      if (parsed.kind === "status") {
-        show(ctx, STATUS_ENTRY, statusLines(runtime));
-        return;
-      }
-
-      const branch = ctx.sessionManager.getBranch() as SessionEntryLike[];
-      const turns = indexFileChangingTurns(listUserTurns(branch), runtime.journal.mutations());
-
-      if (parsed.kind === "list") {
-        if (turns.length === 0) {
-          show(ctx, LIST_ENTRY, ["No user turns in the current session."]);
-          return;
-        }
-        show(ctx, LIST_ENTRY, [
-          "Undo points (1 = newest):",
-          ...formatUndoTurnLines(turns, runtime.journal.mutations()),
-        ]);
-        return;
-      }
+      const current = ensureRuntime(ctx);
+      const { turns } = currentTurns(current, ctx);
 
       await ctx.waitForIdle();
-
-      if (parsed.kind === "start") {
-        const { plan, transactionId } = executeFilesystemRestore({
-          mutations: runtime.journal.mutations(),
-          turnIds: "all",
-          config: runtime.config,
-          store: runtime.store,
-          force: parsed.force,
-        });
-        show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/undo start --force").split("\n"));
-        const parentSession = ctx.sessionManager.getSessionFile();
-        const result = await ctx.newSession({ parentSession });
-        if (result?.cancelled) {
-          compensatingRestore(runtime.store, transactionId);
-          ctx.ui.notify("pi-undo: new session was cancelled; filesystem restore was undone.", "warning");
-        }
-        return;
-      }
 
       const turn = turns.find((item) => item.index === parsed.n);
       if (!turn) {
         ctx.ui.notify(`No undo point ${parsed.n}.`, "error");
-        return;
-      }
-      const turnIds = new Set(
-        chronologicalUserIds(branch).slice(
-          chronologicalUserIds(branch).indexOf(turn.id),
-        ),
-      );
-
-      if (parsed.kind === "diff") {
-        const selected = mutationsForTurns(runtime.journal.mutations(), turnIds);
-        const plan = buildRestorePlan(selected, {
-          force: false,
-          safeRestore: runtime.config.safeRestore,
-          store: runtime.store,
-          maxFileBytes: maxFileSizeBytes(runtime.config),
-        });
-        show(ctx, DIFF_ENTRY, [`Undo to turn ${parsed.n}`, "", ...diffPreview(plan, runtime.store)]);
         return;
       }
 
@@ -436,12 +423,12 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       try {
         const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
         if (currentLeafId) {
-          runtime.journal.saveLeafSnapshot(
+          current.journal.saveLeafSnapshot(
             currentLeafId,
             captureTrackedStates(
-              runtime.journal.mutations(),
-              runtime.store,
-              maxFileSizeBytes(runtime.config),
+              current.journal.mutations(),
+              current.store,
+              maxFileSizeBytes(current.config),
             ),
           );
         }
@@ -453,6 +440,77 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         pendingUndoNav = false;
         pendingTreeForce = false;
       }
+    },
+  });
+
+  pi.registerCommand("undo-list", {
+    description: "List undo points in the current session",
+    handler: async (_args, ctx) => {
+      showUndoList(ctx);
+    },
+  });
+
+  pi.registerCommand("undo-diff", {
+    description: "Preview files that /undo <N> would restore",
+    handler: async (args, ctx) => {
+      const parsed = parseRequiredTurn(args, "Usage: /undo-diff [N]");
+      if ("error" in parsed) {
+        ctx.ui.notify(parsed.error, "error");
+        return;
+      }
+      const current = ensureRuntime(ctx);
+      const { branch, turns } = currentTurns(current, ctx);
+      const turn = turns.find((item) => item.index === parsed.n);
+      if (!turn) {
+        ctx.ui.notify(`No undo point ${parsed.n}.`, "error");
+        return;
+      }
+      await ctx.waitForIdle();
+      const turnIds = new Set(
+        chronologicalUserIds(branch).slice(chronologicalUserIds(branch).indexOf(turn.id)),
+      );
+      const selected = mutationsForTurns(current.journal.mutations(), turnIds);
+      const plan = buildRestorePlan(selected, {
+        force: false,
+        safeRestore: current.config.safeRestore,
+        store: current.store,
+        maxFileBytes: maxFileSizeBytes(current.config),
+      });
+      show(ctx, DIFF_ENTRY, [`Undo to turn ${parsed.n}`, "", ...diffPreview(plan, current.store)]);
+    },
+  });
+
+  pi.registerCommand("undo-start", {
+    description: "Restore this session's files and start a new empty session",
+    handler: async (args, ctx) => {
+      const parsed = parseOptionalForce(args, "Usage: /undo-start [--force]");
+      if ("error" in parsed) {
+        ctx.ui.notify(parsed.error, "error");
+        return;
+      }
+      const current = ensureRuntime(ctx);
+      await ctx.waitForIdle();
+      const { plan, transactionId } = executeFilesystemRestore({
+        mutations: current.journal.mutations(),
+        turnIds: "all",
+        config: current.config,
+        store: current.store,
+        force: parsed.force,
+      });
+      show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/undo-start --force").split("\n"));
+      const parentSession = ctx.sessionManager.getSessionFile();
+      const result = await ctx.newSession({ parentSession });
+      if (result?.cancelled) {
+        compensatingRestore(current.store, transactionId);
+        ctx.ui.notify("pi-undo: new session was cancelled; filesystem restore was undone.", "warning");
+      }
+    },
+  });
+
+  pi.registerCommand("undo-status", {
+    description: "Show pi-undo status for the current session",
+    handler: async (_args, ctx) => {
+      show(ctx, STATUS_ENTRY, statusLines(ensureRuntime(ctx)));
     },
   });
 

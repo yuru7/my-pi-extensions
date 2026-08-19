@@ -156,20 +156,12 @@ export function chronologicalUserIds(branch: SessionEntryLike[]): string[] {
 }
 
 export type ParsedUndoArgs =
-  | { kind: "list" }
-  | { kind: "status" }
   | { kind: "help" }
   | { kind: "undo"; n: number; force: boolean }
-  | { kind: "diff"; n: number }
-  | { kind: "start"; force: boolean }
   | { kind: "error"; message: string };
 
 export function parseUndoArgs(args: string): ParsedUndoArgs {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) {
-    return { kind: "list" };
-  }
-
   let force = false;
   const rest: string[] = [];
   for (const token of tokens) {
@@ -181,35 +173,47 @@ export function parseUndoArgs(args: string): ParsedUndoArgs {
   }
 
   if (rest.length === 0) {
-    return force ? { kind: "error", message: "Usage: /undo <N> --force" } : { kind: "list" };
+    return { kind: "undo", n: 1, force };
   }
 
   const [head, ...tail] = rest;
-  if (head === "status") {
-    return { kind: "status" };
-  }
-  if (head === "help") {
+  if (head === "help" && tail.length === 0 && !force) {
     return { kind: "help" };
-  }
-  if (head === "start") {
-    return { kind: "start", force };
-  }
-  if (head === "diff") {
-    const n = parseTurnNumber(tail[0]);
-    if (n === undefined) {
-      return { kind: "error", message: "Usage: /undo diff <N>" };
-    }
-    return { kind: "diff", n };
   }
 
   const n = parseTurnNumber(head);
   if (n === undefined || tail.length > 0) {
     return {
       kind: "error",
-      message: "Usage: /undo | /undo <N> [--force] | /undo diff <N> | /undo start [--force] | /undo status",
+      message: "Usage: /undo [N] [--force]",
     };
   }
   return { kind: "undo", n, force };
+}
+
+export function parseOptionalForce(args: string, usage: string): { force: boolean } | { error: string } {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  let force = false;
+  for (const token of tokens) {
+    if (token === "--force") {
+      force = true;
+      continue;
+    }
+    return { error: usage };
+  }
+  return { force };
+}
+
+export function parseRequiredTurn(args: string, usage: string): { n: number } | { error: string } {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { n: 1 };
+  }
+  const n = tokens.length === 1 ? parseTurnNumber(tokens[0]) : undefined;
+  if (n === undefined) {
+    return { error: usage };
+  }
+  return { n };
 }
 
 function parseTurnNumber(value: string | undefined): number | undefined {

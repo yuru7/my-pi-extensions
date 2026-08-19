@@ -8,13 +8,14 @@ Pi mutations are snapshotted **before** the tool runs. Content is stored in a SH
 
 ## What undo does
 
-### `/undo <N>` — conversation turn
+### `/undo` / `/undo <N>` — conversation turn
 
+- `/undo` with no number is the same as `/undo 1`
 - Keeps the selected user message
 - Drops the assistant replies and tool calls after that message from the active conversation path (`navigateTree`, no branch summary)
 - Restores files that Pi changed from that turn onward, as far as snapshots allow
 
-### `/undo start` — session start
+### `/undo-start` — session start
 
 - Restores every mutation this extension captured in the current session
 - Opens a new empty session with the old session as `parentSession`
@@ -27,15 +28,23 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /undo
 /undo <N>
 /undo <N> --force
-/undo diff <N>
-/undo start
-/undo start --force
-/undo status
+/undo-list
+/undo-diff
+/undo-diff <N>
+/undo-start
+/undo-start --force
+/undo-status
 /undo:reset-setting
 /undo:clear-undo-store
 ```
 
-`/undo` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to. Turns with no file changes are shown in gray without a number and cannot be selected.
+`/undo` is an alias for `/undo 1`. Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to.
+
+`/undo-list` lists user turns in the current branch, oldest first (newest at the bottom). Turns with no file changes are shown in gray without a number and cannot be selected.
+
+`/undo-diff` is an alias for `/undo-diff 1`. `/undo-diff <N>` previews the file changes that `/undo <N>` would restore.
+
+`/undo-status` shows store usage and how many turns and files this session has tracked.
 
 `/undo:reset-setting` replaces the config file with the built-in defaults.
 

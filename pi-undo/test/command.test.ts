@@ -62,11 +62,31 @@ describe("/undo command", () => {
     assert.equal(pi.events.has("tool_call"), true);
     assert.equal(pi.events.has("tool_result"), true);
     assert.equal(pi.commands.has("undo"), true);
+    assert.equal(pi.commands.has("undo-list"), true);
+    assert.equal(pi.commands.has("undo-diff"), true);
+    assert.equal(pi.commands.has("undo-start"), true);
+    assert.equal(pi.commands.has("undo-status"), true);
     assert.equal(pi.commands.has("undo:reset-setting"), true);
     assert.equal(pi.commands.has("undo:clear-undo-store"), true);
     assert.equal(
       pi.commands.get("undo")?.description,
       "Undo files and conversation to a previous user turn",
+    );
+    assert.equal(
+      pi.commands.get("undo-list")?.description,
+      "List undo points in the current session",
+    );
+    assert.equal(
+      pi.commands.get("undo-diff")?.description,
+      "Preview files that /undo <N> would restore",
+    );
+    assert.equal(
+      pi.commands.get("undo-start")?.description,
+      "Restore this session's files and start a new empty session",
+    );
+    assert.equal(
+      pi.commands.get("undo-status")?.description,
+      "Show pi-undo status for the current session",
     );
     assert.equal(
       pi.commands.get("undo:reset-setting")?.description,
@@ -78,7 +98,7 @@ describe("/undo command", () => {
     );
   });
 
-  test("/undo list omits numbers for turns without file changes", async () => {
+  test("/undo-list omits numbers for turns without file changes", async () => {
     const { pi, home } = setup();
     const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
     const stored = store.put(Buffer.from("snapshot-bytes"));
@@ -104,7 +124,7 @@ describe("/undo command", () => {
       ui: { notify() {} },
     } as never);
 
-    const handler = pi.commands.get("undo")?.handler;
+    const handler = pi.commands.get("undo-list")?.handler;
     assert.ok(handler);
     await handler("", {
       hasUI: true,
@@ -131,6 +151,60 @@ describe("/undo command", () => {
     assert.match(lines[2]?.text ?? "", /^ {1}  /);
     assert.match(lines[2]?.text ?? "", /just chatting/);
     assert.match(lines[2]?.text ?? "", /no file changes/);
+  });
+
+  test("/undo-diff without a number is the same as /undo-diff 1", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-files",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.commands.get("undo-diff")?.handler;
+    assert.ok(handler);
+    const ctx = {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u-files", message: { role: "user", content: "edit files", timestamp: 1 } },
+        ],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    };
+
+    await handler("", ctx as never);
+    const first = pi.entries.find((entry) => entry.customType === "pi-undo/diff");
+    assert.ok(first);
+    const firstLines = (first.data as { lines: Array<{ text: string }> }).lines;
+    assert.equal(firstLines[0]?.text, "Undo to turn 1");
+
+    await handler("1", ctx as never);
+    const diffs = pi.entries.filter((entry) => entry.customType === "pi-undo/diff");
+    assert.equal(diffs.length, 2);
+    const secondLines = (diffs[1]?.data as { lines: Array<{ text: string }> }).lines;
+    assert.equal(secondLines[0]?.text, "Undo to turn 1");
   });
 
   test("/undo <N> ignores turns that did not change files", async () => {
@@ -185,6 +259,10 @@ describe("/undo command", () => {
       },
     };
 
+    await handler("", ctx as never);
+    assert.equal(navigatedTo, "u-files");
+
+    navigatedTo = undefined;
     await handler("1", ctx as never);
     assert.equal(navigatedTo, "u-files");
 
@@ -405,9 +483,9 @@ describe("/undo:clear-undo-store command", () => {
     assert.ok(handler);
     await handler("", commandCtx({ confirm: true }));
 
-    const status = pi.commands.get("undo")?.handler;
+    const status = pi.commands.get("undo-status")?.handler;
     assert.ok(status);
-    await status("status", {
+    await status("", {
       hasUI: true,
       sessionManager: {
         getSessionId: () => "s1",
