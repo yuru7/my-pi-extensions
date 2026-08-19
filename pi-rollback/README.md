@@ -109,14 +109,14 @@ Use `/reset-rollback-setting` to overwrite the file with the same defaults.
 {
   "enabled": true,
   "maxFileSizeMB": 10,
-  "maxTotalSizeMB": 500,
+  "maxTotalSizeMB": 300,
   "retentionDays": 14,
   "safeRestore": true,
   "syncTree": true,
   "bash": {
     "enabled": true,
-    "maxFilesPerCall": 5000,
-    "maxBytesPerCallMB": 200,
+    "maxFilesPerCall": 2000,
+    "maxBytesPerCallMB": 50,
     "warnOnUnresolvedMutation": true
   },
   "excludeGlobs": []
@@ -175,8 +175,8 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 
 ## Limits and maintenance
 
-- 10 MB per file and 500 MB total store by default
-- Bash directory walks stop at 5000 files or 200 MB per call by default; an oversized directory is skipped as a whole
+- 10 MB per file and 300 MB total store by default
+- Bash directory walks stop at 2000 files or 50 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
 - `/clear-rollback-store` wipes the whole store immediately without resetting the conversation (config is kept)

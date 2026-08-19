@@ -29,15 +29,15 @@ export interface RollbackConfig {
 
 export const DEFAULT_BASH_CONFIG: BashConfig = {
   enabled: true,
-  maxFilesPerCall: 5000,
-  maxBytesPerCallMB: 200,
+  maxFilesPerCall: 2000,
+  maxBytesPerCallMB: 50,
   warnOnUnresolvedMutation: true,
 };
 
 export const DEFAULT_CONFIG: RollbackConfig = {
   enabled: true,
   maxFileSizeMB: 10,
-  maxTotalSizeMB: 500,
+  maxTotalSizeMB: 300,
   retentionDays: 14,
   safeRestore: true,
   syncTree: true,

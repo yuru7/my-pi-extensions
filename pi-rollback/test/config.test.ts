@@ -23,12 +23,12 @@ describe("config", () => {
     assert.deepEqual(parseConfig(null), DEFAULT_CONFIG);
     assert.equal(DEFAULT_CONFIG.enabled, true);
     assert.equal(DEFAULT_CONFIG.maxFileSizeMB, 10);
-    assert.equal(DEFAULT_CONFIG.maxTotalSizeMB, 500);
+    assert.equal(DEFAULT_CONFIG.maxTotalSizeMB, 300);
     assert.equal(DEFAULT_CONFIG.retentionDays, 14);
     assert.equal(DEFAULT_CONFIG.safeRestore, true);
     assert.equal(DEFAULT_CONFIG.syncTree, true);
-    assert.equal(DEFAULT_CONFIG.bash.maxFilesPerCall, 5000);
-    assert.equal(DEFAULT_CONFIG.bash.maxBytesPerCallMB, 200);
+    assert.equal(DEFAULT_CONFIG.bash.maxFilesPerCall, 2000);
+    assert.equal(DEFAULT_CONFIG.bash.maxBytesPerCallMB, 50);
   });
 
   test("invalid values fall back to defaults", () => {
@@ -41,7 +41,7 @@ describe("config", () => {
     assert.equal(parsed.enabled, true);
     assert.equal(parsed.maxFileSizeMB, 10);
     assert.equal(parsed.retentionDays, 14);
-    assert.equal(parsed.bash.maxFilesPerCall, 5000);
+    assert.equal(parsed.bash.maxFilesPerCall, 2000);
   });
 
   test("syncTree can be turned off", () => {
