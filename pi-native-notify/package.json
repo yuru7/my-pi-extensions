@@ -1,5 +1,5 @@
 {
-  "name": "pi-native-notify",
+  "name": "@yuru7/pi-native-notify",
   "version": "0.3.1",
   "description": "A Pi extension that sends a native OS notification when a long-running task completes",
   "keywords": [
