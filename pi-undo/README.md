@@ -74,6 +74,36 @@ pi install npm:pi-undo
 
 After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
 
+## Quick Start
+
+After `/reload`, keep using Pi as usual. Files are snapshotted automatically before each `write`, `edit`, or `bash` mutation. Git is not required.
+
+When a turn went the wrong way, list the numbered restore points:
+
+```text
+/undo-list
+```
+
+```text
+Undo points (1 = newest):
+2  10:12  Add login endpoint           5 files
+   10:31  What does this endpoint do?  no file changes
+1  10:45  Fix authentication bug       3 files
+```
+
+Oldest first, newest at the bottom. Number 1 is the newest turn that changed files. Gray lines have no number and cannot be selected.
+
+Preview what `/undo` would restore, then undo that turn:
+
+```text
+/undo-diff
+/undo
+```
+
+`/undo` keeps the selected user message, drops the replies after it, and restores the files Pi changed from that turn onward. If you edited those files after Pi's last write, you get a selector; **No (Do not overwrite)** is the default.
+
+`/redo` reverses the last `/undo`. `/undo 2` jumps to an older numbered turn. `/undo-start` restores every captured mutation in this session and opens a new empty session.
+
 ## Configuration
 
 Config file:
