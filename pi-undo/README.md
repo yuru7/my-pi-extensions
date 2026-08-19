@@ -31,15 +31,15 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /undo start
 /undo start --force
 /undo status
-/reset-undo-setting
-/clear-undo-store
+/undo:reset-setting
+/undo:clear-undo-store
 ```
 
 `/undo` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to. Turns with no file changes are shown in gray without a number and cannot be selected.
 
-`/reset-undo-setting` replaces the config file with the built-in defaults.
+`/undo:reset-setting` replaces the config file with the built-in defaults.
 
-`/clear-undo-store` permanently deletes every snapshot, session journal, and undo journal under `~/.pi/agent/pi-undo/`, including the current session's undo history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
+`/undo:clear-undo-store` permanently deletes every snapshot, session journal, and undo journal under `~/.pi/agent/pi-undo/`, including the current session's undo history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
 
 If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those defaults on load.
 
@@ -103,7 +103,7 @@ If the file is missing, it is created with the defaults below. If it cannot be p
 pi-undo: Failed to load configuration; using defaults.
 ```
 
-Use `/reset-undo-setting` to overwrite the file with the same defaults.
+Use `/undo:reset-setting` to overwrite the file with the same defaults.
 
 ```json
 {
@@ -179,7 +179,7 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 - Bash directory walks stop at 2000 files or 50 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
-- `/clear-undo-store` wipes the whole store immediately without resetting the conversation (config is kept)
+- `/undo:clear-undo-store` wipes the whole store immediately without resetting the conversation (config is kept)
 - If the active session alone exceeds the cap, new snapshots are skipped and a warning is shown
 - Unfinished `pending/` journals from a crash are reported on the next `session_start`
 

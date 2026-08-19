@@ -62,18 +62,18 @@ describe("/undo command", () => {
     assert.equal(pi.events.has("tool_call"), true);
     assert.equal(pi.events.has("tool_result"), true);
     assert.equal(pi.commands.has("undo"), true);
-    assert.equal(pi.commands.has("reset-undo-setting"), true);
-    assert.equal(pi.commands.has("clear-undo-store"), true);
+    assert.equal(pi.commands.has("undo:reset-setting"), true);
+    assert.equal(pi.commands.has("undo:clear-undo-store"), true);
     assert.equal(
       pi.commands.get("undo")?.description,
       "Undo files and conversation to a previous user turn",
     );
     assert.equal(
-      pi.commands.get("reset-undo-setting")?.description,
+      pi.commands.get("undo:reset-setting")?.description,
       "Reset pi-undo configuration to the built-in defaults",
     );
     assert.equal(
-      pi.commands.get("clear-undo-store")?.description,
+      pi.commands.get("undo:clear-undo-store")?.description,
       "Permanently delete all stored undo snapshots",
     );
   });
@@ -240,11 +240,11 @@ describe("/undo command", () => {
     );
   });
 
-  test("/reset-undo-setting restores defaults after confirmation", async () => {
+  test("/undo:reset-setting restores defaults after confirmation", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false, enabled: false }, path);
-    const handler = pi.commands.get("reset-undo-setting")?.handler;
+    const handler = pi.commands.get("undo:reset-setting")?.handler;
     assert.ok(handler);
 
     const notifications: string[] = [];
@@ -265,11 +265,11 @@ describe("/undo command", () => {
     assert.equal(notifications.some((message) => message.includes("reset to defaults")), true);
   });
 
-  test("/reset-undo-setting does nothing when cancelled", async () => {
+  test("/undo:reset-setting does nothing when cancelled", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("reset-undo-setting")?.handler;
+    const handler = pi.commands.get("undo:reset-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -285,11 +285,11 @@ describe("/undo command", () => {
     assert.equal(loadConfig(path).config.syncTree, false);
   });
 
-  test("/reset-undo-setting writes defaults when there is no confirm UI", async () => {
+  test("/undo:reset-setting writes defaults when there is no confirm UI", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("reset-undo-setting")?.handler;
+    const handler = pi.commands.get("undo:reset-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -349,11 +349,11 @@ function commandCtx(options: {
   } as never;
 }
 
-describe("/clear-undo-store command", () => {
+describe("/undo:clear-undo-store command", () => {
   test("wipes stored snapshots including the current session", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
-    const handler = pi.commands.get("clear-undo-store")?.handler;
+    const handler = pi.commands.get("undo:clear-undo-store")?.handler;
     assert.ok(handler);
 
     const notifications: string[] = [];
@@ -373,7 +373,7 @@ describe("/clear-undo-store command", () => {
   test("does nothing when cancelled", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
-    const handler = pi.commands.get("clear-undo-store")?.handler;
+    const handler = pi.commands.get("undo:clear-undo-store")?.handler;
     assert.ok(handler);
 
     await handler("", commandCtx({ confirm: false }));
@@ -388,7 +388,7 @@ describe("/clear-undo-store command", () => {
   test("wipes the store when there is no confirm UI", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["s1"]);
-    const handler = pi.commands.get("clear-undo-store")?.handler;
+    const handler = pi.commands.get("undo:clear-undo-store")?.handler;
     assert.ok(handler);
 
     await handler("", commandCtx({ hasUI: false }));
@@ -401,7 +401,7 @@ describe("/clear-undo-store command", () => {
   test("lets the current session snapshot again after a wipe", async () => {
     const { pi, home } = setup();
     seedStore(home, ["s1"]);
-    const handler = pi.commands.get("clear-undo-store")?.handler;
+    const handler = pi.commands.get("undo:clear-undo-store")?.handler;
     assert.ok(handler);
     await handler("", commandCtx({ confirm: true }));
 

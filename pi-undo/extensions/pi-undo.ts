@@ -359,8 +359,8 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           "/undo diff <N>",
           "/undo start [--force]",
           "/undo status",
-          "/reset-undo-setting",
-          "/clear-undo-store",
+          "/undo:reset-setting",
+          "/undo:clear-undo-store",
         ]);
         return;
       }
@@ -456,7 +456,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     },
   });
 
-  pi.registerCommand("reset-undo-setting", {
+  pi.registerCommand("undo:reset-setting", {
     description: "Reset pi-undo configuration to the built-in defaults",
     handler: async (_args, ctx) => {
       if (ctx.hasUI && ctx.ui.confirm) {
@@ -480,7 +480,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     },
   });
 
-  pi.registerCommand("clear-undo-store", {
+  pi.registerCommand("undo:clear-undo-store", {
     description: "Permanently delete all stored undo snapshots",
     handler: async (_args, ctx) => {
       if (ctx.hasUI && ctx.ui.confirm) {
