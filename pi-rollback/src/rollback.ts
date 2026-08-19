@@ -6,6 +6,7 @@ import { maxFileSizeBytes } from "./config.ts";
 import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutation-journal.ts";
 import {
   collectToolCallIds,
+  shouldRedoMutation,
   shouldUndoMutation,
   stayTurnIds,
   type SessionEntryLike,
@@ -83,12 +84,7 @@ export function buildRestorePlan(
     if (existing) {
       existing.pre = mutation.pre;
       existing.action = actionFor(mutation.pre, existing.post);
-      existing.coverage =
-        mutation.coverage === "partial" || existing.coverage === "partial"
-          ? "partial"
-          : mutation.coverage === "best-effort" || existing.coverage === "best-effort"
-            ? "best-effort"
-            : "exact";
+      existing.coverage = mergeCoverage(existing.coverage, mutation.coverage);
       continue;
     }
 
@@ -101,7 +97,11 @@ export function buildRestorePlan(
       action: actionFor(mutation.pre, mutation.post),
     };
 
-    if (!options.force && options.safeRestore && hasExternalEdit(mutation, options.store, options.maxFileBytes)) {
+    if (
+      !options.force &&
+      options.safeRestore &&
+      currentDiffersFrom(mutation.path, mutation.post, options.store, options.maxFileBytes)
+    ) {
       item.skipped = "external-edit";
       skippedPaths.add(mutation.key);
       items.push(item);
@@ -119,22 +119,122 @@ export function buildRestorePlan(
     items.push(item);
   }
 
-  const skipped = items.filter((item) => item.skipped === "external-edit").map((item) => item.path);
-  const restored = items.filter((item) => !item.skipped).length;
-  const partialCoverage = items.filter((item) => item.coverage === "partial").length;
-  return { items, restored, skipped, partialCoverage };
+  return summarizeRestorePlan(items);
 }
 
-function hasExternalEdit(
-  mutation: MutationRecord,
+export function buildRedoPlan(
+  mutations: MutationRecord[],
+  options: {
+    force: boolean;
+    safeRestore: boolean;
+    store: ObjectStore;
+    maxFileBytes: number;
+  },
+): RestorePlan {
+  const items: RestoreItem[] = [];
+  const skippedPaths = new Set<string>();
+  const latestByKey = new Map<string, RestoreItem>();
+  const ordered = [...mutations].sort((left, right) => left.sequence - right.sequence);
+
+  for (const mutation of ordered) {
+    if (skippedPaths.has(mutation.key)) {
+      continue;
+    }
+    const existing = latestByKey.get(mutation.key);
+    if (existing) {
+      existing.pre = mutation.post;
+      existing.action = actionFor(mutation.post, existing.post);
+      existing.coverage = mergeCoverage(existing.coverage, mutation.coverage);
+      continue;
+    }
+
+    const item: RestoreItem = {
+      path: mutation.path,
+      key: mutation.key,
+      pre: mutation.post,
+      post: mutation.pre,
+      coverage: mutation.coverage,
+      action: actionFor(mutation.post, mutation.pre),
+    };
+
+    if (
+      !options.force &&
+      options.safeRestore &&
+      currentDiffersFrom(mutation.path, mutation.pre, options.store, options.maxFileBytes)
+    ) {
+      item.skipped = "external-edit";
+      skippedPaths.add(mutation.key);
+      items.push(item);
+      continue;
+    }
+
+    if (
+      mutation.post.kind === "file" &&
+      !options.store.has(mutation.post.sha256) &&
+      !mutation.post.sha256.startsWith("too-large:")
+    ) {
+      item.skipped = "missing-object";
+      skippedPaths.add(mutation.key);
+      items.push(item);
+      continue;
+    }
+
+    latestByKey.set(mutation.key, item);
+    items.push(item);
+  }
+
+  return summarizeRestorePlan(items);
+}
+
+function mergeCoverage(
+  left: MutationRecord["coverage"],
+  right: MutationRecord["coverage"],
+): MutationRecord["coverage"] {
+  if (left === "partial" || right === "partial") {
+    return "partial";
+  }
+  if (left === "best-effort" || right === "best-effort") {
+    return "best-effort";
+  }
+  return "exact";
+}
+
+function summarizeRestorePlan(items: RestoreItem[]): RestorePlan {
+  return {
+    items,
+    restored: items.filter((item) => !item.skipped).length,
+    skipped: items.filter((item) => item.skipped === "external-edit").map((item) => item.path),
+    partialCoverage: items.filter((item) => item.coverage === "partial").length,
+  };
+}
+
+function mergeRestorePlans(undo: RestorePlan, redo: RestorePlan): RestorePlan {
+  const items: RestoreItem[] = [];
+  const seen = new Set<string>();
+  for (const item of redo.items) {
+    items.push(item);
+    seen.add(item.key);
+  }
+  for (const item of undo.items) {
+    if (seen.has(item.key)) {
+      continue;
+    }
+    items.push(item);
+  }
+  return summarizeRestorePlan(items);
+}
+
+function currentDiffersFrom(
+  filePath: string,
+  expected: FileState,
   store: ObjectStore,
   maxFileBytes: number,
 ): boolean {
-  const current = captureFileState(mutation.path, { store, persist: false, maxFileBytes });
+  const current = captureFileState(filePath, { store, persist: false, maxFileBytes });
   if (current.status !== "ok") {
     return true;
   }
-  return !fileStateEquals(current.state, mutation.post);
+  return !fileStateEquals(current.state, expected);
 }
 
 export function createRollbackJournal(
@@ -493,12 +593,6 @@ export function captureTrackedStates(
   return entries;
 }
 
-export function restoreLeafEntries(entries: LeafSnapshotEntry[], store: ObjectStore): void {
-  for (const entry of entries) {
-    restoreFileState(entry.path, entry.state, store);
-  }
-}
-
 export function mutationsForTreeUndo(
   mutations: MutationRecord[],
   oldBranch: SessionEntryLike[],
@@ -513,6 +607,41 @@ export function mutationsForTreeUndo(
       shouldUndoMutation(mutation, oldToolCallIds, newToolCallIds, stayTurns),
     )
     .sort((left, right) => right.sequence - left.sequence);
+}
+
+export function mutationsForTreeRedo(
+  mutations: MutationRecord[],
+  oldBranch: SessionEntryLike[],
+  newBranch: SessionEntryLike[],
+  newLeafId: string | null,
+): MutationRecord[] {
+  const oldToolCallIds = collectToolCallIds(oldBranch);
+  const newToolCallIds = collectToolCallIds(newBranch);
+  const stayTurns = stayTurnIds(newBranch, newLeafId);
+  return mutations
+    .filter((mutation) =>
+      shouldRedoMutation(mutation, oldToolCallIds, newToolCallIds, stayTurns),
+    )
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
+function commitRestorePlan(
+  plan: RestorePlan,
+  store: ObjectStore,
+  config: RollbackConfig,
+): { plan: RestorePlan; transactionId: string } {
+  const { transactionId } = createRollbackJournal(
+    store,
+    plan.items,
+    maxFileSizeBytes(config),
+  );
+  try {
+    applyRestore(plan.items, store);
+  } catch (error) {
+    compensatingRestore(store, transactionId);
+    throw error;
+  }
+  return { plan, transactionId };
 }
 
 export function executeTreeRestore(options: {
@@ -537,42 +666,32 @@ export function executeTreeRestore(options: {
         coverage: "exact" as const,
         action: actionFor(entry.state, { kind: "absent" }),
       }));
-      const { transactionId } = createRollbackJournal(
+      const committed = commitRestorePlan(
+        { items, restored: items.length, skipped: [], partialCoverage: 0 },
         options.store,
-        items,
-        maxFileSizeBytes(options.config),
+        options.config,
       );
-      try {
-        restoreLeafEntries(cached, options.store);
-      } catch (error) {
-        compensatingRestore(options.store, transactionId);
-        throw error;
-      }
-      const plan: RestorePlan = {
-        items,
-        restored: items.length,
-        skipped: [],
-        partialCoverage: 0,
-      };
-      return { plan, transactionId, via: "cache" };
+      return { ...committed, via: "cache" };
     }
   }
 
-  const selected = mutationsForTreeUndo(
-    options.mutations,
-    options.oldBranch,
-    options.newBranch,
-    options.newLeafId,
+  const planOptions = {
+    force: options.force,
+    safeRestore: options.config.safeRestore,
+    store: options.store,
+    maxFileBytes: maxFileSizeBytes(options.config),
+  };
+  const undoPlan = buildRestorePlan(
+    mutationsForTreeUndo(options.mutations, options.oldBranch, options.newBranch, options.newLeafId),
+    planOptions,
   );
-  if (selected.length === 0) {
+  const redoPlan = buildRedoPlan(
+    mutationsForTreeRedo(options.mutations, options.oldBranch, options.newBranch, options.newLeafId),
+    planOptions,
+  );
+  const plan = mergeRestorePlans(undoPlan, redoPlan);
+  if (plan.items.length === 0) {
     return { plan: empty, transactionId: "", via: "noop" };
   }
-  const restored = executeFilesystemRestore({
-    mutations: selected,
-    turnIds: "all",
-    config: options.config,
-    store: options.store,
-    force: options.force,
-  });
-  return { ...restored, via: "mutations" };
+  return { ...commitRestorePlan(plan, options.store, options.config), via: "mutations" };
 }

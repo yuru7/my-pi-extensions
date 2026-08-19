@@ -67,9 +67,22 @@ export function shouldUndoMutation(
   return !stayTurns.has(mutation.turnEntryId);
 }
 
+export function shouldRedoMutation(
+  mutation: { toolCallId: string; turnEntryId: string },
+  oldToolCallIds: Set<string>,
+  newToolCallIds: Set<string>,
+  stayTurns: Set<string>,
+): boolean {
+  const seen = oldToolCallIds.has(mutation.toolCallId) || newToolCallIds.has(mutation.toolCallId);
+  if (seen) {
+    return newToolCallIds.has(mutation.toolCallId) && !oldToolCallIds.has(mutation.toolCallId);
+  }
+  return stayTurns.has(mutation.turnEntryId);
+}
+
 export interface UserTurn {
   id: string;
-  index: number;
+  index: number | null;
   timestamp: number;
   preview: string;
 }
@@ -103,6 +116,26 @@ export function listUserTurns(branch: SessionEntryLike[]): UserTurn[] {
   }
   const total = turns.length;
   return turns.map((turn, index) => ({ ...turn, index: total - index }));
+}
+
+export function hasTurnMutations(
+  mutations: { turnEntryId: string }[],
+  turnId: string,
+): boolean {
+  return mutations.some((mutation) => mutation.turnEntryId === turnId);
+}
+
+export function indexFileChangingTurns(
+  turns: UserTurn[],
+  mutations: { turnEntryId: string }[],
+): UserTurn[] {
+  const selectable = turns.filter((turn) => hasTurnMutations(mutations, turn.id));
+  const total = selectable.length;
+  const indexes = new Map(selectable.map((turn, index) => [turn.id, total - index]));
+  return turns.map((turn) => ({
+    ...turn,
+    index: indexes.get(turn.id) ?? null,
+  }));
 }
 
 export function turnIdsFromTarget(

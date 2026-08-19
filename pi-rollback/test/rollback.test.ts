@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { compensatingRestore, executeFilesystemRestore } from "../src/rollback.ts";
-import { listUserTurns, parseRollbackArgs } from "../src/session.ts";
+import { indexFileChangingTurns, listUserTurns, parseRollbackArgs } from "../src/session.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
@@ -37,6 +37,28 @@ describe("listUserTurns", () => {
         { id: "a", index: 3 },
         { id: "c", index: 2 },
         { id: "d", index: 1 },
+      ],
+    );
+  });
+});
+
+describe("indexFileChangingTurns", () => {
+  test("numbers only turns that changed files, newest first", () => {
+    const turns = listUserTurns([
+      { id: "a", message: { role: "user", content: "first", timestamp: 1 } },
+      { id: "b", message: { role: "user", content: "second", timestamp: 2 } },
+      { id: "c", message: { role: "user", content: "third", timestamp: 3 } },
+    ]);
+    const numbered = indexFileChangingTurns(turns, [
+      { turnEntryId: "a" },
+      { turnEntryId: "c" },
+    ]);
+    assert.deepEqual(
+      numbered.map((turn) => ({ id: turn.id, index: turn.index })),
+      [
+        { id: "a", index: 2 },
+        { id: "b", index: null },
+        { id: "c", index: 1 },
       ],
     );
   });

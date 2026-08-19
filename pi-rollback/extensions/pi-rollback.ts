@@ -34,6 +34,7 @@ import {
   chronologicalUserIds,
   findTurnEntryId,
   formatClock,
+  indexFileChangingTurns,
   listUserTurns,
   parseRollbackArgs,
   type SessionEntryLike,
@@ -46,8 +47,23 @@ const STATUS_ENTRY = "pi-rollback/status";
 const DIFF_ENTRY = "pi-rollback/diff";
 const RESULT_ENTRY = "pi-rollback/result";
 
+interface LineItem {
+  text: string;
+  dim?: boolean;
+}
+
 interface LinesData {
-  lines: string[];
+  lines: LineItem[];
+}
+
+function isLineItem(value: unknown): value is LineItem {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "text" in value &&
+    typeof (value as LineItem).text === "string" &&
+    ((value as LineItem).dim === undefined || typeof (value as LineItem).dim === "boolean")
+  );
 }
 
 function isLinesData(data: unknown): data is LinesData {
@@ -56,15 +72,24 @@ function isLinesData(data: unknown): data is LinesData {
     data !== null &&
     "lines" in data &&
     Array.isArray((data as LinesData).lines) &&
-    (data as LinesData).lines.every((line) => typeof line === "string")
+    (data as LinesData).lines.every(isLineItem)
   );
+}
+
+function toLineItems(lines: Array<string | LineItem>): LineItem[] {
+  return lines.map((line) => (typeof line === "string" ? { text: line } : line));
 }
 
 const renderLines: EntryRenderer = (entry, _options, theme) => {
   const lines = isLinesData(entry.data) ? entry.data.lines : [];
   const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
   for (const [index, line] of lines.entries()) {
-    const styled = index === 0 ? theme.bold(theme.fg("accent", line)) : line;
+    let styled = line.text;
+    if (line.dim) {
+      styled = theme.fg("dim", styled);
+    } else if (index === 0) {
+      styled = theme.bold(theme.fg("accent", styled));
+    }
     box.addChild(new Text(styled, 0, 0));
   }
   return box;
@@ -98,14 +123,15 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
   const show = (
     ctx: { hasUI?: boolean; ui?: { notify?: (message: string, type?: "info" | "warning" | "error") => void } },
     type: string,
-    lines: string[],
+    lines: Array<string | LineItem>,
     level: "info" | "warning" | "error" = "info",
   ) => {
+    const items = toLineItems(lines);
     if (ctx.hasUI) {
-      pi.appendEntry(type, { lines } satisfies LinesData);
+      pi.appendEntry(type, { lines: items } satisfies LinesData);
       return;
     }
-    ctx.ui?.notify?.(lines.join("\n"), level);
+    ctx.ui?.notify?.(items.map((item) => item.text).join("\n"), level);
   };
 
   const makeNotify = (ctx: {
@@ -348,7 +374,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       }
 
       const branch = ctx.sessionManager.getBranch() as SessionEntryLike[];
-      const turns = listUserTurns(branch);
+      const turns = indexFileChangingTurns(listUserTurns(branch), runtime.journal.mutations());
 
       if (parsed.kind === "list") {
         if (turns.length === 0) {
@@ -357,10 +383,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
         }
         show(ctx, LIST_ENTRY, [
           "Rollback points (1 = newest):",
-          ...turns.map((turn) => {
-            const files = describeTurnFiles(runtime!.journal.mutations(), turn.id);
-            return `${turn.index}  ${formatClock(turn.timestamp)}  ${turn.preview}       ${files}`;
-          }),
+          ...formatRollbackTurnLines(turns, runtime.journal.mutations()),
         ]);
         return;
       }
@@ -411,6 +434,17 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       pendingRollbackNav = true;
       pendingTreeForce = parsed.force;
       try {
+        const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
+        if (currentLeafId) {
+          runtime.journal.saveLeafSnapshot(
+            currentLeafId,
+            captureTrackedStates(
+              runtime.journal.mutations(),
+              runtime.store,
+              maxFileSizeBytes(runtime.config),
+            ),
+          );
+        }
         const result = await ctx.navigateTree(turn.id, { summarize: false });
         if (result?.cancelled) {
           ctx.ui.notify("pi-rollback: tree navigation was cancelled.", "warning");
@@ -472,6 +506,22 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       runtime = bindRuntime(ctx.sessionManager.getSessionId(), ctx.cwd, makeNotify(ctx));
       ctx.ui.notify("pi-rollback: stored rollback data was removed.", "info");
     },
+  });
+}
+
+function formatRollbackTurnLines(
+  turns: { id: string; index: number | null; timestamp: number; preview: string }[],
+  mutations: { turnEntryId: string; key: string; coverage: string }[],
+): LineItem[] {
+  const selectable = turns.map((turn) => turn.index).filter((index): index is number => index !== null);
+  const indexWidth = selectable.length === 0 ? 1 : String(Math.max(...selectable)).length;
+  return turns.map((turn) => {
+    const files = describeTurnFiles(mutations, turn.id);
+    const body = `${formatClock(turn.timestamp)}  ${turn.preview}       ${files}`;
+    if (turn.index === null) {
+      return { text: `${" ".repeat(indexWidth)}  ${body}`, dim: true };
+    }
+    return { text: `${String(turn.index).padStart(indexWidth)}  ${body}` };
   });
 }
 

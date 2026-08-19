@@ -35,7 +35,7 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /clear-rollback-store
 ```
 
-`/rollback` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn; those numbers are what `<N>` refers to.
+`/rollback` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to. Turns with no file changes are shown in gray without a number and cannot be selected.
 
 `/reset-rollback-setting` replaces the config file with the built-in defaults.
 
@@ -45,7 +45,7 @@ If `~/.pi/agent/pi-rollback.json` is missing, the extension writes it with those
 
 `--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
 
-Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a previously visited point restores the snapshot taken when you left it. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/rollback <N>` always restores files.
+Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch re-applies those mutations (or the snapshot taken when you left it). That includes going back with `/tree` after `/rollback <N>`. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/rollback <N>` always restores files.
 
 ## Installation
 

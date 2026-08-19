@@ -78,7 +78,123 @@ describe("/rollback command", () => {
     );
   });
 
-  test("writes the default config file when it is missing", () => {
+  test("/rollback list omits numbers for turns without file changes", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-files",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.commands.get("rollback")?.handler;
+    assert.ok(handler);
+    await handler("", {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u-files", message: { role: "user", content: "edit files", timestamp: 1 } },
+          { id: "u-chat", message: { role: "user", content: "just chatting", timestamp: 2 } },
+        ],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+
+    const list = pi.entries.find((entry) => entry.customType === "pi-rollback/list");
+    assert.ok(list);
+    const lines = (list.data as { lines: Array<{ text: string; dim?: boolean }> }).lines;
+    assert.equal(lines[0]?.text, "Rollback points (1 = newest):");
+    assert.equal(lines[1]?.dim, undefined);
+    assert.match(lines[1]?.text ?? "", /^1  /);
+    assert.match(lines[1]?.text ?? "", /edit files/);
+    assert.equal(lines[2]?.dim, true);
+    assert.match(lines[2]?.text ?? "", /^ {1}  /);
+    assert.match(lines[2]?.text ?? "", /just chatting/);
+    assert.match(lines[2]?.text ?? "", /no file changes/);
+  });
+
+  test("/rollback <N> ignores turns that did not change files", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-files",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.commands.get("rollback")?.handler;
+    assert.ok(handler);
+    const notifications: string[] = [];
+    let navigatedTo: string | undefined;
+    const ctx = {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u-files", message: { role: "user", content: "edit files", timestamp: 1 } },
+          { id: "u-chat", message: { role: "user", content: "just chatting", timestamp: 2 } },
+        ],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        navigatedTo = id;
+        return {};
+      },
+      ui: {
+        notify: (message: string) => {
+          notifications.push(message);
+        },
+      },
+    };
+
+    await handler("1", ctx as never);
+    assert.equal(navigatedTo, "u-files");
+
+    navigatedTo = undefined;
+    await handler("2", ctx as never);
+    assert.equal(navigatedTo, undefined);
+    assert.equal(notifications.some((message) => message.includes("No rollback point 2")), true);
+  });
+
+  test("writes the default config file when it is missing", async () => {
     const { home } = setup();
     const path = getConfigPath(home);
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), DEFAULT_CONFIG);
@@ -304,8 +420,8 @@ describe("/clear-rollback-store command", () => {
 
     const statusEntry = pi.entries.find((entry) => entry.customType === "pi-rollback/status");
     assert.ok(statusEntry);
-    const lines = (statusEntry.data as { lines: string[] }).lines;
-    assert.equal(lines.some((line) => line.includes("tracked files: 0")), true);
-    assert.equal(lines.some((line) => line.includes("0 MB /")), true);
+    const lines = (statusEntry.data as { lines: Array<{ text: string }> }).lines;
+    assert.equal(lines.some((line) => line.text.includes("tracked files: 0")), true);
+    assert.equal(lines.some((line) => line.text.includes("0 MB /")), true);
   });
 });
