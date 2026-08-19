@@ -35,7 +35,7 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /clear-rollback-store
 ```
 
-`/rollback` lists user turns in the current branch, newest first. Numbers in that list are what `<N>` refers to.
+`/rollback` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn; those numbers are what `<N>` refers to.
 
 `/reset-rollback-setting` replaces the config file with the built-in defaults.
 

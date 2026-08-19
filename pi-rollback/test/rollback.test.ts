@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { compensatingRestore, executeFilesystemRestore } from "../src/rollback.ts";
-import { parseRollbackArgs } from "../src/session.ts";
+import { listUserTurns, parseRollbackArgs } from "../src/session.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
@@ -20,6 +20,25 @@ describe("parseRollbackArgs", () => {
     assert.deepEqual(parseRollbackArgs("start"), { kind: "start", force: false });
     assert.deepEqual(parseRollbackArgs("start --force"), { kind: "start", force: true });
     assert.deepEqual(parseRollbackArgs("status"), { kind: "status" });
+  });
+});
+
+describe("listUserTurns", () => {
+  test("numbers the newest turn as 1 and lists oldest first", () => {
+    const turns = listUserTurns([
+      { id: "a", message: { role: "user", content: "first", timestamp: 1 } },
+      { id: "b", message: { role: "assistant", content: "ok" } },
+      { id: "c", message: { role: "user", content: "second", timestamp: 2 } },
+      { id: "d", message: { role: "user", content: "third", timestamp: 3 } },
+    ]);
+    assert.deepEqual(
+      turns.map((turn) => ({ id: turn.id, index: turn.index })),
+      [
+        { id: "a", index: 3 },
+        { id: "c", index: 2 },
+        { id: "d", index: 1 },
+      ],
+    );
   });
 });
 

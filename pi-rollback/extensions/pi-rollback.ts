@@ -356,7 +356,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           return;
         }
         show(ctx, LIST_ENTRY, [
-          "Rollback points (newest first):",
+          "Rollback points (1 = newest):",
           ...turns.map((turn) => {
             const files = describeTurnFiles(runtime!.journal.mutations(), turn.id);
             return `${turn.index}  ${formatClock(turn.timestamp)}  ${turn.preview}       ${files}`;

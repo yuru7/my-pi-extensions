@@ -101,8 +101,8 @@ export function listUserTurns(branch: SessionEntryLike[]): UserTurn[] {
       preview: userPreview(entry),
     });
   }
-  const newestFirst = turns.reverse();
-  return newestFirst.map((turn, index) => ({ ...turn, index: index + 1 }));
+  const total = turns.length;
+  return turns.map((turn, index) => ({ ...turn, index: total - index }));
 }
 
 export function turnIdsFromTarget(
