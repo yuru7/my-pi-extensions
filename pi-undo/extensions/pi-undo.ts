@@ -52,6 +52,8 @@ const LIST_ENTRY = "pi-undo/list";
 const STATUS_ENTRY = "pi-undo/status";
 const DIFF_ENTRY = "pi-undo/diff";
 const RESULT_ENTRY = "pi-undo/result";
+const CONFIRM_NO = "No";
+const CONFIRM_YES = "Yes";
 
 interface LineItem {
   text: string;
@@ -84,6 +86,23 @@ function isLinesData(data: unknown): data is LinesData {
 
 function toLineItems(lines: Array<string | LineItem>): LineItem[] {
   return lines.map((line) => (typeof line === "string" ? { text: line } : line));
+}
+
+async function confirmDefaultNo(
+  ctx: {
+    hasUI?: boolean;
+    ui: {
+      select?: (title: string, options: string[]) => Promise<string | undefined>;
+    };
+  },
+  title: string,
+  message: string,
+): Promise<boolean> {
+  if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
+    return true;
+  }
+  const choice = await ctx.ui.select(`${title}\n${message}`, [CONFIRM_NO, CONFIRM_YES]);
+  return choice === CONFIRM_YES;
 }
 
 const renderLines: EntryRenderer = (entry, _options, theme) => {
@@ -509,8 +528,8 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           "/undo-start [--force]",
           "/undo-status",
           "/redo [--force]",
-          "/undo:reset-setting",
-          "/undo:clear-undo-store",
+          "/pi-undo:reset-setting",
+          "/pi-undo:clear-undo-store",
         ]);
         return;
       }
@@ -672,17 +691,16 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     },
   });
 
-  pi.registerCommand("undo:reset-setting", {
+  pi.registerCommand("pi-undo:reset-setting", {
     description: "Reset pi-undo configuration to the built-in defaults",
     handler: async (_args, ctx) => {
-      if (ctx.hasUI && ctx.ui.confirm) {
-        const ok = await ctx.ui.confirm(
-          "Reset pi-undo configuration?",
-          "This replaces the config file with the default settings.",
-        );
-        if (!ok) {
-          return;
-        }
+      const ok = await confirmDefaultNo(
+        ctx,
+        "Reset pi-undo configuration?",
+        "This replaces the config file with the default settings.",
+      );
+      if (!ok) {
+        return;
       }
       const next = structuredClone(DEFAULT_CONFIG);
       try {
@@ -696,17 +714,16 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     },
   });
 
-  pi.registerCommand("undo:clear-undo-store", {
+  pi.registerCommand("pi-undo:clear-undo-store", {
     description: "Permanently delete all stored undo snapshots",
     handler: async (_args, ctx) => {
-      if (ctx.hasUI && ctx.ui.confirm) {
-        const ok = await ctx.ui.confirm(
-          "Remove all stored undo data?",
-          "This permanently deletes snapshots and undo history. The conversation is kept. The configuration file is also kept.",
-        );
-        if (!ok) {
-          return;
-        }
+      const ok = await confirmDefaultNo(
+        ctx,
+        "Remove all stored undo data?",
+        "This permanently deletes snapshots and undo history. The conversation is kept. The configuration file is also kept.",
+      );
+      if (!ok) {
+        return;
       }
       await ctx.waitForIdle();
       try {
