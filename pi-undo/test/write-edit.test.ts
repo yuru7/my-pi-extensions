@@ -141,4 +141,26 @@ describe("write / edit snapshots", () => {
       chmodSync(harness.storeRoot, 0o755);
     }
   });
+
+  test("post-snapshot failure warns without throwing", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "ok.txt");
+    writeFileSync(file, "hello");
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "write",
+      toolCallId: "c1",
+      path: "ok.txt",
+      sessionId: "session-1",
+      turnEntryId: "turn-1",
+    });
+    writeFileSync(file, "changed");
+    harness.journal.deletePending = () => {
+      throw new Error("journal write failed");
+    };
+    await harness.snapshotter.finish("c1");
+    assert.equal(
+      harness.notifications.some((message) => message.text.includes("Could not record the result")),
+      true,
+    );
+  });
 });

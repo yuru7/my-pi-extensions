@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { UndoConfig } from "./config.ts";
 import { maxFileSizeBytes } from "./config.ts";
 import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutation-journal.ts";
+import { removeJournalDir } from "./mutation-journal.ts";
 import {
   collectToolCallIds,
   shouldRedoMutation,
@@ -11,6 +12,7 @@ import {
   stayTurnIds,
   type SessionEntryLike,
 } from "./session.ts";
+import { formatUndoTransactionAbort } from "./errors.ts";
 import { appendJsonl, atomicWriteFile, ObjectStore, readJsonl } from "./store.ts";
 import {
   captureFileState,
@@ -242,9 +244,6 @@ export function createUndoJournal(
   items: RestoreItem[],
   maxFileBytes: number,
 ): { transactionId: string; entries: JournalEntry[] } {
-  const transactionId = randomUUID();
-  const dir = store.journalDir(transactionId);
-  mkdirSync(dir, { recursive: true });
   const entries: JournalEntry[] = [];
   for (const item of items) {
     if (item.skipped) {
@@ -255,15 +254,27 @@ export function createUndoJournal(
       persist: true,
       maxFileBytes,
     });
-    const state: FileState = captured.status === "ok" ? captured.state : { kind: "absent" };
-    const entry: JournalEntry = { path: item.path, key: item.key, state };
-    entries.push(entry);
-    appendJsonl(join(dir, "states.jsonl"), entry);
+    if (captured.status !== "ok") {
+      throw new Error(formatUndoTransactionAbort(item.path));
+    }
+    entries.push({ path: item.path, key: item.key, state: captured.state });
   }
-  atomicWriteFile(
-    join(dir, "meta.json"),
-    `${JSON.stringify({ transactionId, createdAt: new Date().toISOString() }, null, 2)}\n`,
-  );
+
+  const transactionId = randomUUID();
+  const dir = store.journalDir(transactionId);
+  mkdirSync(dir, { recursive: true });
+  try {
+    for (const entry of entries) {
+      appendJsonl(join(dir, "states.jsonl"), entry);
+    }
+    atomicWriteFile(
+      join(dir, "meta.json"),
+      `${JSON.stringify({ transactionId, createdAt: new Date().toISOString() }, null, 2)}\n`,
+    );
+  } catch (error) {
+    removeJournalDir(store, transactionId);
+    throw error;
+  }
   return { transactionId, entries };
 }
 
@@ -553,18 +564,7 @@ export function executeFilesystemRestore(options: {
     store: options.store,
     maxFileBytes: maxFileSizeBytes(options.config),
   });
-  const { transactionId } = createUndoJournal(
-    options.store,
-    plan.items,
-    maxFileSizeBytes(options.config),
-  );
-  try {
-    applyRestore(plan.items, options.store);
-  } catch (error) {
-    compensatingRestore(options.store, transactionId);
-    throw error;
-  }
-  return { plan, transactionId };
+  return commitRestorePlan(plan, options.store, options.config, { keepJournal: true });
 }
 
 export function captureTrackedStates(
@@ -584,10 +584,13 @@ export function captureTrackedStates(
       persist: true,
       maxFileBytes,
     });
+    if (captured.status !== "ok") {
+      continue;
+    }
     entries.push({
       path: mutation.path,
       key: mutation.key,
-      state: captured.status === "ok" ? captured.state : { kind: "absent" },
+      state: captured.state,
     });
   }
   return entries;
@@ -631,7 +634,12 @@ function commitRestorePlan(
   plan: RestorePlan,
   store: ObjectStore,
   config: UndoConfig,
+  options: { keepJournal?: boolean } = {},
 ): { plan: RestorePlan; transactionId: string } {
+  const pending = plan.items.filter((item) => !item.skipped);
+  if (pending.length === 0) {
+    return { plan, transactionId: "" };
+  }
   const { transactionId } = createUndoJournal(
     store,
     plan.items,
@@ -641,9 +649,75 @@ function commitRestorePlan(
     applyRestore(plan.items, store);
   } catch (error) {
     compensatingRestore(store, transactionId);
+    removeJournalDir(store, transactionId);
     throw error;
   }
+  if (!options.keepJournal) {
+    removeJournalDir(store, transactionId);
+  }
   return { plan, transactionId };
+}
+
+function mutationAppliesToBranch(
+  mutation: MutationRecord,
+  toolCallIds: Set<string>,
+): boolean {
+  return toolCallIds.has(mutation.toolCallId);
+}
+
+function piFileStatesOnBranch(
+  mutations: MutationRecord[],
+  branch: SessionEntryLike[],
+): Map<string, FileState> {
+  const toolCallIds = collectToolCallIds(branch);
+  const states = new Map<string, FileState>();
+  for (const mutation of [...mutations].sort((left, right) => left.sequence - right.sequence)) {
+    if (!states.has(mutation.key)) {
+      states.set(mutation.key, mutation.pre);
+    }
+    if (mutationAppliesToBranch(mutation, toolCallIds)) {
+      states.set(mutation.key, mutation.post);
+    }
+  }
+  return states;
+}
+
+function buildLeafCachePlan(
+  cached: LeafSnapshotEntry[],
+  expectedByKey: Map<string, FileState>,
+  options: {
+    force: boolean;
+    safeRestore: boolean;
+    store: ObjectStore;
+    maxFileBytes: number;
+  },
+): RestorePlan {
+  const items: RestoreItem[] = cached.map((entry) => {
+    const expected = expectedByKey.get(entry.key) ?? { kind: "absent" };
+    const item: RestoreItem = {
+      path: entry.path,
+      key: entry.key,
+      pre: entry.state,
+      post: expected,
+      coverage: "exact",
+      action: actionFor(entry.state, expected),
+    };
+    if (
+      !options.force &&
+      options.safeRestore &&
+      currentDiffersFrom(entry.path, expected, options.store, options.maxFileBytes)
+    ) {
+      item.skipped = "external-edit";
+    } else if (
+      entry.state.kind === "file" &&
+      !options.store.has(entry.state.sha256) &&
+      !entry.state.sha256.startsWith("too-large:")
+    ) {
+      item.skipped = "missing-object";
+    }
+    return item;
+  });
+  return summarizeRestorePlan(items);
 }
 
 export function executeTreeRestore(options: {
@@ -658,33 +732,22 @@ export function executeTreeRestore(options: {
   useLeafCache?: boolean;
 }): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
   const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };
-  const useLeafCache = options.useLeafCache ?? true;
-  if (useLeafCache && options.newLeafId && !options.force) {
-    const cached = options.journal.loadLeafSnapshot(options.newLeafId);
-    if (cached && cached.length > 0) {
-      const items: RestoreItem[] = cached.map((entry) => ({
-        path: entry.path,
-        key: entry.key,
-        pre: entry.state,
-        post: { kind: "absent" },
-        coverage: "exact" as const,
-        action: actionFor(entry.state, { kind: "absent" }),
-      }));
-      const committed = commitRestorePlan(
-        { items, restored: items.length, skipped: [], partialCoverage: 0 },
-        options.store,
-        options.config,
-      );
-      return { ...committed, via: "cache" };
-    }
-  }
-
   const planOptions = {
     force: options.force,
     safeRestore: options.config.safeRestore,
     store: options.store,
     maxFileBytes: maxFileSizeBytes(options.config),
   };
+  const useLeafCache = options.useLeafCache ?? true;
+  if (useLeafCache && options.newLeafId && !options.force) {
+    const cached = options.journal.loadLeafSnapshot(options.newLeafId);
+    if (cached && cached.length > 0) {
+      const expectedByKey = piFileStatesOnBranch(options.mutations, options.oldBranch);
+      const plan = buildLeafCachePlan(cached, expectedByKey, planOptions);
+      return { ...commitRestorePlan(plan, options.store, options.config), via: "cache" };
+    }
+  }
+
   const undoPlan = buildRestorePlan(
     mutationsForTreeUndo(options.mutations, options.oldBranch, options.newBranch, options.newLeafId),
     planOptions,

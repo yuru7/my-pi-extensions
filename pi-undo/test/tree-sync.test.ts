@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { maxFileSizeBytes } from "../src/config.ts";
@@ -209,6 +209,161 @@ describe("tree-synced restore", () => {
     });
     assert.equal(forward.via, "cache");
     assert.equal(readFileSync(file, "utf8"), "t2");
+    assert.equal(
+      readdirSync(join(harness.storeRoot, "undo-journals")).filter((name) => !name.startsWith(".")).length,
+      0,
+    );
+  });
+
+  test("leaf cache restore skips files edited after Pi's last write", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "a.txt");
+    writeFileSync(file, "t0");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c1",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(file, "t1");
+    await harness.snapshotter.finish("c1");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c2",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u2",
+    });
+    writeFileSync(file, "t2");
+    await harness.snapshotter.finish("c2");
+
+    const oldBranch = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+      user("u2"),
+      assistantTool("a2", "c2"),
+      toolResult("r2", "c2"),
+    ];
+    const newBranch = [user("u1")];
+
+    harness.journal.saveLeafSnapshot(
+      "r2",
+      captureTrackedStates(
+        harness.journal.mutations(),
+        harness.store,
+        maxFileSizeBytes(harness.config),
+      ),
+    );
+
+    executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch,
+      newBranch,
+      newLeafId: "u1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: true,
+    });
+    harness.journal.saveLeafSnapshot(
+      "u1",
+      captureTrackedStates(
+        harness.journal.mutations(),
+        harness.store,
+        maxFileSizeBytes(harness.config),
+      ),
+    );
+    writeFileSync(file, "user");
+
+    const forward = executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: newBranch,
+      newBranch: oldBranch,
+      newLeafId: "r2",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+    });
+    assert.equal(forward.via, "cache");
+    assert.equal(readFileSync(file, "utf8"), "user");
+    assert.equal(forward.plan.skipped.length, 1);
+  });
+
+  test("leaf cache restore skips external edits made before /tree", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "a.txt");
+    writeFileSync(file, "t0");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c1",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(file, "t1");
+    await harness.snapshotter.finish("c1");
+
+    harness.journal.saveLeafSnapshot(
+      "r1",
+      captureTrackedStates(
+        harness.journal.mutations(),
+        harness.store,
+        maxFileSizeBytes(harness.config),
+      ),
+    );
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c2",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u2",
+    });
+    writeFileSync(file, "t2");
+    await harness.snapshotter.finish("c2");
+    writeFileSync(file, "user");
+    harness.journal.saveLeafSnapshot(
+      "r2",
+      captureTrackedStates(
+        harness.journal.mutations(),
+        harness.store,
+        maxFileSizeBytes(harness.config),
+      ),
+    );
+
+    const fullBranch = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+      user("u2"),
+      assistantTool("a2", "c2"),
+      toolResult("r2", "c2"),
+    ];
+    const rolledBackBranch = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+    ];
+
+    const back = executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: fullBranch,
+      newBranch: rolledBackBranch,
+      newLeafId: "r1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+    });
+    assert.equal(back.via, "cache");
+    assert.equal(readFileSync(file, "utf8"), "user");
+    assert.equal(back.plan.skipped.length, 1);
   });
 
   test("/undo ignores a stale leaf cache and restores from mutations", async () => {
@@ -258,19 +413,6 @@ describe("tree-synced restore", () => {
         maxFileSizeBytes(harness.config),
       ),
     );
-
-    const cached = executeTreeRestore({
-      mutations: harness.journal.mutations(),
-      oldBranch: fullBranch,
-      newBranch: rolledBackBranch,
-      newLeafId: "r1",
-      journal: harness.journal,
-      store: harness.store,
-      config: harness.config,
-      force: false,
-    });
-    assert.equal(cached.via, "cache");
-    assert.equal(readFileSync(file, "utf8"), "t2");
 
     const undone = executeTreeRestore({
       mutations: harness.journal.mutations(),

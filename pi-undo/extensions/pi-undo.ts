@@ -18,7 +18,7 @@ import {
   formatPendingRecovery,
   type NotifyFn,
 } from "../src/errors.ts";
-import { runMaintenance, SessionJournal } from "../src/mutation-journal.ts";
+import { runMaintenance, removeJournalDir, SessionJournal } from "../src/mutation-journal.ts";
 import { createLocalSnapshotBackend, defaultPathContext, isWsl } from "../src/platform.ts";
 import {
   captureTrackedStates,
@@ -325,7 +325,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     return undefined;
   });
 
-  pi.on("tool_result", async (event) => {
+  pi.on("tool_result", async (event, ctx) => {
     try {
       if (!runtime?.config.enabled) {
         return;
@@ -333,8 +333,13 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       if (event.toolName === "write" || event.toolName === "edit" || event.toolName === "bash") {
         await runtime.snapshotter.finish(event.toolCallId);
       }
-    } catch {
-      // snapshot errors must not affect the tool result
+    } catch (error) {
+      ctx.ui?.notify?.(
+        error instanceof Error
+          ? `pi-undo: Could not record this change: ${error.message}`
+          : "pi-undo: Could not record this change; undo coverage may be missing.",
+        "warning",
+      );
     }
     return undefined;
   });
@@ -536,19 +541,32 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       }
       const current = ensureRuntime(ctx);
       await ctx.waitForIdle();
-      const { plan, transactionId } = executeFilesystemRestore({
-        mutations: current.journal.mutations(),
-        turnIds: "all",
-        config: current.config,
-        store: current.store,
-        force: parsed.force,
-      });
-      show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/undo-start --force").split("\n"));
-      const parentSession = ctx.sessionManager.getSessionFile();
-      const result = await ctx.newSession({ parentSession });
-      if (result?.cancelled) {
-        compensatingRestore(current.store, transactionId);
-        ctx.ui.notify("pi-undo: new session was cancelled; filesystem restore was undone.", "warning");
+      let transactionId = "";
+      try {
+        const restored = executeFilesystemRestore({
+          mutations: current.journal.mutations(),
+          turnIds: "all",
+          config: current.config,
+          store: current.store,
+          force: parsed.force,
+        });
+        transactionId = restored.transactionId;
+        show(ctx, RESULT_ENTRY, formatRestoreSummary(restored.plan, "/undo-start --force").split("\n"));
+        const parentSession = ctx.sessionManager.getSessionFile();
+        const result = await ctx.newSession({ parentSession });
+        if (result?.cancelled) {
+          compensatingRestore(current.store, transactionId);
+          ctx.ui.notify("pi-undo: new session was cancelled; filesystem restore was undone.", "warning");
+        }
+      } catch (error) {
+        ctx.ui.notify(
+          error instanceof Error ? error.message : "pi-undo: Could not restore files.",
+          "error",
+        );
+      } finally {
+        if (transactionId !== "") {
+          removeJournalDir(current.store, transactionId);
+        }
       }
     },
   });

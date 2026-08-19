@@ -70,6 +70,20 @@ export function formatStoreLimitWarning(): string {
   ].join("\n");
 }
 
+export function formatPostSnapshotWarning(): string {
+  return [
+    "pi-undo: Could not record the result of this change.",
+    "Undo coverage for this tool call may be missing.",
+  ].join("\n");
+}
+
+export function formatUndoTransactionAbort(path: string): string {
+  return [
+    `pi-undo: Undo aborted because a recovery snapshot could not be created for ${path}.`,
+    "No files were changed.",
+  ].join("\n");
+}
+
 export function formatPendingRecovery(fileCount: number): string {
   const noun = fileCount === 1 ? "file" : "files";
   return [

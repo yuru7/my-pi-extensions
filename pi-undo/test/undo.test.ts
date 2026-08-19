@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { compensatingRestore, executeFilesystemRestore } from "../src/undo.ts";
@@ -151,6 +151,46 @@ describe("undo restore", () => {
     assert.equal(readFileSync(file, "utf8"), "original");
     compensatingRestore(harness.store, transactionId);
     assert.equal(readFileSync(file, "utf8"), "pi-edit");
+    assert.equal(existsSync(join(harness.storeRoot, "undo-journals", transactionId)), true);
+  });
+
+  test("restore aborts when a recovery snapshot cannot be captured", () => {
+    const harness = createHarness({ config: { maxFileSizeMB: 1 } });
+    const file = join(harness.cwd, "big.bin");
+    const small = harness.store.put(Buffer.from("small"));
+    writeFileSync(file, Buffer.alloc(2 * 1024 * 1024, 7));
+    harness.journal.appendMutation({
+      sessionId: "session-1",
+      turnEntryId: "turn-1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: small.sha256, size: 5 },
+      post: { kind: "file", sha256: small.sha256, size: 5 },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    assert.throws(
+      () =>
+        executeFilesystemRestore({
+          mutations: harness.journal.mutations(),
+          turnIds: new Set(["turn-1"]),
+          config: harness.config,
+          store: harness.store,
+          force: true,
+        }),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes("recovery snapshot could not be created") &&
+        error.message.includes("No files were changed."),
+    );
+    assert.equal(readFileSync(file).length, 2 * 1024 * 1024);
+    assert.equal(
+      readdirSync(join(harness.storeRoot, "undo-journals")).filter((name) => !name.startsWith(".")).length,
+      0,
+    );
   });
 
   test("bash directory snapshot keeps only actual mutations", async () => {

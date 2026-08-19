@@ -18,6 +18,7 @@ import {
   bytesToMb,
   formatBashLimitWarning,
   formatLargeFileWarning,
+  formatPostSnapshotWarning,
   formatSnapshotError,
   formatStoreLimitWarning,
   NotificationDeduper,
@@ -68,13 +69,14 @@ class PathLock {
     const next = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.locks.set(key, previous.then(() => next));
+    const tail = previous.then(() => next);
+    this.locks.set(key, tail);
     await previous;
     try {
       await fn();
     } finally {
       release();
-      if (this.locks.get(key) === next) {
+      if (this.locks.get(key) === tail) {
         this.locks.delete(key);
       }
     }
@@ -459,7 +461,10 @@ export class Snapshotter {
       this.commitNewFiles(pending);
       this.options.journal.deletePending(toolCallId);
     } catch {
-      // tool_result must not fail because undo bookkeeping failed
+      this.options.notify({
+        text: formatPostSnapshotWarning(),
+        level: "warning",
+      });
     }
   }
 
