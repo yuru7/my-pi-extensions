@@ -333,7 +333,8 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           "/rollback diff <N>",
           "/rollback start [--force]",
           "/rollback status",
-          "/rollback-setting-reset",
+          "/reset-rollback-setting",
+          "/clear-rollback-store",
         ]);
         return;
       }
@@ -421,7 +422,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
     },
   });
 
-  pi.registerCommand("rollback-setting-reset", {
+  pi.registerCommand("reset-rollback-setting", {
     description: "Reset pi-rollback configuration to the built-in defaults",
     handler: async (_args, ctx) => {
       if (ctx.hasUI && ctx.ui.confirm) {
@@ -442,6 +443,34 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       }
       applyConfig(config, next);
       ctx.ui.notify("pi-rollback: configuration reset to defaults.", "info");
+    },
+  });
+
+  pi.registerCommand("clear-rollback-store", {
+    description: "Permanently delete all stored rollback snapshots",
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI && ctx.ui.confirm) {
+        const ok = await ctx.ui.confirm(
+          "Remove all stored rollback data?",
+          "This permanently deletes snapshots and rollback history. The conversation is kept. The configuration file is also kept.",
+        );
+        if (!ok) {
+          return;
+        }
+      }
+      await ctx.waitForIdle();
+      try {
+        if (runtime) {
+          runtime.store.wipe();
+        } else {
+          new ObjectStore(getStoreRoot(home), config).wipe();
+        }
+      } catch {
+        ctx.ui.notify("pi-rollback: Could not remove stored rollback data.", "error");
+        return;
+      }
+      runtime = bindRuntime(ctx.sessionManager.getSessionId(), ctx.cwd, makeNotify(ctx));
+      ctx.ui.notify("pi-rollback: stored rollback data was removed.", "info");
     },
   });
 }

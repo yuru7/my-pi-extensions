@@ -53,9 +53,7 @@ export class ObjectStore {
   constructor(root: string, config: RollbackConfig) {
     this.root = root;
     this.config = config;
-    mkdirSync(join(root, "objects", "sha256"), { recursive: true });
-    mkdirSync(join(root, "sessions"), { recursive: true });
-    mkdirSync(join(root, "rollback-journals"), { recursive: true });
+    this.ensureLayout();
   }
 
   sessionDir(sessionId: string): string {
@@ -147,6 +145,11 @@ export class ObjectStore {
     }
   }
 
+  wipe(): void {
+    rmSync(this.root, { recursive: true, force: true });
+    this.ensureLayout();
+  }
+
   sweepUnreferenced(referenced: Set<string>): number {
     const objectsRoot = join(this.root, "objects", "sha256");
     if (!existsSync(objectsRoot)) {
@@ -191,6 +194,12 @@ export class ObjectStore {
       this.collectHashesFromDir(journals, hashes);
     }
     return hashes;
+  }
+
+  private ensureLayout(): void {
+    mkdirSync(join(this.root, "objects", "sha256"), { recursive: true });
+    mkdirSync(join(this.root, "sessions"), { recursive: true });
+    mkdirSync(join(this.root, "rollback-journals"), { recursive: true });
   }
 
   private collectHashesFromDir(dir: string, hashes: Set<string>): void {

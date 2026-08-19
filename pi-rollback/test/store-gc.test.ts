@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -45,6 +45,40 @@ describe("CAS store and GC", () => {
     store.sweepUnreferenced(store.referencedHashesFromSessions());
     assert.equal(store.has(keep.sha256), true);
     assert.equal(store.has(drop.sha256), false);
+  });
+
+  test("wipe removes objects, sessions, journals, and maintenance", () => {
+    const root = tempDir();
+    const store = new ObjectStore(join(root, "store"), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("wipe-me"));
+    const journal = new SessionJournal(store, "session-a");
+    journal.appendMutation({
+      sessionId: "session-a",
+      turnEntryId: "t1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 7 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+    mkdirSync(store.journalDir("tx-1"), { recursive: true });
+    writeFileSync(join(store.journalDir("tx-1"), "entry.json"), "{}\n");
+    store.writeMaintenance({ lastGcAt: "2020-01-01T00:00:00.000Z", storeSizeBytes: 7 });
+
+    store.wipe();
+
+    assert.equal(store.has(stored.sha256), false);
+    assert.equal(store.listSessionIds().length, 0);
+    assert.equal(existsSync(join(store.journalDir("tx-1"), "entry.json")), false);
+    assert.equal(store.readMaintenance().storeSizeBytes, undefined);
+    assert.equal(store.sizeBytes(), 0);
+
+    const again = store.put(Buffer.from("after-wipe"));
+    assert.equal(again.status, "stored");
+    assert.equal(store.has(again.sha256), true);
   });
 
   test("expired inactive sessions are removed", () => {

@@ -31,12 +31,15 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /rollback start
 /rollback start --force
 /rollback status
-/rollback-setting-reset
+/reset-rollback-setting
+/clear-rollback-store
 ```
 
 `/rollback` lists user turns in the current branch, newest first. Numbers in that list are what `<N>` refers to.
 
-`/rollback-setting-reset` replaces the config file with the built-in defaults.
+`/reset-rollback-setting` replaces the config file with the built-in defaults.
+
+`/clear-rollback-store` permanently deletes every snapshot, session journal, and rollback journal under `~/.pi/agent/pi-rollback/`, including the current session's rollback history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
 
 If `~/.pi/agent/pi-rollback.json` is missing, the extension writes it with those defaults on load.
 
@@ -100,7 +103,7 @@ If the file is missing, it is created with the defaults below. If it cannot be p
 pi-rollback: Failed to load configuration; using defaults.
 ```
 
-Use `/rollback-setting-reset` to overwrite the file with the same defaults.
+Use `/reset-rollback-setting` to overwrite the file with the same defaults.
 
 ```json
 {
@@ -176,6 +179,7 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 - Bash directory walks stop at 5000 files or 200 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
+- `/clear-rollback-store` wipes the whole store immediately without resetting the conversation (config is kept)
 - If the active session alone exceeds the cap, new snapshots are skipped and a warning is shown
 - Unfinished `pending/` journals from a crash are reported on the next `session_start`
 

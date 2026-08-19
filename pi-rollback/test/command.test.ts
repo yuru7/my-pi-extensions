@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import factory from "../extensions/pi-rollback.ts";
-import { DEFAULT_CONFIG, getConfigPath, loadConfig, saveConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, getConfigPath, getStoreRoot, loadConfig, saveConfig } from "../src/config.ts";
+import { SessionJournal } from "../src/mutation-journal.ts";
+import { ObjectStore } from "../src/store.ts";
 import { cleanupTempDirs, tempDir } from "./helpers.ts";
 
 afterEach(() => {
@@ -60,14 +62,19 @@ describe("/rollback command", () => {
     assert.equal(pi.events.has("tool_call"), true);
     assert.equal(pi.events.has("tool_result"), true);
     assert.equal(pi.commands.has("rollback"), true);
-    assert.equal(pi.commands.has("rollback-setting-reset"), true);
+    assert.equal(pi.commands.has("reset-rollback-setting"), true);
+    assert.equal(pi.commands.has("clear-rollback-store"), true);
     assert.equal(
       pi.commands.get("rollback")?.description,
       "Rollback files and conversation to a previous user turn",
     );
     assert.equal(
-      pi.commands.get("rollback-setting-reset")?.description,
+      pi.commands.get("reset-rollback-setting")?.description,
       "Reset pi-rollback configuration to the built-in defaults",
+    );
+    assert.equal(
+      pi.commands.get("clear-rollback-store")?.description,
+      "Permanently delete all stored rollback snapshots",
     );
   });
 
@@ -117,11 +124,11 @@ describe("/rollback command", () => {
     );
   });
 
-  test("/rollback-setting-reset restores defaults after confirmation", async () => {
+  test("/reset-rollback-setting restores defaults after confirmation", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false, enabled: false }, path);
-    const handler = pi.commands.get("rollback-setting-reset")?.handler;
+    const handler = pi.commands.get("reset-rollback-setting")?.handler;
     assert.ok(handler);
 
     const notifications: string[] = [];
@@ -142,11 +149,11 @@ describe("/rollback command", () => {
     assert.equal(notifications.some((message) => message.includes("reset to defaults")), true);
   });
 
-  test("/rollback-setting-reset does nothing when cancelled", async () => {
+  test("/reset-rollback-setting does nothing when cancelled", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("rollback-setting-reset")?.handler;
+    const handler = pi.commands.get("reset-rollback-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -162,11 +169,11 @@ describe("/rollback command", () => {
     assert.equal(loadConfig(path).config.syncTree, false);
   });
 
-  test("/rollback-setting-reset writes defaults when there is no confirm UI", async () => {
+  test("/reset-rollback-setting writes defaults when there is no confirm UI", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("rollback-setting-reset")?.handler;
+    const handler = pi.commands.get("reset-rollback-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -177,5 +184,128 @@ describe("/rollback command", () => {
     } as never);
 
     assert.equal(loadConfig(path).config.syncTree, true);
+  });
+});
+
+function seedStore(
+  home: string,
+  sessionIds: string[] = ["old-session"],
+): { hash: string; sessionIds: string[] } {
+  const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+  const stored = store.put(Buffer.from("snapshot-bytes"));
+  for (const sessionId of sessionIds) {
+    const journal = new SessionJournal(store, sessionId);
+    journal.appendMutation({
+      sessionId,
+      turnEntryId: "t1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+  }
+  const journalDir = store.journalDir("tx-1");
+  mkdirSync(journalDir, { recursive: true });
+  writeFileSync(join(journalDir, "entry.json"), "{}\n");
+  return { hash: stored.sha256, sessionIds };
+}
+
+function commandCtx(options: {
+  confirm?: boolean;
+  notifications?: string[];
+  hasUI?: boolean;
+}) {
+  return {
+    hasUI: options.hasUI ?? true,
+    sessionManager: { getSessionId: () => "s1" },
+    cwd: process.cwd(),
+    waitForIdle: async () => {},
+    ui: {
+      confirm: async () => options.confirm ?? true,
+      notify: (message: string) => {
+        options.notifications?.push(message);
+      },
+    },
+  } as never;
+}
+
+describe("/clear-rollback-store command", () => {
+  test("wipes stored snapshots including the current session", async () => {
+    const { pi, home } = setup();
+    const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
+    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    assert.ok(handler);
+
+    const notifications: string[] = [];
+    await handler("", commandCtx({ confirm: true, notifications }));
+
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    assert.equal(store.has(hash), false);
+    for (const sessionId of sessionIds) {
+      assert.equal(existsSync(join(store.sessionDir(sessionId), "mutations.jsonl")), false);
+    }
+    assert.equal(existsSync(join(store.journalDir("tx-1"), "entry.json")), false);
+    assert.equal(existsSync(join(getStoreRoot(home), "maintenance.json")), false);
+    assert.deepEqual(JSON.parse(readFileSync(getConfigPath(home), "utf8")), DEFAULT_CONFIG);
+    assert.equal(notifications.some((message) => message.includes("stored rollback data was removed")), true);
+  });
+
+  test("does nothing when cancelled", async () => {
+    const { pi, home } = setup();
+    const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
+    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    assert.ok(handler);
+
+    await handler("", commandCtx({ confirm: false }));
+
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    assert.equal(store.has(hash), true);
+    for (const sessionId of sessionIds) {
+      assert.equal(existsSync(join(store.sessionDir(sessionId), "mutations.jsonl")), true);
+    }
+  });
+
+  test("wipes the store when there is no confirm UI", async () => {
+    const { pi, home } = setup();
+    const { hash, sessionIds } = seedStore(home, ["s1"]);
+    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    assert.ok(handler);
+
+    await handler("", commandCtx({ hasUI: false }));
+
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    assert.equal(store.has(hash), false);
+    assert.equal(existsSync(join(store.sessionDir(sessionIds[0]), "mutations.jsonl")), false);
+  });
+
+  test("lets the current session snapshot again after a wipe", async () => {
+    const { pi, home } = setup();
+    seedStore(home, ["s1"]);
+    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    assert.ok(handler);
+    await handler("", commandCtx({ confirm: true }));
+
+    const status = pi.commands.get("rollback")?.handler;
+    assert.ok(status);
+    await status("status", {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+
+    const statusEntry = pi.entries.find((entry) => entry.customType === "pi-rollback/status");
+    assert.ok(statusEntry);
+    const lines = (statusEntry.data as { lines: string[] }).lines;
+    assert.equal(lines.some((line) => line.includes("tracked files: 0")), true);
+    assert.equal(lines.some((line) => line.includes("0 MB /")), true);
   });
 });
