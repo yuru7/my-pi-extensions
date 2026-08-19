@@ -61,6 +61,7 @@ export interface SessionMeta {
   bashCommands: number;
   bashPartial: number;
   redoLeafId?: string;
+  redoFiles?: LeafSnapshotEntry[];
 }
 
 export class SessionJournal {
@@ -169,11 +170,26 @@ export class SessionJournal {
     return this.meta.redoLeafId;
   }
 
+  getRedoFiles(): LeafSnapshotEntry[] {
+    return this.meta.redoFiles ?? [];
+  }
+
   setRedoLeafId(leafId: string | undefined): void {
     if (leafId === undefined) {
       delete this.meta.redoLeafId;
+      delete this.meta.redoFiles;
     } else {
       this.meta.redoLeafId = leafId;
+      delete this.meta.redoFiles;
+    }
+    this.writeMeta();
+  }
+
+  setRedoFiles(files: LeafSnapshotEntry[] | undefined): void {
+    if (!files || files.length === 0) {
+      delete this.meta.redoFiles;
+    } else {
+      this.meta.redoFiles = files;
     }
     this.writeMeta();
   }

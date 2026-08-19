@@ -21,25 +21,23 @@ import {
 import { runMaintenance, removeJournalDir, SessionJournal } from "../src/mutation-journal.ts";
 import { createLocalSnapshotBackend, defaultPathContext, isWsl } from "../src/platform.ts";
 import {
-  captureTrackedStates,
+  captureDiskEntries,
   compensatingRestore,
   diffPreview,
   executeFilesystemRestore,
   executeTreeRestore,
   formatOverwriteSelectTitle,
   formatRestoreSummary,
-  mutationsForTurns,
+  listUndoPoints,
+  overlayFromEntries,
   overwriteSelectOptions,
   OVERWRITE_SELECT_YES,
   planTreeRestore,
-  buildRestorePlan,
+  type UndoListItem,
 } from "../src/undo.ts";
 import {
-  chronologicalUserIds,
   findTurnEntryId,
   formatClock,
-  indexFileChangingTurns,
-  listUserTurns,
   parseOptionalForce,
   parseRequiredTurn,
   parseUndoArgs,
@@ -143,6 +141,8 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   let runtime: Runtime | undefined;
   let pendingTreeForce = false;
   let pendingUndoNav = false;
+  let pendingDestOverlay: UndoListItem["overlay"];
+  let pendingResetIfDiskDiffers = false;
   let pendingForceFlag = "/undo <N> --force";
   const notifyFallback: string[] = [];
 
@@ -210,8 +210,9 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       oldBranch: SessionEntryLike[];
       newBranch: SessionEntryLike[];
       newLeafId: string;
+      destOverlay?: UndoListItem["overlay"];
+      resetIfDiskDiffers?: boolean;
       force: boolean;
-      useLeafCache: boolean;
     },
   ): Promise<{ force: boolean; cancelled: boolean }> => {
     if (options.force || !current.config.safeRestore) {
@@ -222,11 +223,12 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       oldBranch: options.oldBranch,
       newBranch: options.newBranch,
       newLeafId: options.newLeafId,
+      destOverlay: options.destOverlay,
+      resetIfDiskDiffers: options.resetIfDiskDiffers,
       journal: current.journal,
       store: current.store,
       config: current.config,
       force: false,
-      useLeafCache: options.useLeafCache,
     });
     if (plan.skipped.length === 0) {
       return { force: false, cancelled: false };
@@ -298,7 +300,6 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           newBranch: sessionManager.getBranch(targetId) as SessionEntryLike[],
           newLeafId: targetId,
           force: false,
-          useLeafCache: true,
         });
         if (overwrite.cancelled) {
           return { cancel: true };
@@ -306,12 +307,6 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         pendingTreeForce = overwrite.force;
         pendingForceFlag = "/tree again and choose Yes";
       }
-      const entries = captureTrackedStates(
-        runtime.journal.mutations(),
-        runtime.store,
-        maxFileSizeBytes(runtime.config),
-      );
-      runtime.journal.saveLeafSnapshot(oldLeafId, entries);
     } catch {
       // tree navigation must not fail because snapshot bookkeeping failed
     }
@@ -334,7 +329,8 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       }
       const newLeafId = event.newLeafId ?? null;
       const oldLeafId = event.oldLeafId ?? null;
-      if (newLeafId === oldLeafId) {
+      const destOverlay = pendingDestOverlay;
+      if (newLeafId === oldLeafId && !(destOverlay && destOverlay.size > 0)) {
         return;
       }
       const sessionManager = ctx.sessionManager as {
@@ -347,11 +343,12 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         oldBranch,
         newBranch,
         newLeafId,
+        destOverlay,
+        resetIfDiskDiffers: pendingResetIfDiskDiffers,
         journal: runtime.journal,
         store: runtime.store,
         config: runtime.config,
         force,
-        useLeafCache: !pendingUndoNav,
       });
       if (via !== "noop" && (plan.restored > 0 || plan.skipped.length > 0)) {
         show(
@@ -455,7 +452,10 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     const branch = ctx.sessionManager.getBranch() as SessionEntryLike[];
     return {
       branch,
-      turns: indexFileChangingTurns(listUserTurns(branch), current.journal.mutations()),
+      turns: listUndoPoints(branch, current.journal.mutations(), {
+        store: current.store,
+        maxFileBytes: maxFileSizeBytes(current.config),
+      }),
     };
   };
 
@@ -473,17 +473,14 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     }
     show(ctx, LIST_ENTRY, [
       "Undo points (1 = newest):",
-      ...formatUndoTurnLines(turns, current.journal.mutations()),
+      ...formatUndoTurnLines(turns),
     ]);
   };
 
   const navigateToLeaf = async (
     ctx: {
-      sessionManager: { getBranch: () => SessionEntryLike[] };
       navigateTree: (id: string, options?: { summarize?: boolean }) => Promise<{ cancelled?: boolean } | undefined>;
-      ui: { notify: (message: string, type?: "info" | "warning" | "error") => void };
     },
-    current: Runtime,
     leafId: string,
     force: boolean,
     forceFlag: string,
@@ -492,17 +489,6 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     pendingTreeForce = force;
     pendingForceFlag = forceFlag;
     try {
-      const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
-      if (currentLeafId) {
-        current.journal.saveLeafSnapshot(
-          currentLeafId,
-          captureTrackedStates(
-            current.journal.mutations(),
-            current.store,
-            maxFileSizeBytes(current.config),
-          ),
-        );
-      }
       return await ctx.navigateTree(leafId, { summarize: false });
     } finally {
       pendingUndoNav = false;
@@ -512,7 +498,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   };
 
   pi.registerCommand("undo", {
-    description: "Undo files and conversation to a previous user turn",
+    description: "Undo files and conversation to a previous restore point",
     handler: async (args, ctx) => {
       const parsed = parseUndoArgs(args);
       if (parsed.kind === "error") {
@@ -545,29 +531,63 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       }
 
       const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
-      const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
-        oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
-        newBranch: ctx.sessionManager.getBranch(turn.id) as SessionEntryLike[],
-        newLeafId: turn.id,
-        force: parsed.force,
-        useLeafCache: false,
-      });
-      if (overwrite.cancelled) {
-        return;
-      }
-      const result = await navigateToLeaf(
-        ctx,
-        current,
-        turn.id,
-        overwrite.force,
-        "/undo <N> --force",
-      );
-      if (result?.cancelled) {
-        ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
-        return;
-      }
-      if (currentLeafId && currentLeafId !== turn.id) {
-        current.journal.setRedoLeafId(currentLeafId);
+      const redoFiles =
+        turn.kind === "external"
+          ? captureDiskEntries(
+              turn.keys,
+              current.journal.mutations(),
+              current.store,
+              maxFileSizeBytes(current.config),
+            )
+          : [];
+      pendingDestOverlay = turn.overlay;
+      pendingResetIfDiskDiffers = turn.kind === "external";
+      try {
+        const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
+          oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+          newBranch: ctx.sessionManager.getBranch(turn.id) as SessionEntryLike[],
+          newLeafId: turn.id,
+          destOverlay: turn.overlay,
+          resetIfDiskDiffers: turn.kind === "external",
+          force: parsed.force,
+        });
+        if (overwrite.cancelled) {
+          return;
+        }
+        const result = await navigateToLeaf(
+          ctx,
+          turn.id,
+          overwrite.force,
+          "/undo <N> --force",
+        );
+        if (result?.cancelled) {
+          ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
+          return;
+        }
+        const { plan, via } = executeTreeRestore({
+          mutations: current.journal.mutations(),
+          oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+          newBranch: ctx.sessionManager.getBranch(turn.id) as SessionEntryLike[],
+          newLeafId: turn.id,
+          destOverlay: turn.overlay,
+          resetIfDiskDiffers: turn.kind === "external",
+          journal: current.journal,
+          store: current.store,
+          config: current.config,
+          force: overwrite.force,
+        });
+        if (via !== "noop" && (plan.restored > 0 || plan.skipped.length > 0)) {
+          show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/undo <N> --force").split("\n"));
+        }
+        if (currentLeafId && (currentLeafId !== turn.id || redoFiles.length > 0)) {
+          current.journal.setRedoLeafId(currentLeafId);
+          if (redoFiles.length > 0) {
+            current.journal.setRedoFiles(redoFiles);
+          }
+        }
+      } finally {
+        pendingDestOverlay = undefined;
+        pendingResetIfDiskDiffers = false;
       }
     },
   });
@@ -582,28 +602,54 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
       }
       const current = ensureRuntime(ctx);
       const target = current.journal.getRedoLeafId();
+      const destOverlay = overlayFromEntries(current.journal.getRedoFiles());
       const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
-      if (!target || target === currentLeafId) {
+      if (!target || (target === currentLeafId && destOverlay.size === 0)) {
         ctx.ui.notify("Nothing to redo.", "error");
         return;
       }
       await ctx.waitForIdle();
-      const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
-        oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
-        newBranch: ctx.sessionManager.getBranch(target) as SessionEntryLike[],
-        newLeafId: target,
-        force: parsed.force,
-        useLeafCache: false,
-      });
-      if (overwrite.cancelled) {
-        return;
+      pendingDestOverlay = destOverlay.size > 0 ? destOverlay : undefined;
+      pendingResetIfDiskDiffers = destOverlay.size > 0;
+      try {
+        const overwrite = await confirmOverwriteIfNeeded(ctx, current, {
+          oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+          newBranch: ctx.sessionManager.getBranch(target) as SessionEntryLike[],
+          newLeafId: target,
+          destOverlay: pendingDestOverlay,
+          resetIfDiskDiffers: destOverlay.size > 0,
+          force: parsed.force,
+        });
+        if (overwrite.cancelled) {
+          return;
+        }
+        const result = await navigateToLeaf(ctx, target, overwrite.force, "/redo --force");
+        if (result?.cancelled) {
+          ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
+          return;
+        }
+        if (destOverlay.size > 0) {
+          const { plan, via } = executeTreeRestore({
+            mutations: current.journal.mutations(),
+            oldBranch: ctx.sessionManager.getBranch() as SessionEntryLike[],
+            newBranch: ctx.sessionManager.getBranch(target) as SessionEntryLike[],
+            newLeafId: target,
+            destOverlay,
+            resetIfDiskDiffers: true,
+            journal: current.journal,
+            store: current.store,
+            config: current.config,
+            force: overwrite.force,
+          });
+          if (via !== "noop" && (plan.restored > 0 || plan.skipped.length > 0)) {
+            show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/redo --force").split("\n"));
+          }
+        }
+        current.journal.setRedoLeafId(undefined);
+      } finally {
+        pendingDestOverlay = undefined;
+        pendingResetIfDiskDiffers = false;
       }
-      const result = await navigateToLeaf(ctx, current, target, overwrite.force, "/redo --force");
-      if (result?.cancelled) {
-        ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
-        return;
-      }
-      current.journal.setRedoLeafId(undefined);
     },
   });
 
@@ -630,17 +676,23 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         return;
       }
       await ctx.waitForIdle();
-      const turnIds = new Set(
-        chronologicalUserIds(branch).slice(chronologicalUserIds(branch).indexOf(turn.id)),
-      );
-      const selected = mutationsForTurns(current.journal.mutations(), turnIds);
-      const plan = buildRestorePlan(selected, {
-        force: false,
-        safeRestore: current.config.safeRestore,
+      const sessionManager = ctx.sessionManager as {
+        getBranch: (fromId?: string) => SessionEntryLike[];
+      };
+      const { plan } = planTreeRestore({
+        mutations: current.journal.mutations(),
+        oldBranch: branch,
+        newBranch: sessionManager.getBranch(turn.id) as SessionEntryLike[],
+        newLeafId: turn.id,
+        destOverlay: turn.overlay,
+        resetIfDiskDiffers: turn.kind === "external",
+        journal: current.journal,
         store: current.store,
-        maxFileBytes: maxFileSizeBytes(current.config),
+        config: current.config,
+        force: false,
       });
-      show(ctx, DIFF_ENTRY, [`Undo to turn ${parsed.n}`, "", ...diffPreview(plan, current.store)]);
+      const title = turn.kind === "external" ? `Undo to external edit` : `Undo to turn ${parsed.n}`;
+      show(ctx, DIFF_ENTRY, [title, "", ...diffPreview(plan, current.store)]);
     },
   });
 
@@ -742,14 +794,11 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   });
 }
 
-function formatUndoTurnLines(
-  turns: { id: string; index: number | null; timestamp: number; preview: string }[],
-  mutations: { turnEntryId: string; key: string; coverage: string }[],
-): LineItem[] {
+function formatUndoTurnLines(turns: UndoListItem[]): LineItem[] {
   const selectable = turns.map((turn) => turn.index).filter((index): index is number => index !== null);
   const indexWidth = selectable.length === 0 ? 1 : String(Math.max(...selectable)).length;
   return turns.map((turn) => {
-    const files = describeTurnFiles(mutations, turn.id);
+    const files = describePointFiles(turn);
     const body = `${formatClock(turn.timestamp)}  ${turn.preview}       ${files}`;
     if (turn.index === null) {
       return { text: `${" ".repeat(indexWidth)}  ${body}`, dim: true };
@@ -758,17 +807,11 @@ function formatUndoTurnLines(
   });
 }
 
-function describeTurnFiles(mutations: { turnEntryId: string; key: string; coverage: string }[], turnId: string): string {
-  const files = new Set(
-    mutations.filter((mutation) => mutation.turnEntryId === turnId).map((mutation) => mutation.key),
-  );
-  if (files.size === 0) {
+function describePointFiles(point: UndoListItem): string {
+  if (point.keys.length === 0) {
     return "no file changes";
   }
-  const partial = mutations.some(
-    (mutation) => mutation.turnEntryId === turnId && mutation.coverage === "partial",
-  );
-  return `${files.size} file${files.size === 1 ? "" : "s"}${partial ? " (partial)" : ""}`;
+  return `${point.keys.length} file${point.keys.length === 1 ? "" : "s"}${point.partial ? " (partial)" : ""}`;
 }
 
 function statusLines(runtime: Runtime): string[] {

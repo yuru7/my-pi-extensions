@@ -19,6 +19,7 @@ Pi mutations are snapshotted **before** the tool runs. Content is stored in a SH
 
 - Returns to the conversation point that was active immediately before `/undo` or `/undo <N>`
 - Restores files by re-applying Pi mutations for that conversation point
+- After `/undo` of an `external edit` point, `/redo` puts those outside changes back even if the conversation leaf does not move
 - `/undo-start` cannot be redone
 
 ### `/undo-start` — session start
@@ -46,9 +47,9 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /pi-undo:clear-undo-store
 ```
 
-`/undo` is an alias for `/undo 1`. Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to.
+`/undo` is an alias for `/undo 1`. Number 1 is the newest restore point that changed files; those numbers are what `<N>` refers to.
 
-`/undo-list` lists user turns in the current branch, oldest first (newest at the bottom). Turns with no file changes are shown in gray without a number and cannot be selected.
+`/undo-list` lists restore points in the current branch, oldest first (newest at the bottom). Turns with no file changes are shown in gray without a number and cannot be selected. File changes made outside Pi between turns appear as numbered `external edit` points. After `/undo` restores Pi's last write, that row goes away.
 
 `/undo-diff` is an alias for `/undo-diff 1`. `/undo-diff <N>` previews the file changes that `/undo <N>` would restore.
 
@@ -64,7 +65,7 @@ If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those def
 
 On `/undo`, `/redo`, and `/tree`, files that changed after Pi's last write are not overwritten automatically. You get a selector: **No (Do not overwrite)** (default) or **Yes (Overwrite)**. Esc cancels the navigation. `--force` on `/undo` and `/redo` overwrites without asking.
 
-Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch restores the snapshot taken when you left it, or re-applies mutations if there is no snapshot. Leaf snapshots are saved when leaving a point, not after arriving. `/undo <N>` and `/redo` always restore from mutations, not from a leaf snapshot. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
+Built-in `/tree` also restores files by default (`syncTree: true`). Going to a conversation point restores Pi's last write at that point. An `external edit` undo point restores Pi's last write, discarding that outside change. `/undo` of a later turn restores files as they were immediately before that turn's tools, including those edits. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
 
 ## Installation
 
@@ -86,12 +87,13 @@ When a turn went the wrong way, list the numbered restore points:
 
 ```text
 Undo points (1 = newest):
-2  10:12  Add login endpoint           5 files
+3  10:12  Add login endpoint           5 files
+2  10:20  (external edit)              1 file
    10:31  What does this endpoint do?  no file changes
 1  10:45  Fix authentication bug       3 files
 ```
 
-Oldest first, newest at the bottom. Number 1 is the newest turn that changed files. Gray lines have no number and cannot be selected.
+Oldest first, newest at the bottom. Number 1 is the newest restore point that changed files. An `external edit` row is inserted when files changed between Pi writes. Gray lines have no number and cannot be selected.
 
 Preview what `/undo` would restore, then undo that turn:
 

@@ -484,8 +484,9 @@ export class Snapshotter {
 
   private commitFile(pending: PendingSnapshot, file: { path: string; key: string; pre: FileState }): void {
     const captured = captureFileState(file.path, {
+      store: this.options.store,
+      persist: true,
       maxFileBytes: maxFileSizeBytes(this.options.config),
-      persist: false,
     });
     const post: FileState = captured.status === "ok" ? captured.state : file.pre;
     if (fileStateEquals(file.pre, post)) {

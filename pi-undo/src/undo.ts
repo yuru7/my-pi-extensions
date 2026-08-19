@@ -7,9 +7,10 @@ import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutati
 import { removeJournalDir } from "./mutation-journal.ts";
 import {
   collectToolCallIds,
-  shouldRedoMutation,
-  shouldUndoMutation,
-  stayTurnIds,
+  indexFileChangingTurns,
+  isUserMessage,
+  lastLeafForTurn,
+  listUserTurns,
   type SessionEntryLike,
 } from "./session.ts";
 import { formatUndoTransactionAbort } from "./errors.ts";
@@ -208,22 +209,6 @@ function summarizeRestorePlan(items: RestoreItem[]): RestorePlan {
     skipped: items.filter((item) => item.skipped === "external-edit").map((item) => item.path),
     partialCoverage: items.filter((item) => item.coverage === "partial").length,
   };
-}
-
-function mergeRestorePlans(undo: RestorePlan, redo: RestorePlan): RestorePlan {
-  const items: RestoreItem[] = [];
-  const seen = new Set<string>();
-  for (const item of redo.items) {
-    items.push(item);
-    seen.add(item.key);
-  }
-  for (const item of undo.items) {
-    if (seen.has(item.key)) {
-      continue;
-    }
-    items.push(item);
-  }
-  return summarizeRestorePlan(items);
 }
 
 function currentDiffersFrom(
@@ -584,69 +569,6 @@ export function executeFilesystemRestore(options: {
   return commitRestorePlan(plan, options.store, options.config, { keepJournal: true });
 }
 
-export function captureTrackedStates(
-  mutations: MutationRecord[],
-  store: ObjectStore,
-  maxFileBytes: number,
-): LeafSnapshotEntry[] {
-  const seen = new Set<string>();
-  const entries: LeafSnapshotEntry[] = [];
-  for (const mutation of mutations) {
-    if (seen.has(mutation.key)) {
-      continue;
-    }
-    seen.add(mutation.key);
-    const captured = captureFileState(mutation.path, {
-      store,
-      persist: true,
-      maxFileBytes,
-    });
-    if (captured.status !== "ok") {
-      continue;
-    }
-    entries.push({
-      path: mutation.path,
-      key: mutation.key,
-      state: captured.state,
-    });
-  }
-  return entries;
-}
-
-export function mutationsForTreeUndo(
-  mutations: MutationRecord[],
-  oldBranch: SessionEntryLike[],
-  newBranch: SessionEntryLike[],
-  newLeafId: string | null,
-): MutationRecord[] {
-  const oldToolCallIds = collectToolCallIds(oldBranch);
-  const newToolCallIds = collectToolCallIds(newBranch);
-  const oldStayTurns = stayTurnIds(oldBranch, oldBranch.at(-1)?.id ?? null);
-  const newStayTurns = stayTurnIds(newBranch, newLeafId);
-  return mutations
-    .filter((mutation) =>
-      shouldUndoMutation(mutation, oldToolCallIds, newToolCallIds, oldStayTurns, newStayTurns),
-    )
-    .sort((left, right) => right.sequence - left.sequence);
-}
-
-export function mutationsForTreeRedo(
-  mutations: MutationRecord[],
-  oldBranch: SessionEntryLike[],
-  newBranch: SessionEntryLike[],
-  newLeafId: string | null,
-): MutationRecord[] {
-  const oldToolCallIds = collectToolCallIds(oldBranch);
-  const newToolCallIds = collectToolCallIds(newBranch);
-  const oldStayTurns = stayTurnIds(oldBranch, oldBranch.at(-1)?.id ?? null);
-  const newStayTurns = stayTurnIds(newBranch, newLeafId);
-  return mutations
-    .filter((mutation) =>
-      shouldRedoMutation(mutation, oldToolCallIds, newToolCallIds, oldStayTurns, newStayTurns),
-    )
-    .sort((left, right) => left.sequence - right.sequence);
-}
-
 function commitRestorePlan(
   plan: RestorePlan,
   store: ObjectStore,
@@ -699,41 +621,269 @@ function piFileStatesOnBranch(
   return states;
 }
 
-function buildLeafCachePlan(
-  cached: LeafSnapshotEntry[],
-  expectedByKey: Map<string, FileState>,
+function fileStatesAtLeaf(
+  mutations: MutationRecord[],
+  branch: SessionEntryLike[],
+  leafId: string | null,
+  overlay?: Map<string, FileState>,
+): Map<string, FileState> {
+  const states = piFileStatesOnBranch(mutations, branch);
+  const leaf = leafId ? (branch.find((entry) => entry.id === leafId) ?? branch.at(-1)) : branch.at(-1);
+  if (leaf && (isUserMessage(leaf) || mutations.some((mutation) => mutation.turnEntryId === leaf.id))) {
+    for (const [key, state] of turnStartStates(mutations, leaf.id)) {
+      states.set(key, state);
+    }
+  }
+  if (overlay) {
+    for (const [key, state] of overlay) {
+      states.set(key, state);
+    }
+  }
+  return states;
+}
+
+function turnStartStates(mutations: MutationRecord[], turnId: string): Map<string, FileState> {
+  const states = new Map<string, FileState>();
+  for (const mutation of [...mutations].sort((left, right) => left.sequence - right.sequence)) {
+    if (mutation.turnEntryId !== turnId || states.has(mutation.key)) {
+      continue;
+    }
+    states.set(mutation.key, mutation.pre);
+  }
+  return states;
+}
+
+export function captureDiskEntries(
+  keys: string[],
+  mutations: MutationRecord[],
+  store: ObjectStore,
+  maxFileBytes: number,
+): LeafSnapshotEntry[] {
+  const pathByKey = new Map<string, string>();
+  for (const mutation of mutations) {
+    pathByKey.set(mutation.key, mutation.path);
+  }
+  const entries: LeafSnapshotEntry[] = [];
+  for (const key of keys) {
+    const path = pathByKey.get(key);
+    if (!path) {
+      continue;
+    }
+    const captured = captureFileState(path, { store, persist: true, maxFileBytes });
+    if (captured.status === "ok") {
+      entries.push({ path, key, state: captured.state });
+    }
+  }
+  return entries;
+}
+
+export function overlayFromEntries(entries: LeafSnapshotEntry[]): Map<string, FileState> {
+  return new Map(entries.map((entry) => [entry.key, entry.state]));
+}
+
+export interface UndoListItem {
+  kind: "turn" | "external";
+  id: string;
+  index: number | null;
+  timestamp: number;
+  preview: string;
+  keys: string[];
+  partial: boolean;
+  overlay?: Map<string, FileState>;
+}
+
+export function listUndoPoints(
+  branch: SessionEntryLike[],
+  mutations: MutationRecord[],
+  options?: { store: ObjectStore; maxFileBytes: number },
+): UndoListItem[] {
+  const turns = indexFileChangingTurns(listUserTurns(branch), mutations);
+  const gaps = collectExternalGaps(mutations, branch).filter((gap) => {
+    if (!options) {
+      return true;
+    }
+    return gap.keys.some((key) => {
+      const expected = gap.piByKey.get(key);
+      if (!expected) {
+        return true;
+      }
+      return currentDiffersFrom(expected.path, expected.state, options.store, options.maxFileBytes);
+    });
+  });
+  const items: UndoListItem[] = [];
+  for (const turn of turns) {
+    items.push({
+      kind: "turn",
+      id: turn.id,
+      index: turn.index,
+      timestamp: turn.timestamp,
+      preview: turn.preview,
+      keys: [...new Set(mutations.filter((mutation) => mutation.turnEntryId === turn.id).map((mutation) => mutation.key))],
+      partial: mutations.some((mutation) => mutation.turnEntryId === turn.id && mutation.coverage === "partial"),
+      overlay: turnStartStates(mutations, turn.id),
+    });
+    for (const gap of gaps.filter((item) => item.afterTurnId === turn.id)) {
+      items.push({
+        kind: "external",
+        id: gap.leafId,
+        index: 0,
+        timestamp: gap.timestamp,
+        preview: "(external edit)",
+        keys: gap.keys,
+        partial: false,
+      });
+    }
+  }
+  const selectable = items.filter((item) => item.kind === "external" || item.index !== null);
+  const total = selectable.length;
+  const indexes = new Map(selectable.map((item, index) => [item, total - index]));
+  return items.map((item) => ({
+    ...item,
+    index: item.kind === "external" || item.index !== null ? (indexes.get(item) ?? null) : null,
+  }));
+}
+
+function collectExternalGaps(
+  mutations: MutationRecord[],
+  branch: SessionEntryLike[],
+): Array<{
+  afterTurnId: string;
+  leafId: string;
+  timestamp: number;
+  keys: string[];
+  piByKey: Map<string, { path: string; state: FileState }>;
+}> {
+  const lastPost = new Map<string, { state: FileState; path: string; turnEntryId: string; toolCallId: string }>();
+  const gaps = new Map<
+    string,
+    {
+      afterTurnId: string;
+      beforeTurnId: string;
+      timestamp: number;
+      keys: Set<string>;
+      toolCallIds: Set<string>;
+      piByKey: Map<string, { path: string; state: FileState }>;
+    }
+  >();
+  for (const mutation of [...mutations].sort((left, right) => left.sequence - right.sequence)) {
+    const previous = lastPost.get(mutation.key);
+    if (
+      previous &&
+      previous.turnEntryId !== mutation.turnEntryId &&
+      !fileStateEquals(previous.state, mutation.pre)
+    ) {
+      const gapKey = `${previous.turnEntryId}::${mutation.turnEntryId}`;
+      const existing = gaps.get(gapKey);
+      if (existing) {
+        existing.keys.add(mutation.key);
+        existing.toolCallIds.add(previous.toolCallId);
+        existing.piByKey.set(mutation.key, { path: previous.path, state: previous.state });
+      } else {
+        gaps.set(gapKey, {
+          afterTurnId: previous.turnEntryId,
+          beforeTurnId: mutation.turnEntryId,
+          timestamp: Date.parse(mutation.timestamp) || 0,
+          keys: new Set([mutation.key]),
+          toolCallIds: new Set([previous.toolCallId]),
+          piByKey: new Map([[mutation.key, { path: previous.path, state: previous.state }]]),
+        });
+      }
+    }
+    lastPost.set(mutation.key, {
+      state: mutation.post,
+      path: mutation.path,
+      turnEntryId: mutation.turnEntryId,
+      toolCallId: mutation.toolCallId,
+    });
+  }
+  const onBranch = new Set(branch.map((entry) => entry.id));
+  const result: Array<{
+    afterTurnId: string;
+    leafId: string;
+    timestamp: number;
+    keys: string[];
+    piByKey: Map<string, { path: string; state: FileState }>;
+  }> = [];
+  for (const gap of gaps.values()) {
+    const leafId = lastLeafForTurn(branch, gap.afterTurnId, gap.toolCallIds);
+    if (!leafId || leafId === gap.afterTurnId || !onBranch.has(leafId)) {
+      continue;
+    }
+    result.push({
+      afterTurnId: gap.afterTurnId,
+      leafId,
+      timestamp: gap.timestamp,
+      keys: [...gap.keys],
+      piByKey: gap.piByKey,
+    });
+  }
+  return result;
+}
+
+function buildBranchRestorePlan(
+  mutations: MutationRecord[],
+  oldBranch: SessionEntryLike[],
+  newBranch: SessionEntryLike[],
+  oldLeafId: string | null,
+  newLeafId: string | null,
   options: {
     force: boolean;
     safeRestore: boolean;
     store: ObjectStore;
     maxFileBytes: number;
+    destOverlay?: Map<string, FileState>;
+    resetIfDiskDiffers?: boolean;
   },
 ): RestorePlan {
-  const items: RestoreItem[] = cached.map((entry) => {
-    const expected = expectedByKey.get(entry.key) ?? { kind: "absent" };
+  const originByKey = fileStatesAtLeaf(mutations, oldBranch, oldLeafId);
+  const destByKey = fileStatesAtLeaf(mutations, newBranch, newLeafId, options.destOverlay);
+  const metaByKey = new Map<string, { path: string; coverage: MutationRecord["coverage"] }>();
+  for (const mutation of mutations) {
+    const existing = metaByKey.get(mutation.key);
+    if (!existing) {
+      metaByKey.set(mutation.key, { path: mutation.path, coverage: mutation.coverage });
+      continue;
+    }
+    existing.coverage = mergeCoverage(existing.coverage, mutation.coverage);
+  }
+  const items: RestoreItem[] = [];
+  for (const [key, dest] of destByKey) {
+    const origin = originByKey.get(key) ?? { kind: "absent" };
+    const meta = metaByKey.get(key);
+    if (!meta) {
+      continue;
+    }
+    if (!currentDiffersFrom(meta.path, dest, options.store, options.maxFileBytes)) {
+      continue;
+    }
+    const sameConversationState = fileStateEquals(origin, dest);
+    if (sameConversationState && !options.resetIfDiskDiffers) {
+      continue;
+    }
     const item: RestoreItem = {
-      path: entry.path,
-      key: entry.key,
-      pre: entry.state,
-      post: expected,
-      coverage: "exact",
-      action: actionFor(entry.state, expected),
+      path: meta.path,
+      key,
+      pre: dest,
+      post: origin,
+      coverage: meta.coverage,
+      action: actionFor(dest, origin),
     };
     if (
+      !sameConversationState &&
       !options.force &&
       options.safeRestore &&
-      currentDiffersFrom(entry.path, expected, options.store, options.maxFileBytes)
+      currentDiffersFrom(meta.path, origin, options.store, options.maxFileBytes)
     ) {
       item.skipped = "external-edit";
     } else if (
-      entry.state.kind === "file" &&
-      !options.store.has(entry.state.sha256) &&
-      !entry.state.sha256.startsWith("too-large:")
+      dest.kind === "file" &&
+      !options.store.has(dest.sha256) &&
+      !dest.sha256.startsWith("too-large:")
     ) {
       item.skipped = "missing-object";
     }
-    return item;
-  });
+    items.push(item);
+  }
   return summarizeRestorePlan(items);
 }
 
@@ -742,37 +892,29 @@ export function planTreeRestore(options: {
   oldBranch: SessionEntryLike[];
   newBranch: SessionEntryLike[];
   newLeafId: string | null;
+  destOverlay?: Map<string, FileState>;
+  resetIfDiskDiffers?: boolean;
   journal: SessionJournal;
   store: ObjectStore;
   config: UndoConfig;
   force: boolean;
-  useLeafCache?: boolean;
-}): { plan: RestorePlan; via: "cache" | "mutations" | "noop" } {
+}): { plan: RestorePlan; via: "mutations" | "noop" } {
   const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };
-  const planOptions = {
-    force: options.force,
-    safeRestore: options.config.safeRestore,
-    store: options.store,
-    maxFileBytes: maxFileSizeBytes(options.config),
-  };
-  const useLeafCache = options.useLeafCache ?? true;
-  if (useLeafCache && options.newLeafId && !options.force) {
-    const cached = options.journal.loadLeafSnapshot(options.newLeafId);
-    if (cached && cached.length > 0) {
-      const expectedByKey = piFileStatesOnBranch(options.mutations, options.oldBranch);
-      return { plan: buildLeafCachePlan(cached, expectedByKey, planOptions), via: "cache" };
-    }
-  }
-
-  const undoPlan = buildRestorePlan(
-    mutationsForTreeUndo(options.mutations, options.oldBranch, options.newBranch, options.newLeafId),
-    planOptions,
+  const plan = buildBranchRestorePlan(
+    options.mutations,
+    options.oldBranch,
+    options.newBranch,
+    options.oldBranch.at(-1)?.id ?? null,
+    options.newLeafId,
+    {
+      force: options.force,
+      safeRestore: options.config.safeRestore,
+      store: options.store,
+      maxFileBytes: maxFileSizeBytes(options.config),
+      destOverlay: options.destOverlay,
+      resetIfDiskDiffers: options.resetIfDiskDiffers,
+    },
   );
-  const redoPlan = buildRedoPlan(
-    mutationsForTreeRedo(options.mutations, options.oldBranch, options.newBranch, options.newLeafId),
-    planOptions,
-  );
-  const plan = mergeRestorePlans(undoPlan, redoPlan);
   if (plan.items.length === 0) {
     return { plan: empty, via: "noop" };
   }
@@ -784,12 +926,13 @@ export function executeTreeRestore(options: {
   oldBranch: SessionEntryLike[];
   newBranch: SessionEntryLike[];
   newLeafId: string | null;
+  destOverlay?: Map<string, FileState>;
+  resetIfDiskDiffers?: boolean;
   journal: SessionJournal;
   store: ObjectStore;
   config: UndoConfig;
   force: boolean;
-  useLeafCache?: boolean;
-}): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
+}): { plan: RestorePlan; transactionId: string; via: "mutations" | "noop" } {
   const planned = planTreeRestore(options);
   if (planned.via === "noop") {
     return { ...planned, transactionId: "" };

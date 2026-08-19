@@ -89,6 +89,26 @@ export interface UserTurn {
   preview: string;
 }
 
+export function lastLeafForTurn(
+  branch: SessionEntryLike[],
+  turnId: string,
+  toolCallIds: Iterable<string>,
+): string | undefined {
+  const wanted = new Set(toolCallIds);
+  let last: string | undefined;
+  for (const entry of branch) {
+    if (entry.id === turnId) {
+      last = entry.id;
+    }
+    for (const id of collectToolCallIds([entry])) {
+      if (wanted.has(id)) {
+        last = entry.id;
+      }
+    }
+  }
+  return last;
+}
+
 export function findTurnEntryId(branch: SessionEntryLike[]): string | undefined {
   for (let i = branch.length - 1; i >= 0; i -= 1) {
     const entry = branch[i];

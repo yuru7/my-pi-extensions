@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import factory from "../extensions/pi-undo.ts";
@@ -77,7 +77,7 @@ describe("/undo command", () => {
     assert.equal(pi.commands.has("pi-undo:clear-undo-store"), true);
     assert.equal(
       pi.commands.get("undo")?.description,
-      "Undo files and conversation to a previous user turn",
+      "Undo files and conversation to a previous restore point",
     );
     assert.equal(
       pi.commands.get("undo-list")?.description,
@@ -162,6 +162,413 @@ describe("/undo command", () => {
     assert.match(lines[2]?.text ?? "", /^ {1}  /);
     assert.match(lines[2]?.text ?? "", /just chatting/);
     assert.match(lines[2]?.text ?? "", /no file changes/);
+  });
+
+  test("/undo-list numbers external edits between Pi writes", async () => {
+    const { pi, home } = setup();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const hog = store.put(Buffer.from("hog"));
+    const fuga = store.put(Buffer.from("hog\nfuga\n"));
+    const ten = store.put(Buffer.from("ten chars!"));
+    const orig = store.put(Buffer.from("t0"));
+    const journal = new SessionJournal(store, "s1");
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: orig.sha256, size: orig.bytes },
+      post: { kind: "file", sha256: hog.sha256, size: hog.bytes },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:00:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u2",
+      toolCallId: "c2",
+      toolName: "write",
+      path: "/tmp/x",
+      key: "/tmp/x",
+      pre: { kind: "file", sha256: fuga.sha256, size: fuga.bytes },
+      post: { kind: "file", sha256: ten.sha256, size: ten.bytes },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:01:00.000Z",
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd: process.cwd(),
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.commands.get("undo-list")?.handler;
+    assert.ok(handler);
+    await handler("", {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u1", message: { role: "user", content: "three chars", timestamp: 1 } },
+          { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+          { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+          { id: "u2", message: { role: "user", content: "ten chars", timestamp: 2 } },
+          { id: "a2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+          { id: "r2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+        ],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+
+    const list = pi.entries.find((entry) => entry.customType === "pi-undo/list");
+    assert.ok(list);
+    const lines = (list.data as { lines: Array<{ text: string; dim?: boolean }> }).lines;
+    assert.equal(lines[0]?.text, "Undo points (1 = newest):");
+    assert.match(lines[1]?.text ?? "", /^3  /);
+    assert.match(lines[1]?.text ?? "", /three chars/);
+    assert.match(lines[2]?.text ?? "", /^2  /);
+    assert.match(lines[2]?.text ?? "", /\(external edit\)/);
+    assert.match(lines[3]?.text ?? "", /^1  /);
+    assert.match(lines[3]?.text ?? "", /ten chars/);
+  });
+
+  test("/undo to an external edit restores Pi's last write", async () => {
+    const { pi, home } = setup();
+    const cwd = tempDir();
+    const file = join(cwd, "hoge");
+    writeFileSync(file, "ext1");
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const one = store.put(Buffer.from("1"));
+    const two = store.put(Buffer.from("2"));
+    const ext = store.put(Buffer.from("ext1"));
+    const three = store.put(Buffer.from("3"));
+    const orig = store.put(Buffer.from("0"));
+    const mode = statSync(file).mode & 0o777;
+    const journal = new SessionJournal(store, "s1");
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: orig.sha256, size: orig.bytes, mode },
+      post: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:07:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u2",
+      toolCallId: "c2",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      post: { kind: "file", sha256: two.sha256, size: two.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:08:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u3",
+      toolCallId: "c3",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: ext.sha256, size: ext.bytes, mode },
+      post: { kind: "file", sha256: three.sha256, size: three.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:09:00.000Z",
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const branch = [
+      { id: "u1", message: { role: "user", content: "write 1", timestamp: 1 } },
+      { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      { id: "u2", message: { role: "user", content: "write 2", timestamp: 2 } },
+      { id: "a2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+      { id: "r2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+    ];
+    const getBranch = (fromId?: string) => {
+      if (!fromId) {
+        return branch;
+      }
+      const index = branch.findIndex((entry) => entry.id === fromId);
+      return index === -1 ? branch : branch.slice(0, index + 1);
+    };
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    await undo("1", {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async () => ({}),
+      ui: { notify() {} },
+    } as never);
+
+    assert.equal(readFileSync(file, "utf8"), "2");
+
+    pi.entries.length = 0;
+    const list = pi.commands.get("undo-list")?.handler;
+    assert.ok(list);
+    await list("", {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+    const listed = pi.entries.find((entry) => entry.customType === "pi-undo/list");
+    assert.ok(listed);
+    const texts = (listed.data as { lines: Array<{ text: string }> }).lines.map((line) => line.text);
+    assert.equal(texts.some((text) => text.includes("external edit")), false);
+    assert.match(texts[1] ?? "", /write 1/);
+    assert.match(texts[2] ?? "", /write 2/);
+  });
+
+  test("/redo after undoing an external edit restores the outside change", async () => {
+    const { pi, home } = setup();
+    const cwd = tempDir();
+    const file = join(cwd, "hoge");
+    writeFileSync(file, "ext");
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const one = store.put(Buffer.from("1"));
+    const two = store.put(Buffer.from("2"));
+    const ext = store.put(Buffer.from("ext"));
+    const three = store.put(Buffer.from("3"));
+    const orig = store.put(Buffer.from("0"));
+    const mode = statSync(file).mode & 0o777;
+    const journal = new SessionJournal(store, "s1");
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: orig.sha256, size: orig.bytes, mode },
+      post: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:07:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u2",
+      toolCallId: "c2",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      post: { kind: "file", sha256: two.sha256, size: two.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:08:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u3",
+      toolCallId: "c3",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: ext.sha256, size: ext.bytes, mode },
+      post: { kind: "file", sha256: three.sha256, size: three.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:09:00.000Z",
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const branch = [
+      { id: "u1", message: { role: "user", content: "write 1", timestamp: 1 } },
+      { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      { id: "u2", message: { role: "user", content: "write 2", timestamp: 2 } },
+      { id: "a2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+      { id: "r2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+    ];
+    const getBranch = (fromId?: string) => {
+      if (!fromId) {
+        return branch;
+      }
+      const index = branch.findIndex((entry) => entry.id === fromId);
+      return index === -1 ? branch : branch.slice(0, index + 1);
+    };
+    const notifications: string[] = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async () => ({}),
+      ui: {
+        notify: (message: string) => {
+          notifications.push(message);
+        },
+      },
+    };
+    const undo = pi.commands.get("undo")?.handler;
+    const redo = pi.commands.get("redo")?.handler;
+    const list = pi.commands.get("undo-list")?.handler;
+    assert.ok(undo);
+    assert.ok(redo);
+    assert.ok(list);
+
+    await undo("1", ctx as never);
+    assert.equal(readFileSync(file, "utf8"), "2");
+
+    notifications.length = 0;
+    await redo("", ctx as never);
+    assert.equal(readFileSync(file, "utf8"), "ext");
+    assert.equal(notifications.some((message) => message.includes("Nothing to redo.")), false);
+
+    pi.entries.length = 0;
+    await list("", ctx as never);
+    const listed = pi.entries.find((entry) => entry.customType === "pi-undo/list");
+    assert.ok(listed);
+    const texts = (listed.data as { lines: Array<{ text: string }> }).lines.map((line) => line.text);
+    assert.equal(texts.some((text) => text.includes("external edit")), true);
+    assert.match(texts[1] ?? "", /write 1/);
+    assert.match(texts[2] ?? "", /write 2/);
+    assert.match(texts[3] ?? "", /\(external edit\)/);
+  });
+
+  test("/undo of the newest turn restores the external edit before that turn, not the previous Pi write", async () => {
+    const { pi, home } = setup();
+    const cwd = tempDir();
+    const file = join(cwd, "hoge");
+    writeFileSync(file, "3");
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const zero = store.put(Buffer.from("0"));
+    const one = store.put(Buffer.from("1"));
+    const two = store.put(Buffer.from("2"));
+    const ext = store.put(Buffer.from("ext"));
+    const three = store.put(Buffer.from("3"));
+    const mode = statSync(file).mode & 0o777;
+    const journal = new SessionJournal(store, "s1");
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: zero.sha256, size: zero.bytes, mode },
+      post: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:07:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u2",
+      toolCallId: "c2",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: one.sha256, size: one.bytes, mode },
+      post: { kind: "file", sha256: two.sha256, size: two.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:08:00.000Z",
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u3",
+      toolCallId: "c3",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: ext.sha256, size: ext.bytes, mode },
+      post: { kind: "file", sha256: three.sha256, size: three.bytes, mode },
+      coverage: "exact",
+      timestamp: "2020-01-01T00:09:00.000Z",
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    type BranchEntry = {
+      id: string;
+      parentId: string | null;
+      message?: { role: string; content?: unknown; toolCallId?: string; toolName?: string };
+    };
+    const byId: Record<string, BranchEntry> = {
+      u1: { id: "u1", parentId: null, message: { role: "user", content: "write 1" } },
+      a1: { id: "a1", parentId: "u1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      r1: { id: "r1", parentId: "a1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      u2: { id: "u2", parentId: "r1", message: { role: "user", content: "write 2" } },
+      a2: { id: "a2", parentId: "u2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+      r2: { id: "r2", parentId: "a2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+      u3: { id: "u3", parentId: "r2", message: { role: "user", content: "write 3" } },
+      a3: { id: "a3", parentId: "u3", message: { role: "assistant", content: [{ type: "toolCall", id: "c3" }] } },
+      r3: { id: "r3", parentId: "a3", message: { role: "toolResult", toolCallId: "c3", toolName: "write" } },
+    };
+    const pathTo = (id: string) => {
+      const path: BranchEntry[] = [];
+      let current: string | null = id;
+      while (current) {
+        const entry: BranchEntry | undefined = byId[current];
+        if (!entry) {
+          break;
+        }
+        path.unshift(entry);
+        current = entry.parentId;
+      }
+      return path;
+    };
+    let leafId = "r3";
+    const getBranch = (fromId?: string) => pathTo(fromId ?? leafId);
+    const sessionTree = pi.events.get("session_tree");
+    assert.ok(sessionTree);
+    const undo = pi.commands.get("undo")?.handler;
+    assert.ok(undo);
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      waitForIdle: async () => {},
+      navigateTree: async (id: string) => {
+        const target = byId[id];
+        const oldLeafId = leafId;
+        leafId = target?.message?.role === "user" ? (target.parentId ?? id) : id;
+        await sessionTree({ newLeafId: leafId, oldLeafId, fromExtension: true } as never, ctx as never);
+        return {};
+      },
+      ui: { notify() {} },
+    };
+
+    await undo("", ctx as never);
+
+    assert.equal(leafId, "r2");
+    assert.equal(readFileSync(file, "utf8"), "ext");
   });
 
   test("/undo-diff without a number is the same as /undo-diff 1", async () => {
@@ -603,6 +1010,7 @@ async function setupExternalEditUndo() {
   const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
   const original = store.put(Buffer.from("original"));
   const afterPi = store.put(Buffer.from("pi"));
+  const mode = statSync(file).mode & 0o777;
   writeFileSync(file, "user");
   new SessionJournal(store, "s1").appendMutation({
     sessionId: "s1",
@@ -611,8 +1019,8 @@ async function setupExternalEditUndo() {
     toolName: "write",
     path: file,
     key: file,
-    pre: { kind: "file", sha256: original.sha256, size: original.bytes },
-    post: { kind: "file", sha256: afterPi.sha256, size: afterPi.bytes },
+    pre: { kind: "file", sha256: original.sha256, size: original.bytes, mode },
+    post: { kind: "file", sha256: afterPi.sha256, size: afterPi.bytes, mode },
     coverage: "exact",
     timestamp: new Date().toISOString(),
   });
@@ -873,6 +1281,60 @@ describe("/undo overwrite prompt", () => {
       ctx as never,
     );
 
+    assert.equal(readFileSync(file, "utf8"), "original");
+  });
+
+  test("/tree Yes does not prompt again on later /tree moves", async () => {
+    const { file, cwd, getBranch, getLeaf, setLeaf, sessionBeforeTree, sessionTree } =
+      await setupExternalEditUndo();
+    const selectCalls: Array<{ title: string; options: string[] }> = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async (title: string, options: string[]) => {
+          selectCalls.push({ title, options });
+          return OVERWRITE_SELECT_YES;
+        },
+        notify() {},
+      },
+    };
+
+    const from = getLeaf();
+    await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: from } } as never,
+      ctx as never,
+    );
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: from, fromExtension: false } as never,
+      ctx as never,
+    );
+    setLeaf("u1");
+    assert.equal(selectCalls.length, 1);
+    assert.equal(readFileSync(file, "utf8"), "original");
+
+    await sessionBeforeTree(
+      { preparation: { targetId: "u2", oldLeafId: "u1" } } as never,
+      ctx as never,
+    );
+    await sessionTree(
+      { newLeafId: "u2", oldLeafId: "u1", fromExtension: false } as never,
+      ctx as never,
+    );
+    setLeaf("u2");
+    assert.equal(selectCalls.length, 1);
+    assert.equal(readFileSync(file, "utf8"), "pi");
+
+    await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: "u2" } } as never,
+      ctx as never,
+    );
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: "u2", fromExtension: false } as never,
+      ctx as never,
+    );
+    assert.equal(selectCalls.length, 1);
     assert.equal(readFileSync(file, "utf8"), "original");
   });
 

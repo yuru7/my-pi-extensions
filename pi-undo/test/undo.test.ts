@@ -6,10 +6,12 @@ import {
   compensatingRestore,
   executeFilesystemRestore,
   formatOverwriteSelectTitle,
+  listUndoPoints,
   overwriteSelectOptions,
   planTreeRestore,
 } from "../src/undo.ts";
 import { indexFileChangingTurns, listUserTurns, parseOptionalForce, parseRequiredTurn, parseUndoArgs } from "../src/session.ts";
+import { maxFileSizeBytes } from "../src/config.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
@@ -83,6 +85,117 @@ describe("indexFileChangingTurns", () => {
         { id: "b", index: null },
         { id: "c", index: 1 },
       ],
+    );
+  });
+});
+
+describe("listUndoPoints", () => {
+  test("inserts a numbered external edit between Pi writes", () => {
+    const file = (sha: string, size: number) => ({
+      kind: "file" as const,
+      sha256: sha.repeat(64).slice(0, 64),
+      size,
+    });
+    const mutations = [
+      {
+        sequence: 1,
+        sessionId: "s",
+        turnEntryId: "u1",
+        toolCallId: "c1",
+        toolName: "write" as const,
+        path: "/f",
+        key: "/f",
+        pre: file("a", 1),
+        post: file("b", 3),
+        coverage: "exact" as const,
+        timestamp: "2020-01-01T00:00:00.000Z",
+      },
+      {
+        sequence: 2,
+        sessionId: "s",
+        turnEntryId: "u2",
+        toolCallId: "c2",
+        toolName: "write" as const,
+        path: "/f",
+        key: "/f",
+        pre: file("c", 8),
+        post: file("d", 10),
+        coverage: "exact" as const,
+        timestamp: "2020-01-01T00:01:00.000Z",
+      },
+    ];
+    const branch = [
+      { id: "u1", message: { role: "user", content: "three chars", timestamp: 1 } },
+      { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      { id: "u2", message: { role: "user", content: "ten chars", timestamp: 2 } },
+      { id: "a2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+      { id: "r2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+    ];
+    const points = listUndoPoints(branch, mutations);
+    assert.deepEqual(
+      points.map((point) => ({ kind: point.kind, id: point.id, index: point.index, preview: point.preview })),
+      [
+        { kind: "turn", id: "u1", index: 3, preview: "three chars" },
+        { kind: "external", id: "r1", index: 2, preview: "(external edit)" },
+        { kind: "turn", id: "u2", index: 1, preview: "ten chars" },
+      ],
+    );
+    assert.equal(points[1]?.overlay, undefined);
+    assert.deepEqual(points[2]?.overlay?.get("/f"), file("c", 8));
+  });
+
+  test("hides an external edit once disk matches Pi's last write", async () => {
+    const harness = createHarness();
+    const path = join(harness.cwd, "a.txt");
+    writeFileSync(path, "t0");
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "write",
+      toolCallId: "c1",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(path, "1");
+    await harness.snapshotter.finish("c1");
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "write",
+      toolCallId: "c2",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u2",
+    });
+    writeFileSync(path, "2");
+    await harness.snapshotter.finish("c2");
+    writeFileSync(path, "ext");
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "write",
+      toolCallId: "c3",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u3",
+    });
+    writeFileSync(path, "3");
+    await harness.snapshotter.finish("c3");
+
+    const branch = [
+      { id: "u1", message: { role: "user", content: "write 1", timestamp: 1 } },
+      { id: "a1", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+      { id: "u2", message: { role: "user", content: "write 2", timestamp: 2 } },
+      { id: "a2", message: { role: "assistant", content: [{ type: "toolCall", id: "c2" }] } },
+      { id: "r2", message: { role: "toolResult", toolCallId: "c2", toolName: "write" } },
+    ];
+    const disk = { store: harness.store, maxFileBytes: maxFileSizeBytes(harness.config) };
+    writeFileSync(path, "ext");
+    assert.equal(
+      listUndoPoints(branch, harness.journal.mutations(), disk).some((point) => point.kind === "external"),
+      true,
+    );
+    writeFileSync(path, "2");
+    assert.equal(
+      listUndoPoints(branch, harness.journal.mutations(), disk).some((point) => point.kind === "external"),
+      false,
     );
   });
 });
@@ -334,7 +447,6 @@ describe("planTreeRestore", () => {
       store: harness.store,
       config: harness.config,
       force: false,
-      useLeafCache: false,
     });
 
     assert.equal(readFileSync(file, "utf8"), "user");
