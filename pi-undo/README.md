@@ -1,20 +1,20 @@
-# pi-rollback
+# pi-undo
 
-A Pi extension that checkpoints file changes from `write`, `edit`, and `bash`, then rolls the current session back to an earlier user turn — or to a new empty session.
+A Pi extension that checkpoints file changes from `write`, `edit`, and `bash`, then undoes the current session to an earlier user turn — or to a new empty session.
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
-Pi mutations are snapshotted **before** the tool runs. Content is stored in a SHA-256 CAS under `~/.pi/agent/pi-rollback/`. Git is not required. Snapshot failures never block `write` / `edit` / `bash`.
+Pi mutations are snapshotted **before** the tool runs. Content is stored in a SHA-256 CAS under `~/.pi/agent/pi-undo/`. Git is not required. Snapshot failures never block `write` / `edit` / `bash`.
 
-## What rollback does
+## What undo does
 
-### `/rollback <N>` — conversation turn
+### `/undo <N>` — conversation turn
 
 - Keeps the selected user message
 - Drops the assistant replies and tool calls after that message from the active conversation path (`navigateTree`, no branch summary)
 - Restores files that Pi changed from that turn onward, as far as snapshots allow
 
-### `/rollback start` — session start
+### `/undo start` — session start
 
 - Restores every mutation this extension captured in the current session
 - Opens a new empty session with the old session as `parentSession`
@@ -24,33 +24,33 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 ## Commands
 
 ```text
-/rollback
-/rollback <N>
-/rollback <N> --force
-/rollback diff <N>
-/rollback start
-/rollback start --force
-/rollback status
-/reset-rollback-setting
-/clear-rollback-store
+/undo
+/undo <N>
+/undo <N> --force
+/undo diff <N>
+/undo start
+/undo start --force
+/undo status
+/reset-undo-setting
+/clear-undo-store
 ```
 
-`/rollback` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to. Turns with no file changes are shown in gray without a number and cannot be selected.
+`/undo` lists user turns in the current branch, oldest first (newest at the bottom). Number 1 is the newest turn that changed files; those numbers are what `<N>` refers to. Turns with no file changes are shown in gray without a number and cannot be selected.
 
-`/reset-rollback-setting` replaces the config file with the built-in defaults.
+`/reset-undo-setting` replaces the config file with the built-in defaults.
 
-`/clear-rollback-store` permanently deletes every snapshot, session journal, and rollback journal under `~/.pi/agent/pi-rollback/`, including the current session's rollback history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
+`/clear-undo-store` permanently deletes every snapshot, session journal, and undo journal under `~/.pi/agent/pi-undo/`, including the current session's undo history. The conversation and the configuration file are kept. The current session can keep snapshotting afterwards, starting from an empty store.
 
-If `~/.pi/agent/pi-rollback.json` is missing, the extension writes it with those defaults on load.
+If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those defaults on load.
 
 `--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
 
-Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch re-applies those mutations (or the snapshot taken when you left it). That includes going back with `/tree` after `/rollback <N>`. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/rollback <N>` always restores files.
+Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a later point on that branch re-applies those mutations (or the snapshot taken when you left it). That includes going back with `/tree` after `/undo <N>`. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` always restores files.
 
 ## Installation
 
 ```bash
-pi install npm:pi-rollback
+pi install npm:pi-undo
 ```
 
 After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
@@ -58,35 +58,35 @@ After installing, restart Pi or run `/reload`. Because the package includes the 
 ### Update / uninstall
 
 ```bash
-pi update npm:pi-rollback
-pi remove npm:pi-rollback
+pi update npm:pi-undo
+pi remove npm:pi-undo
 ```
 
 ### Install from a local path
 
-This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-rollback/` package.
+This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-undo/` package.
 
 ```bash
 git clone https://github.com/yuru7/my-pi-extensions.git
-pi install ./my-pi-extensions/pi-rollback
+pi install ./my-pi-extensions/pi-undo
 ```
 
 If you already have a clone, pass that path:
 
 ```bash
-pi install /absolute/path/to/my-pi-extensions/pi-rollback
+pi install /absolute/path/to/my-pi-extensions/pi-undo
 ```
 
 To try it temporarily:
 
 ```bash
-pi -e /absolute/path/to/my-pi-extensions/pi-rollback
+pi -e /absolute/path/to/my-pi-extensions/pi-undo
 ```
 
 When installed from a local path, update by running `git pull` in the repository, then restart Pi or run `/reload`. Uninstall as follows:
 
 ```bash
-pi remove /absolute/path/to/my-pi-extensions/pi-rollback
+pi remove /absolute/path/to/my-pi-extensions/pi-undo
 ```
 
 ## Configuration
@@ -94,16 +94,16 @@ pi remove /absolute/path/to/my-pi-extensions/pi-rollback
 Config file:
 
 ```text
-~/.pi/agent/pi-rollback.json
+~/.pi/agent/pi-undo.json
 ```
 
 If the file is missing, it is created with the defaults below. If it cannot be parsed, Pi keeps running and you get:
 
 ```text
-pi-rollback: Failed to load configuration; using defaults.
+pi-undo: Failed to load configuration; using defaults.
 ```
 
-Use `/reset-rollback-setting` to overwrite the file with the same defaults.
+Use `/reset-undo-setting` to overwrite the file with the same defaults.
 
 ```json
 {
@@ -126,7 +126,7 @@ Use `/reset-rollback-setting` to overwrite the file with the same defaults.
 Snapshot data (not this config file) lives in:
 
 ```text
-~/.pi/agent/pi-rollback/
+~/.pi/agent/pi-undo/
 ```
 
 That store path is always excluded from snapshots so the extension cannot snapshot itself.
@@ -159,7 +159,7 @@ Virtual filesystems are skipped: `/proc`, `/sys`, `/dev`, `/run`, and Windows `\
 
 ## Safe restore
 
-After each recorded mutation, the post-change hash is stored. On rollback, a file is skipped when the current hash does not match Pi's last write — usually because you edited it afterwards.
+After each recorded mutation, the post-change hash is stored. On undo, a file is skipped when the current hash does not match Pi's last write — usually because you edited it afterwards.
 
 ```text
 Restored: 7 files
@@ -168,7 +168,7 @@ Skipped: 2 files modified after Pi's last write
   src/config.ts
   README.md
 
-Use /rollback 3 --force to overwrite them.
+Use /undo 3 --force to overwrite them.
 ```
 
 v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
@@ -179,7 +179,7 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 - Bash directory walks stop at 2000 files or 50 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
-- `/clear-rollback-store` wipes the whole store immediately without resetting the conversation (config is kept)
+- `/clear-undo-store` wipes the whole store immediately without resetting the conversation (config is kept)
 - If the active session alone exceeds the cap, new snapshots are skipped and a warning is shown
 - Unfinished `pending/` journals from a crash are reported on the next `session_start`
 
@@ -190,7 +190,7 @@ Linux, macOS, Windows, and Pi running inside WSL. Path forms such as `C:\...`, `
 ## Development
 
 ```bash
-cd pi-rollback
+cd pi-undo
 pnpm install
 pnpm test
 ```

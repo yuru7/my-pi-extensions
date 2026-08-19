@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import factory from "../extensions/pi-rollback.ts";
+import factory from "../extensions/pi-undo.ts";
 import { DEFAULT_CONFIG, getConfigPath, getStoreRoot, loadConfig, saveConfig } from "../src/config.ts";
 import { SessionJournal } from "../src/mutation-journal.ts";
 import { ObjectStore } from "../src/store.ts";
@@ -51,8 +51,8 @@ function setup() {
   return { pi, home };
 }
 
-describe("/rollback command", () => {
-  test("registers lifecycle events and the rollback command", () => {
+describe("/undo command", () => {
+  test("registers lifecycle events and the undo command", () => {
     const { pi } = setup();
 
     assert.equal(pi.events.has("session_start"), true);
@@ -61,24 +61,24 @@ describe("/rollback command", () => {
     assert.equal(pi.events.has("session_before_tree"), true);
     assert.equal(pi.events.has("tool_call"), true);
     assert.equal(pi.events.has("tool_result"), true);
-    assert.equal(pi.commands.has("rollback"), true);
-    assert.equal(pi.commands.has("reset-rollback-setting"), true);
-    assert.equal(pi.commands.has("clear-rollback-store"), true);
+    assert.equal(pi.commands.has("undo"), true);
+    assert.equal(pi.commands.has("reset-undo-setting"), true);
+    assert.equal(pi.commands.has("clear-undo-store"), true);
     assert.equal(
-      pi.commands.get("rollback")?.description,
-      "Rollback files and conversation to a previous user turn",
+      pi.commands.get("undo")?.description,
+      "Undo files and conversation to a previous user turn",
     );
     assert.equal(
-      pi.commands.get("reset-rollback-setting")?.description,
-      "Reset pi-rollback configuration to the built-in defaults",
+      pi.commands.get("reset-undo-setting")?.description,
+      "Reset pi-undo configuration to the built-in defaults",
     );
     assert.equal(
-      pi.commands.get("clear-rollback-store")?.description,
-      "Permanently delete all stored rollback snapshots",
+      pi.commands.get("clear-undo-store")?.description,
+      "Permanently delete all stored undo snapshots",
     );
   });
 
-  test("/rollback list omits numbers for turns without file changes", async () => {
+  test("/undo list omits numbers for turns without file changes", async () => {
     const { pi, home } = setup();
     const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
     const stored = store.put(Buffer.from("snapshot-bytes"));
@@ -104,7 +104,7 @@ describe("/rollback command", () => {
       ui: { notify() {} },
     } as never);
 
-    const handler = pi.commands.get("rollback")?.handler;
+    const handler = pi.commands.get("undo")?.handler;
     assert.ok(handler);
     await handler("", {
       hasUI: true,
@@ -120,10 +120,10 @@ describe("/rollback command", () => {
       ui: { notify() {} },
     } as never);
 
-    const list = pi.entries.find((entry) => entry.customType === "pi-rollback/list");
+    const list = pi.entries.find((entry) => entry.customType === "pi-undo/list");
     assert.ok(list);
     const lines = (list.data as { lines: Array<{ text: string; dim?: boolean }> }).lines;
-    assert.equal(lines[0]?.text, "Rollback points (1 = newest):");
+    assert.equal(lines[0]?.text, "Undo points (1 = newest):");
     assert.equal(lines[1]?.dim, undefined);
     assert.match(lines[1]?.text ?? "", /^1  /);
     assert.match(lines[1]?.text ?? "", /edit files/);
@@ -133,7 +133,7 @@ describe("/rollback command", () => {
     assert.match(lines[2]?.text ?? "", /no file changes/);
   });
 
-  test("/rollback <N> ignores turns that did not change files", async () => {
+  test("/undo <N> ignores turns that did not change files", async () => {
     const { pi, home } = setup();
     const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
     const stored = store.put(Buffer.from("snapshot-bytes"));
@@ -159,7 +159,7 @@ describe("/rollback command", () => {
       ui: { notify() {} },
     } as never);
 
-    const handler = pi.commands.get("rollback")?.handler;
+    const handler = pi.commands.get("undo")?.handler;
     assert.ok(handler);
     const notifications: string[] = [];
     let navigatedTo: string | undefined;
@@ -191,7 +191,7 @@ describe("/rollback command", () => {
     navigatedTo = undefined;
     await handler("2", ctx as never);
     assert.equal(navigatedTo, undefined);
-    assert.equal(notifications.some((message) => message.includes("No rollback point 2")), true);
+    assert.equal(notifications.some((message) => message.includes("No undo point 2")), true);
   });
 
   test("writes the default config file when it is missing", async () => {
@@ -240,11 +240,11 @@ describe("/rollback command", () => {
     );
   });
 
-  test("/reset-rollback-setting restores defaults after confirmation", async () => {
+  test("/reset-undo-setting restores defaults after confirmation", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false, enabled: false }, path);
-    const handler = pi.commands.get("reset-rollback-setting")?.handler;
+    const handler = pi.commands.get("reset-undo-setting")?.handler;
     assert.ok(handler);
 
     const notifications: string[] = [];
@@ -265,11 +265,11 @@ describe("/rollback command", () => {
     assert.equal(notifications.some((message) => message.includes("reset to defaults")), true);
   });
 
-  test("/reset-rollback-setting does nothing when cancelled", async () => {
+  test("/reset-undo-setting does nothing when cancelled", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("reset-rollback-setting")?.handler;
+    const handler = pi.commands.get("reset-undo-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -285,11 +285,11 @@ describe("/rollback command", () => {
     assert.equal(loadConfig(path).config.syncTree, false);
   });
 
-  test("/reset-rollback-setting writes defaults when there is no confirm UI", async () => {
+  test("/reset-undo-setting writes defaults when there is no confirm UI", async () => {
     const { pi, home } = setup();
     const path = getConfigPath(home);
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
-    const handler = pi.commands.get("reset-rollback-setting")?.handler;
+    const handler = pi.commands.get("reset-undo-setting")?.handler;
     assert.ok(handler);
 
     await handler("", {
@@ -349,11 +349,11 @@ function commandCtx(options: {
   } as never;
 }
 
-describe("/clear-rollback-store command", () => {
+describe("/clear-undo-store command", () => {
   test("wipes stored snapshots including the current session", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
-    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    const handler = pi.commands.get("clear-undo-store")?.handler;
     assert.ok(handler);
 
     const notifications: string[] = [];
@@ -367,13 +367,13 @@ describe("/clear-rollback-store command", () => {
     assert.equal(existsSync(join(store.journalDir("tx-1"), "entry.json")), false);
     assert.equal(existsSync(join(getStoreRoot(home), "maintenance.json")), false);
     assert.deepEqual(JSON.parse(readFileSync(getConfigPath(home), "utf8")), DEFAULT_CONFIG);
-    assert.equal(notifications.some((message) => message.includes("stored rollback data was removed")), true);
+    assert.equal(notifications.some((message) => message.includes("stored undo data was removed")), true);
   });
 
   test("does nothing when cancelled", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["old-session", "s1"]);
-    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    const handler = pi.commands.get("clear-undo-store")?.handler;
     assert.ok(handler);
 
     await handler("", commandCtx({ confirm: false }));
@@ -388,7 +388,7 @@ describe("/clear-rollback-store command", () => {
   test("wipes the store when there is no confirm UI", async () => {
     const { pi, home } = setup();
     const { hash, sessionIds } = seedStore(home, ["s1"]);
-    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    const handler = pi.commands.get("clear-undo-store")?.handler;
     assert.ok(handler);
 
     await handler("", commandCtx({ hasUI: false }));
@@ -401,11 +401,11 @@ describe("/clear-rollback-store command", () => {
   test("lets the current session snapshot again after a wipe", async () => {
     const { pi, home } = setup();
     seedStore(home, ["s1"]);
-    const handler = pi.commands.get("clear-rollback-store")?.handler;
+    const handler = pi.commands.get("clear-undo-store")?.handler;
     assert.ok(handler);
     await handler("", commandCtx({ confirm: true }));
 
-    const status = pi.commands.get("rollback")?.handler;
+    const status = pi.commands.get("undo")?.handler;
     assert.ok(status);
     await status("status", {
       hasUI: true,
@@ -418,7 +418,7 @@ describe("/clear-rollback-store command", () => {
       ui: { notify() {} },
     } as never);
 
-    const statusEntry = pi.entries.find((entry) => entry.customType === "pi-rollback/status");
+    const statusEntry = pi.entries.find((entry) => entry.customType === "pi-undo/status");
     assert.ok(statusEntry);
     const lines = (statusEntry.data as { lines: Array<{ text: string }> }).lines;
     assert.equal(lines.some((line) => line.text.includes("tracked files: 0")), true);

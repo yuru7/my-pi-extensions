@@ -1,13 +1,13 @@
 {
-  "name": "pi-rollback",
+  "name": "pi-undo",
   "version": "0.1.0",
-  "description": "A Pi extension that checkpoints file changes and rolls back conversation turns",
+  "description": "A Pi extension that checkpoints file changes and undoes conversation turns",
   "keywords": [
     "pi-package",
     "pi-coding-agent",
     "pi-extension",
-    "rollback",
-    "checkpoint"
+    "undo",
+    "rollback"
   ],
   "license": "MIT",
   "author": "yuru7",
@@ -15,12 +15,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yuru7/my-pi-extensions.git",
-    "directory": "pi-rollback"
+    "directory": "pi-undo"
   },
   "bugs": {
     "url": "https://github.com/yuru7/my-pi-extensions/issues"
   },
-  "homepage": "https://github.com/yuru7/my-pi-extensions/tree/main/pi-rollback#readme",
+  "homepage": "https://github.com/yuru7/my-pi-extensions/tree/main/pi-undo#readme",
   "files": [
     "extensions",
     "src",
@@ -37,7 +37,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/pi-rollback.ts"
+      "./extensions/pi-undo.ts"
     ]
   },
   "peerDependencies": {

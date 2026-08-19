@@ -7,7 +7,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { RollbackConfig } from "./config.ts";
+import type { UndoConfig } from "./config.ts";
 import type { FileState } from "./snapshot.ts";
 import { appendJsonl, atomicWriteFile, ObjectStore, readJsonl } from "./store.ts";
 
@@ -229,7 +229,7 @@ export function readSessionMeta(store: ObjectStore, sessionId: string): SessionM
 
 export function runMaintenance(
   store: ObjectStore,
-  config: RollbackConfig,
+  config: UndoConfig,
   options: {
     activeSessionId?: string;
     now?: number;

@@ -16,7 +16,7 @@ export interface BashConfig {
   warnOnUnresolvedMutation: boolean;
 }
 
-export interface RollbackConfig {
+export interface UndoConfig {
   enabled: boolean;
   maxFileSizeMB: number;
   maxTotalSizeMB: number;
@@ -34,7 +34,7 @@ export const DEFAULT_BASH_CONFIG: BashConfig = {
   warnOnUnresolvedMutation: true,
 };
 
-export const DEFAULT_CONFIG: RollbackConfig = {
+export const DEFAULT_CONFIG: UndoConfig = {
   enabled: true,
   maxFileSizeMB: 10,
   maxTotalSizeMB: 300,
@@ -46,17 +46,17 @@ export const DEFAULT_CONFIG: RollbackConfig = {
 };
 
 export const CONFIG_LOAD_WARNING =
-  "pi-rollback: Failed to load configuration; using defaults.";
+  "pi-undo: Failed to load configuration; using defaults.";
 
 export const CONFIG_WRITE_WARNING =
-  "pi-rollback: Could not write the default configuration file.";
+  "pi-undo: Could not write the default configuration file.";
 
 export function getConfigPath(home = homedir()): string {
-  return join(home, ".pi", "agent", "pi-rollback.json");
+  return join(home, ".pi", "agent", "pi-undo.json");
 }
 
 export function getStoreRoot(home = homedir()): string {
-  return join(home, ".pi", "agent", "pi-rollback");
+  return join(home, ".pi", "agent", "pi-undo");
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -95,7 +95,7 @@ function parseBashConfig(raw: unknown): BashConfig {
   };
 }
 
-export function parseConfig(raw: unknown): RollbackConfig {
+export function parseConfig(raw: unknown): UndoConfig {
   if (raw === null || typeof raw !== "object") {
     return structuredClone(DEFAULT_CONFIG);
   }
@@ -133,13 +133,13 @@ export function parseConfig(raw: unknown): RollbackConfig {
 }
 
 export interface LoadedConfig {
-  config: RollbackConfig;
+  config: UndoConfig;
   warning?: string;
   created?: boolean;
 }
 
 export function saveConfig(
-  config: RollbackConfig,
+  config: UndoConfig,
   configPath = getConfigPath(),
 ): void {
   mkdirSync(dirname(configPath), { recursive: true });
@@ -154,7 +154,7 @@ export function saveConfig(
   }
 }
 
-export function applyConfig(target: RollbackConfig, source: RollbackConfig): void {
+export function applyConfig(target: UndoConfig, source: UndoConfig): void {
   const copy = structuredClone(source);
   target.enabled = copy.enabled;
   target.maxFileSizeMB = copy.maxFileSizeMB;
@@ -191,23 +191,23 @@ export function loadConfig(configPath = getConfigPath()): LoadedConfig {
   }
 }
 
-export function maxFileSizeBytes(config: RollbackConfig): number {
+export function maxFileSizeBytes(config: UndoConfig): number {
   return config.maxFileSizeMB * 1024 * 1024;
 }
 
-export function maxTotalSizeBytes(config: RollbackConfig): number {
+export function maxTotalSizeBytes(config: UndoConfig): number {
   return config.maxTotalSizeMB * 1024 * 1024;
 }
 
-export function maxBytesPerCall(config: RollbackConfig): number {
+export function maxBytesPerCall(config: UndoConfig): number {
   return config.bash.maxBytesPerCallMB * 1024 * 1024;
 }
 
 export function shouldRestoreOnTree(
-  config: RollbackConfig,
-  options: { fromExtension?: boolean; fromRollbackCommand?: boolean } = {},
+  config: UndoConfig,
+  options: { fromExtension?: boolean; fromUndoCommand?: boolean } = {},
 ): boolean {
-  if (options.fromRollbackCommand || options.fromExtension) {
+  if (options.fromUndoCommand || options.fromExtension) {
     return true;
   }
   return config.syncTree;

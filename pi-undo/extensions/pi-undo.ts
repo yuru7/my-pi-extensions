@@ -10,7 +10,7 @@ import {
   maxFileSizeBytes,
   saveConfig,
   shouldRestoreOnTree,
-  type RollbackConfig,
+  type UndoConfig,
 } from "../src/config.ts";
 import {
   bytesToMb,
@@ -29,23 +29,23 @@ import {
   formatRestoreSummary,
   mutationsForTurns,
   buildRestorePlan,
-} from "../src/rollback.ts";
+} from "../src/undo.ts";
 import {
   chronologicalUserIds,
   findTurnEntryId,
   formatClock,
   indexFileChangingTurns,
   listUserTurns,
-  parseRollbackArgs,
+  parseUndoArgs,
   type SessionEntryLike,
 } from "../src/session.ts";
 import { Snapshotter } from "../src/snapshot.ts";
 import { ObjectStore } from "../src/store.ts";
 
-const LIST_ENTRY = "pi-rollback/list";
-const STATUS_ENTRY = "pi-rollback/status";
-const DIFF_ENTRY = "pi-rollback/diff";
-const RESULT_ENTRY = "pi-rollback/result";
+const LIST_ENTRY = "pi-undo/list";
+const STATUS_ENTRY = "pi-undo/status";
+const DIFF_ENTRY = "pi-undo/diff";
+const RESULT_ENTRY = "pi-undo/result";
 
 interface LineItem {
   text: string;
@@ -95,7 +95,7 @@ const renderLines: EntryRenderer = (entry, _options, theme) => {
   return box;
 };
 
-export interface RollbackExtensionDeps {
+export interface UndoExtensionDeps {
   home?: string;
   now?: () => number;
   platform?: NodeJS.Platform;
@@ -103,21 +103,21 @@ export interface RollbackExtensionDeps {
 }
 
 interface Runtime {
-  config: RollbackConfig;
+  config: UndoConfig;
   store: ObjectStore;
   journal: SessionJournal;
   snapshotter: Snapshotter;
   sessionId: string;
 }
 
-export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
+export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   const home = deps.home;
   const configPath = getConfigPath(home);
   const loaded = loadConfig(configPath);
   const config = loaded.config;
   let runtime: Runtime | undefined;
   let pendingTreeForce = false;
-  let pendingRollbackNav = false;
+  let pendingUndoNav = false;
   const notifyFallback: string[] = [];
 
   const show = (
@@ -181,7 +181,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       ctx.ui.notify(loaded.warning, "warning");
     }
     if (loaded.created) {
-      ctx.ui.notify("pi-rollback: wrote default configuration.", "info");
+      ctx.ui.notify("pi-undo: wrote default configuration.", "info");
     }
     const sessionId = ctx.sessionManager.getSessionId();
     runtime = bindRuntime(sessionId, ctx.cwd, makeNotify(ctx));
@@ -208,7 +208,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       if (!runtime?.config.enabled) {
         return;
       }
-      if (!shouldRestoreOnTree(runtime.config, { fromRollbackCommand: pendingRollbackNav })) {
+      if (!shouldRestoreOnTree(runtime.config, { fromUndoCommand: pendingUndoNav })) {
         return;
       }
       const oldLeafId = event.preparation?.oldLeafId;
@@ -235,7 +235,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       if (
         !shouldRestoreOnTree(runtime.config, {
           fromExtension: event.fromExtension,
-          fromRollbackCommand: pendingRollbackNav,
+          fromUndoCommand: pendingUndoNav,
         })
       ) {
         return;
@@ -274,14 +274,14 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
         show(
           ctx,
           RESULT_ENTRY,
-          formatRestoreSummary(plan, "/rollback <N> --force").split("\n"),
+          formatRestoreSummary(plan, "/undo <N> --force").split("\n"),
         );
       }
     } catch (error) {
       ctx.ui.notify(
         error instanceof Error
-          ? `pi-rollback: Could not restore files for /tree: ${error.message}`
-          : "pi-rollback: Could not restore files for /tree.",
+          ? `pi-undo: Could not restore files for /tree: ${error.message}`
+          : "pi-undo: Could not restore files for /tree.",
         "warning",
       );
     }
@@ -323,7 +323,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       }
     } catch (error) {
       ctx.ui.notify(
-        error instanceof Error ? `pi-rollback: ${error.message}` : "pi-rollback: snapshot failed",
+        error instanceof Error ? `pi-undo: ${error.message}` : "pi-undo: snapshot failed",
         "warning",
       );
     }
@@ -344,23 +344,23 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
     return undefined;
   });
 
-  pi.registerCommand("rollback", {
-    description: "Rollback files and conversation to a previous user turn",
+  pi.registerCommand("undo", {
+    description: "Undo files and conversation to a previous user turn",
     handler: async (args, ctx) => {
-      const parsed = parseRollbackArgs(args);
+      const parsed = parseUndoArgs(args);
       if (parsed.kind === "error") {
         ctx.ui.notify(parsed.message, "error");
         return;
       }
       if (parsed.kind === "help") {
         show(ctx, LIST_ENTRY, [
-          "/rollback",
-          "/rollback <N> [--force]",
-          "/rollback diff <N>",
-          "/rollback start [--force]",
-          "/rollback status",
-          "/reset-rollback-setting",
-          "/clear-rollback-store",
+          "/undo",
+          "/undo <N> [--force]",
+          "/undo diff <N>",
+          "/undo start [--force]",
+          "/undo status",
+          "/reset-undo-setting",
+          "/clear-undo-store",
         ]);
         return;
       }
@@ -382,8 +382,8 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           return;
         }
         show(ctx, LIST_ENTRY, [
-          "Rollback points (1 = newest):",
-          ...formatRollbackTurnLines(turns, runtime.journal.mutations()),
+          "Undo points (1 = newest):",
+          ...formatUndoTurnLines(turns, runtime.journal.mutations()),
         ]);
         return;
       }
@@ -398,19 +398,19 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           store: runtime.store,
           force: parsed.force,
         });
-        show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/rollback start --force").split("\n"));
+        show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, "/undo start --force").split("\n"));
         const parentSession = ctx.sessionManager.getSessionFile();
         const result = await ctx.newSession({ parentSession });
         if (result?.cancelled) {
           compensatingRestore(runtime.store, transactionId);
-          ctx.ui.notify("pi-rollback: new session was cancelled; filesystem restore was undone.", "warning");
+          ctx.ui.notify("pi-undo: new session was cancelled; filesystem restore was undone.", "warning");
         }
         return;
       }
 
       const turn = turns.find((item) => item.index === parsed.n);
       if (!turn) {
-        ctx.ui.notify(`No rollback point ${parsed.n}.`, "error");
+        ctx.ui.notify(`No undo point ${parsed.n}.`, "error");
         return;
       }
       const turnIds = new Set(
@@ -427,11 +427,11 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           store: runtime.store,
           maxFileBytes: maxFileSizeBytes(runtime.config),
         });
-        show(ctx, DIFF_ENTRY, [`Rollback to turn ${parsed.n}`, "", ...diffPreview(plan, runtime.store)]);
+        show(ctx, DIFF_ENTRY, [`Undo to turn ${parsed.n}`, "", ...diffPreview(plan, runtime.store)]);
         return;
       }
 
-      pendingRollbackNav = true;
+      pendingUndoNav = true;
       pendingTreeForce = parsed.force;
       try {
         const currentLeafId = (ctx.sessionManager.getBranch() as SessionEntryLike[]).at(-1)?.id;
@@ -447,21 +447,21 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
         }
         const result = await ctx.navigateTree(turn.id, { summarize: false });
         if (result?.cancelled) {
-          ctx.ui.notify("pi-rollback: tree navigation was cancelled.", "warning");
+          ctx.ui.notify("pi-undo: tree navigation was cancelled.", "warning");
         }
       } finally {
-        pendingRollbackNav = false;
+        pendingUndoNav = false;
         pendingTreeForce = false;
       }
     },
   });
 
-  pi.registerCommand("reset-rollback-setting", {
-    description: "Reset pi-rollback configuration to the built-in defaults",
+  pi.registerCommand("reset-undo-setting", {
+    description: "Reset pi-undo configuration to the built-in defaults",
     handler: async (_args, ctx) => {
       if (ctx.hasUI && ctx.ui.confirm) {
         const ok = await ctx.ui.confirm(
-          "Reset pi-rollback configuration?",
+          "Reset pi-undo configuration?",
           "This replaces the config file with the default settings.",
         );
         if (!ok) {
@@ -472,21 +472,21 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
       try {
         saveConfig(next, configPath);
       } catch {
-        ctx.ui.notify("pi-rollback: Could not write the config file.", "error");
+        ctx.ui.notify("pi-undo: Could not write the config file.", "error");
         return;
       }
       applyConfig(config, next);
-      ctx.ui.notify("pi-rollback: configuration reset to defaults.", "info");
+      ctx.ui.notify("pi-undo: configuration reset to defaults.", "info");
     },
   });
 
-  pi.registerCommand("clear-rollback-store", {
-    description: "Permanently delete all stored rollback snapshots",
+  pi.registerCommand("clear-undo-store", {
+    description: "Permanently delete all stored undo snapshots",
     handler: async (_args, ctx) => {
       if (ctx.hasUI && ctx.ui.confirm) {
         const ok = await ctx.ui.confirm(
-          "Remove all stored rollback data?",
-          "This permanently deletes snapshots and rollback history. The conversation is kept. The configuration file is also kept.",
+          "Remove all stored undo data?",
+          "This permanently deletes snapshots and undo history. The conversation is kept. The configuration file is also kept.",
         );
         if (!ok) {
           return;
@@ -500,16 +500,16 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           new ObjectStore(getStoreRoot(home), config).wipe();
         }
       } catch {
-        ctx.ui.notify("pi-rollback: Could not remove stored rollback data.", "error");
+        ctx.ui.notify("pi-undo: Could not remove stored undo data.", "error");
         return;
       }
       runtime = bindRuntime(ctx.sessionManager.getSessionId(), ctx.cwd, makeNotify(ctx));
-      ctx.ui.notify("pi-rollback: stored rollback data was removed.", "info");
+      ctx.ui.notify("pi-undo: stored undo data was removed.", "info");
     },
   });
 }
 
-function formatRollbackTurnLines(
+function formatUndoTurnLines(
   turns: { id: string; index: number | null; timestamp: number; preview: string }[],
   mutations: { turnEntryId: string; key: string; coverage: string }[],
 ): LineItem[] {
@@ -545,7 +545,7 @@ function statusLines(runtime: Runtime): string[] {
   const used = runtime.store.sizeBytes();
   const cap = runtime.config.maxTotalSizeMB;
   return [
-    runtime.config.enabled ? "pi-rollback enabled" : "pi-rollback disabled",
+    runtime.config.enabled ? "pi-undo enabled" : "pi-undo disabled",
     `  /tree restore: ${runtime.config.syncTree ? "on" : "off"}`,
     "",
     "Session:",

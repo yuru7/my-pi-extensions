@@ -2,24 +2,24 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { compensatingRestore, executeFilesystemRestore } from "../src/rollback.ts";
-import { indexFileChangingTurns, listUserTurns, parseRollbackArgs } from "../src/session.ts";
+import { compensatingRestore, executeFilesystemRestore } from "../src/undo.ts";
+import { indexFileChangingTurns, listUserTurns, parseUndoArgs } from "../src/session.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
   cleanupTempDirs();
 });
 
-describe("parseRollbackArgs", () => {
+describe("parseUndoArgs", () => {
   test("parses MVP commands", () => {
-    assert.deepEqual(parseRollbackArgs(""), { kind: "list" });
-    assert.deepEqual(parseRollbackArgs("3"), { kind: "rollback", n: 3, force: false });
-    assert.deepEqual(parseRollbackArgs("3 --force"), { kind: "rollback", n: 3, force: true });
-    assert.deepEqual(parseRollbackArgs("--force 3"), { kind: "rollback", n: 3, force: true });
-    assert.deepEqual(parseRollbackArgs("diff 3"), { kind: "diff", n: 3 });
-    assert.deepEqual(parseRollbackArgs("start"), { kind: "start", force: false });
-    assert.deepEqual(parseRollbackArgs("start --force"), { kind: "start", force: true });
-    assert.deepEqual(parseRollbackArgs("status"), { kind: "status" });
+    assert.deepEqual(parseUndoArgs(""), { kind: "list" });
+    assert.deepEqual(parseUndoArgs("3"), { kind: "undo", n: 3, force: false });
+    assert.deepEqual(parseUndoArgs("3 --force"), { kind: "undo", n: 3, force: true });
+    assert.deepEqual(parseUndoArgs("--force 3"), { kind: "undo", n: 3, force: true });
+    assert.deepEqual(parseUndoArgs("diff 3"), { kind: "diff", n: 3 });
+    assert.deepEqual(parseUndoArgs("start"), { kind: "start", force: false });
+    assert.deepEqual(parseUndoArgs("start --force"), { kind: "start", force: true });
+    assert.deepEqual(parseUndoArgs("status"), { kind: "status" });
   });
 });
 
@@ -64,7 +64,7 @@ describe("indexFileChangingTurns", () => {
   });
 });
 
-describe("rollback restore", () => {
+describe("undo restore", () => {
   test("bash mutations are recorded even when the command exits 1", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "broken.txt");
@@ -110,7 +110,7 @@ describe("rollback restore", () => {
     assert.equal(harness.journal.mutations().length, 1);
   });
 
-  test("compensating restore undoes a partial rollback", async () => {
+  test("compensating restore undoes a partial undo", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "tx.txt");
     writeFileSync(file, "original");

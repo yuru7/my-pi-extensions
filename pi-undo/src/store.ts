@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import type { RollbackConfig } from "./config.ts";
+import type { UndoConfig } from "./config.ts";
 import { maxTotalSizeBytes } from "./config.ts";
 
 export interface MaintenanceState {
@@ -48,9 +48,9 @@ export type PutResult =
 
 export class ObjectStore {
   readonly root: string;
-  private readonly config: RollbackConfig;
+  private readonly config: UndoConfig;
 
-  constructor(root: string, config: RollbackConfig) {
+  constructor(root: string, config: UndoConfig) {
     this.root = root;
     this.config = config;
     this.ensureLayout();
@@ -61,7 +61,7 @@ export class ObjectStore {
   }
 
   journalDir(transactionId: string): string {
-    return join(this.root, "rollback-journals", transactionId);
+    return join(this.root, "undo-journals", transactionId);
   }
 
   has(hash: string): boolean {
@@ -181,7 +181,7 @@ export class ObjectStore {
   cleanupTempFiles(): void {
     this.cleanupTemps(join(this.root, "objects"));
     this.cleanupTemps(join(this.root, "sessions"));
-    this.cleanupTemps(join(this.root, "rollback-journals"));
+    this.cleanupTemps(join(this.root, "undo-journals"));
   }
 
   referencedHashesFromSessions(): Set<string> {
@@ -189,7 +189,7 @@ export class ObjectStore {
     for (const sessionId of this.listSessionIds()) {
       this.collectHashesFromDir(this.sessionDir(sessionId), hashes);
     }
-    const journals = join(this.root, "rollback-journals");
+    const journals = join(this.root, "undo-journals");
     if (existsSync(journals)) {
       this.collectHashesFromDir(journals, hashes);
     }
@@ -199,7 +199,7 @@ export class ObjectStore {
   private ensureLayout(): void {
     mkdirSync(join(this.root, "objects", "sha256"), { recursive: true });
     mkdirSync(join(this.root, "sessions"), { recursive: true });
-    mkdirSync(join(this.root, "rollback-journals"), { recursive: true });
+    mkdirSync(join(this.root, "undo-journals"), { recursive: true });
   }
 
   private collectHashesFromDir(dir: string, hashes: Set<string>): void {

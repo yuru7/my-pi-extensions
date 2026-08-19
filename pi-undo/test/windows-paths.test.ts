@@ -15,7 +15,7 @@ function ctx(partial: Partial<PathContext> & Pick<PathContext, "platform">): Pat
     cwd: partial.cwd ?? "C:\\Users\\test",
     home: partial.home ?? "C:\\Users\\test",
     isWsl: partial.isWsl ?? false,
-    storeRoot: partial.storeRoot ?? "C:\\Users\\test\\.pi\\agent\\pi-rollback",
+    storeRoot: partial.storeRoot ?? "C:\\Users\\test\\.pi\\agent\\pi-undo",
     excludeGlobs: partial.excludeGlobs ?? [],
     platform: partial.platform,
   };

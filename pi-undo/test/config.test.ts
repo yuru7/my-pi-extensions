@@ -68,21 +68,21 @@ describe("config", () => {
   });
 
   test("paths live under ~/.pi/agent", () => {
-    assert.equal(getConfigPath("/home/dev"), join("/home/dev", ".pi", "agent", "pi-rollback.json"));
-    assert.equal(getStoreRoot("/home/dev"), join("/home/dev", ".pi", "agent", "pi-rollback"));
+    assert.equal(getConfigPath("/home/dev"), join("/home/dev", ".pi", "agent", "pi-undo.json"));
+    assert.equal(getStoreRoot("/home/dev"), join("/home/dev", ".pi", "agent", "pi-undo"));
   });
 
-  test("shouldRestoreOnTree respects syncTree except for /rollback", () => {
+  test("shouldRestoreOnTree respects syncTree except for /undo", () => {
     const on = { ...DEFAULT_CONFIG, syncTree: true };
     const off = { ...DEFAULT_CONFIG, syncTree: false };
     assert.equal(shouldRestoreOnTree(on), true);
     assert.equal(shouldRestoreOnTree(off), false);
     assert.equal(shouldRestoreOnTree(off, { fromExtension: true }), true);
-    assert.equal(shouldRestoreOnTree(off, { fromRollbackCommand: true }), true);
+    assert.equal(shouldRestoreOnTree(off, { fromUndoCommand: true }), true);
   });
 
   test("saveConfig round-trips", () => {
-    const path = join(tempDir(), "agent", "pi-rollback.json");
+    const path = join(tempDir(), "agent", "pi-undo.json");
     saveConfig({ ...DEFAULT_CONFIG, syncTree: false }, path);
     assert.deepEqual(loadConfig(path).config.syncTree, false);
   });

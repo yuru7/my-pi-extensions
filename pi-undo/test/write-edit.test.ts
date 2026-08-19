@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { executeFilesystemRestore } from "../src/rollback.ts";
+import { executeFilesystemRestore } from "../src/undo.ts";
 import { cleanupTempDirs, createHarness } from "./helpers.ts";
 
 afterEach(() => {
@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 describe("write / edit snapshots", () => {
-  test("existing file write rolls back to original bytes", async () => {
+  test("existing file write is restored to original bytes", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "notes.txt");
     writeFileSync(file, "original");
@@ -36,7 +36,7 @@ describe("write / edit snapshots", () => {
     assert.equal(readFileSync(file, "utf8"), "original");
   });
 
-  test("new file write is removed on rollback", async () => {
+  test("new file write is removed on undo", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "created.txt");
 
@@ -96,7 +96,7 @@ describe("write / edit snapshots", () => {
     assert.equal(readFileSync(file, "utf8"), "v0");
   });
 
-  test("multi-turn rollback restores the target turn start state", async () => {
+  test("multi-turn undo restores the target turn start state", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "a.txt");
     writeFileSync(file, "t0");

@@ -12,7 +12,7 @@ import {
 import { dirname, join } from "node:path";
 import { extractBashTargets } from "./bash/extract-paths.ts";
 import { canonicalizePathKey } from "./bash/windows-path.ts";
-import type { RollbackConfig } from "./config.ts";
+import type { UndoConfig } from "./config.ts";
 import { maxBytesPerCall, maxFileSizeBytes } from "./config.ts";
 import {
   bytesToMb,
@@ -287,7 +287,7 @@ function readdirSorted(dir: string): string[] {
 export interface SnapshotterOptions {
   store: ObjectStore;
   journal: SessionJournal;
-  config: RollbackConfig;
+  config: UndoConfig;
   pathContext: PathContext;
   backend: SnapshotBackend;
   notify: NotifyFn;
@@ -371,7 +371,7 @@ export class Snapshotter {
     }
     if (extracted.unresolved && this.options.config.bash.warnOnUnresolvedMutation) {
       this.deduper.notify(input.sessionId, input.turnEntryId, "bash", {
-        text: "pi-rollback: bash rollback coverage: partial",
+        text: "pi-undo: bash undo coverage: partial",
         level: "warning",
       });
     }
@@ -459,7 +459,7 @@ export class Snapshotter {
       this.commitNewFiles(pending);
       this.options.journal.deletePending(toolCallId);
     } catch {
-      // tool_result must not fail because rollback bookkeeping failed
+      // tool_result must not fail because undo bookkeeping failed
     }
   }
 

@@ -1,15 +1,15 @@
-# pi-rollback ExecPlan
+# pi-undo ExecPlan
 
 ## 1. 目的
 
-`pi-rollback` は Pi Agent にインストール可能な拡張機能として実装する。
+`pi-undo` は Pi Agent にインストール可能な拡張機能として実装する。
 
-ユーザーは次の2種類のロールバックを実行できる。
+ユーザーは次の2種類の undo を実行できる。
 
 1. 現在のセッションの任意のユーザー会話ターン開始時点へ戻る
 2. 現在のセッション開始時点へ戻る
 
-会話ターンへのロールバックでは、
+会話ターンへの undo では、
 
 * 対象ユーザーメッセージは残す
 * そのメッセージに対する Assistant 応答・Tool 実行以降を会話ツリーから外す
@@ -17,9 +17,9 @@
 
 ものとする。
 
-セッション開始時点へのロールバックでは、
+セッション開始時点への undo では、
 
-* 当該セッション中に `pi-rollback` が捕捉できた Pi のファイル変更を取り消す
+* 当該セッション中に `pi-undo` が捕捉できた Pi のファイル変更を取り消す
 * 元セッションを `parentSession` とした新しい空セッションへ移動する
 
 ものとする。
@@ -34,11 +34,11 @@ Hermes Agent の Checkpoints & Rollback から、次の設計思想を採用す�
 
 * ファイル変更の**実行前**に復元可能な状態を保存する
 * 不要なチェックポイントを作らない
-* ロールバック直前の状態も退避し、「undo の undo」を可能にする
+* undo 直前の状態も退避し、「undo の undo」を可能にする
 * 容量上限を設ける
 * チェックポイント機能の障害で Agent 本体を停止しない
 
-Hermes は shared shadow Git repository に working directory 全体を保存するため `/` や `$HOME` のような広いディレクトリを除外しているが、`pi-rollback` は**変更対象ファイル単位**の CAS（Content-Addressable Storage：内容ハッシュをキーとする保存領域）を使用する。したがって `/` や `$HOME` 自体は一律除外しない。Hermes の現行仕様では shadow Git、1 directory / turn の重複排除、10 MB/file、500 MB total、non-fatal error などを採用している。
+Hermes は shared shadow Git repository に working directory 全体を保存するため `/` や `$HOME` のような広いディレクトリを除外しているが、`pi-undo` は**変更対象ファイル単位**の CAS（Content-Addressable Storage：内容ハッシュをキーとする保存領域）を使用する。したがって `/` や `$HOME` 自体は一律除外しない。Hermes の現行仕様では shadow Git、1 directory / turn の重複排除、10 MB/file、500 MB total、non-fatal error などを採用している。
 
 Git には依存しない。
 
@@ -92,17 +92,17 @@ Pi は `package.json` の `pi.extensions` で拡張を配布でき、npm・git�
 想定構成:
 
 ```text
-pi-rollback/
+pi-undo/
 ├── package.json
 ├── README.md
 ├── extensions/
-│   └── pi-rollback.ts
+│   └── pi-undo.ts
 ├── src/
 │   ├── config.ts
 │   ├── store.ts
 │   ├── snapshot.ts
 │   ├── mutation-journal.ts
-│   ├── rollback.ts
+│   ├── undo.ts
 │   ├── session.ts
 │   ├── bash/
 │   │   ├── lexer.ts
@@ -113,7 +113,7 @@ pi-rollback/
 └── test/
     ├── write-edit.test.ts
     ├── bash-paths.test.ts
-    ├── rollback.test.ts
+    ├── undo.test.ts
     ├── safe-restore.test.ts
     ├── windows-paths.test.ts
     └── store-gc.test.ts
@@ -128,7 +128,7 @@ pi-rollback/
 設定ファイルは必須要件通り次を使用する。
 
 ```text
-~/.pi/agent/pi-rollback.json
+~/.pi/agent/pi-undo.json
 ```
 
 初期設定案:
@@ -156,7 +156,7 @@ pi-rollback/
 データ本体は設定ファイルとは分離する。
 
 ```text
-~/.pi/agent/pi-rollback/
+~/.pi/agent/pi-undo/
 ```
 
 設定ファイルが存在しない場合は上記デフォルトを使用する。
@@ -164,7 +164,7 @@ pi-rollback/
 設定ファイルの読み込み・JSON parse に失敗した場合も Agent を停止せず、
 
 ```text
-pi-rollback: Failed to load configuration; using defaults.
+pi-undo: Failed to load configuration; using defaults.
 ```
 
 のように通知する。
@@ -174,7 +174,7 @@ pi-rollback: Failed to load configuration; using defaults.
 ## 6. ストレージ構成
 
 ```text
-~/.pi/agent/pi-rollback/
+~/.pi/agent/pi-undo/
 ├── objects/
 │   └── sha256/
 │       └── ab/
@@ -187,7 +187,7 @@ pi-rollback: Failed to load configuration; using defaults.
 │       └── pending/
 │           └── <tool-call-id>.json
 │
-├── rollback-journals/
+├── undo-journals/
 │   └── <transaction-id>/
 │
 └── maintenance.json
@@ -263,7 +263,7 @@ interface MutationRecord {
 
 Pi内部の `turn_start` は「1ユーザープロンプト」と必ずしも1対1ではない。
 
-Tool call による複数回のLLM往復が発生するため、rollback単位には使用しない。
+Tool call による複数回のLLM往復が発生するため、undo単位には使用しない。
 
 代わりに `tool_call` 時点で
 
@@ -303,7 +303,7 @@ edit
 Assistant
 ```
 
-のすべてが同じ rollback turn に所属する。
+のすべてが同じ undo turn に所属する。
 
 ---
 
@@ -313,7 +313,7 @@ Pi の `write` は `path` と `content` を持ち、relative / absolute path の
 
 現行 `edit` も1ファイルの `path` と複数の置換 `edits[]` を受け取る。
 
-Pi自身はこれらのパスを cwd 基準で解決しているため、`pi-rollback` も同じ意味になるよう cwd を基準に正規化する。
+Pi自身はこれらのパスを cwd 基準で解決しているため、`pi-undo` も同じ意味になるよう cwd を基準に正規化する。
 
 ### tool_call
 
@@ -374,7 +374,7 @@ post.kind = file
 
 になる。
 
-rollback では削除する。
+undo では削除する。
 
 ---
 
@@ -414,7 +414,7 @@ pending state は必ず `toolCallId` 単位で管理する。
 
 Hermes のように「破壊的コマンド名を regex で判定したから安全」とは扱わない。
 
-`pi-rollback` における bash snapshot は明確に
+`pi-undo` における bash snapshot は明確に
 
 > Best effort
 
@@ -528,8 +528,8 @@ Path("/etc/foo").write_text(...)
 上限を超えた時点で走査を打ち切り、
 
 ```text
-pi-rollback: Bash snapshot limit reached.
-Rollback coverage for this command is partial.
+pi-undo: Bash snapshot limit reached.
+Undo coverage for this command is partial.
 ```
 
 と表示する。
@@ -679,7 +679,7 @@ post SHA-256
 
 を保存する。
 
-rollback 時:
+undo 時:
 
 ```text
 recorded post SHA
@@ -706,7 +706,7 @@ Skipped: 2 files modified after Pi's last write
   src/config.ts
   README.md
 
-Use /rollback 3 --force to overwrite them.
+Use /undo 3 --force to overwrite them.
 ```
 
 `--force` の場合のみ current hash を無視して復元する。
@@ -739,12 +739,12 @@ v1では3-way mergeやoperation-level inverse patchは実装しない。
 
 ---
 
-## 17. 会話ターンへのrollback
+## 17. 会話ターンへのundo
 
 コマンド:
 
 ```text
-/rollback
+/undo
 ```
 
 現在の active session branch の user entries を一覧表示する。
@@ -762,7 +762,7 @@ v1では3-way mergeやoperation-level inverse patchは実装しない。
 実行:
 
 ```text
-/rollback 3
+/undo 3
 ```
 
 ### 処理順
@@ -776,7 +776,7 @@ restore plan 作成
       ↓
 safe-restore conflict 判定
       ↓
-現在状態を rollback journal に保存
+現在状態を undo journal に保存
       ↓
 filesystem restore
       ↓
@@ -843,12 +843,12 @@ Turn 3 mutations
 
 ---
 
-## 19. セッション開始時点へのrollback
+## 19. セッション開始時点へのundo
 
 コマンド:
 
 ```text
-/rollback start
+/undo start
 ```
 
 現在のセッション中に記録された mutation をすべて逆順にrestoreする。
@@ -873,9 +873,9 @@ await ctx.newSession({
 
 軽量性を維持するため、session start 時にディスク全体をsnapshotしない。
 
-したがって `/rollback start` は、
+したがって `/undo start` は、
 
-> このセッション中に pi-rollback が捕捉した Pi の変更をすべて取り消した状態
+> このセッション中に pi-undo が捕捉した Pi の変更をすべて取り消した状態
 
 と定義する。
 
@@ -891,7 +891,7 @@ Piが初めて foo.txt を編集
 
 なら、Pi edit 直前に保存されるのは**User編集後の foo.txt**。
 
-`/rollback start` でもUser編集は保存する。
+`/undo start` でもUser編集は保存する。
 
 これは厳密な「session start 時刻のbyte列」よりも、
 
@@ -901,14 +901,14 @@ Piが初めて foo.txt を編集
 
 ---
 
-## 21. Rollback transaction
+## 21. Undo transaction
 
-Hermes と同様、rollback の rollback を可能にする。
+Hermes と同様、undo の undo を可能にする。
 
 restore対象ファイルの現在状態を最初に
 
 ```text
-rollback-journals/<transaction-id>
+undo-journals/<transaction-id>
 ```
 
 へ保存する。
@@ -923,7 +923,7 @@ rollback-journals/<transaction-id>
 
 などが発生した場合、
 
-rollback journal から可能な限り元状態へ戻す。
+undo journal から可能な限り元状態へ戻す。
 
 つまり、
 
@@ -939,7 +939,7 @@ journalからcompensating restore
 
 とする。
 
-rollback自体を「ほぼtransaction」として扱う。
+undo自体を「ほぼtransaction」として扱う。
 
 ---
 
@@ -947,7 +947,7 @@ rollback自体を「ほぼtransaction」として扱う。
 
 最重要原則:
 
-> pi-rollback の snapshot エラーを理由に write / edit / bash を止めない。
+> pi-undo の snapshot エラーを理由に write / edit / bash を止めない。
 
 すべての tool event handler を次の形にする。
 
@@ -955,7 +955,7 @@ rollback自体を「ほぼtransaction」として扱う。
 try {
   await snapshot(...);
 } catch (error) {
-  notifyRollbackError(error);
+  notifyUndoError(error);
   return undefined;
 }
 ```
@@ -971,10 +971,10 @@ try {
 エラー例:
 
 ```text
-pi-rollback: Could not snapshot /etc/foo:
+pi-undo: Could not snapshot /etc/foo:
 EACCES: permission denied
 
-The tool will continue without rollback coverage for this file.
+The tool will continue without undo coverage for this file.
 ```
 
 同一原因を大量表示しないよう、
@@ -1016,13 +1016,13 @@ Pi process が途中で落ちた場合は pending journal が残る。
 次回 `session_start` 時に検出し、
 
 ```text
-Previous Pi run ended with an unfinished rollback journal.
+Previous Pi run ended with an unfinished undo journal.
 1 potentially modified file can still be restored.
 ```
 
 と通知する。
 
-これにより「ファイルを変更した直後にPiがクラッシュした」という最もrollbackが欲しいケースを可能な範囲で救済する。
+これにより「ファイルを変更した直後にPiがクラッシュした」という最もundoが欲しいケースを可能な範囲で救済する。
 
 ---
 
@@ -1056,12 +1056,12 @@ old inactive sessions
 unreferenced CAS objects
 ```
 
-active session の rollback history は自動的には削除しない。
+active session の undo history は自動的には削除しない。
 
 active session だけで容量上限を超えた場合は、
 
 ```text
-pi-rollback: Store limit reached.
+pi-undo: Store limit reached.
 New snapshots will be skipped until space is freed.
 ```
 
@@ -1095,16 +1095,16 @@ GC頻度が低いため、この単純な方式で十分。
 
 ## 26. diff preview
 
-Hermes の `/rollback diff` に相当する機能を追加する。
+Hermes の `/undo diff` に相当する機能を追加する。
 
 ```text
-/rollback diff 3
+/undo diff 3
 ```
 
 表示:
 
 ```text
-Rollback to turn 3
+Undo to turn 3
 
 M src/auth.ts
 D src/generated.ts
@@ -1132,19 +1132,19 @@ binary changed: 1.4 MB -> 1.3 MB
 MVPで実装する。
 
 ```text
-/rollback
-/rollback <N>
-/rollback <N> --force
-/rollback diff <N>
-/rollback start
-/rollback start --force
-/rollback status
+/undo
+/undo <N>
+/undo <N> --force
+/undo diff <N>
+/undo start
+/undo start --force
+/undo status
 ```
 
-`/rollback status`:
+`/undo status`:
 
 ```text
-pi-rollback enabled
+pi-undo enabled
 
 Session:
   tracked turns: 12
@@ -1165,7 +1165,7 @@ Coverage:
 
 bash を「完全に守れている」と誤解させない。
 
-mutation record / rollback point に
+mutation record / undo point に
 
 ```text
 coverage: exact
@@ -1184,12 +1184,12 @@ python scripts/migrate.py
 について `scripts/migrate.py` しかpathを抽出できなかった場合、
 
 ```text
-bash rollback coverage: partial
+bash undo coverage: partial
 ```
 
 を記録する。
 
-この情報は `/rollback` と `/rollback diff` に表示する。
+この情報は `/undo` と `/undo diff` に表示する。
 
 ---
 
@@ -1197,7 +1197,7 @@ bash rollback coverage: partial
 
 デフォルトでは `.env` や `$HOME` を名前だけで除外しない。
 
-Piが変更した対象ならrollback可能である方を優先する。
+Piが変更した対象ならundo可能である方を優先する。
 
 ただしユーザーが必要なら、
 
@@ -1216,7 +1216,7 @@ Piが変更した対象ならrollback可能である方を優先する。
 snapshot store 自身、
 
 ```text
-~/.pi/agent/pi-rollback/**
+~/.pi/agent/pi-undo/**
 ```
 
 は常に強制除外する。
@@ -1293,9 +1293,9 @@ Pi の lifecycle 上、`tool_call` はツール実行直前、`tool_result` は�
 
 v1では filesystem を自動変更しない。
 
-built-in `/tree` は会話だけを移動し、filesystem rollbackを意味しないことをREADMEに明記する。
+built-in `/tree` は会話だけを移動し、filesystem undoを意味しないことをREADMEに明記する。
 
-filesystemとconversationを同時に戻したい場合は `/rollback` を使用する。
+filesystemとconversationを同時に戻したい場合は `/undo` を使用する。
 
 ---
 
@@ -1303,7 +1303,7 @@ filesystemとconversationを同時に戻したい場合は `/rollback` を使用
 
 Pi の write/edit/bash はoperationsを差し替え、SSH等のremote backendへ委譲できる設計になっている。`write` / `edit` の現行実装にも pluggable operations が存在する。
 
-pi-rollback v1 は、
+pi-undo v1 は、
 
 > Pi process と同じローカルfilesystemを変更する built-in write/edit/bash
 
@@ -1328,7 +1328,7 @@ interface を追加できる設計にする。
 * [ ] Pi Packageを作成
 * [ ] extension entrypointを作成
 * [ ] config loaderを実装
-* [ ] `/rollback status` を仮実装
+* [ ] `/undo status` を仮実装
 * [ ] Linux/macOS/Windows CIを準備
 
 ### Milestone 2 — CAS
@@ -1358,22 +1358,22 @@ interface を追加できる設計にする。
 * [ ] current hash comparison
 * [ ] user edit skip
 * [ ] `--force`
-* [ ] rollback journal
+* [ ] undo journal
 * [ ] compensating restore
 
-### Milestone 5 — conversation rollback
+### Milestone 5 — conversation undo
 
 * [ ] active branch user entries列挙
-* [ ] `/rollback`
-* [ ] `/rollback <N>`
+* [ ] `/undo`
+* [ ] `/undo <N>`
 * [ ] `ctx.waitForIdle()`
 * [ ] reverse mutation restore
 * [ ] `ctx.navigateTree()`
 * [ ] cancelled navigation compensation
 
-### Milestone 6 — session start rollback
+### Milestone 6 — session start undo
 
-* [ ] `/rollback start`
+* [ ] `/undo start`
 * [ ] whole-session reverse restore
 * [ ] `ctx.newSession({ parentSession })`
 * [ ] cancelled newSession compensation
@@ -1403,8 +1403,8 @@ interface を追加できる設計にする。
 
 ### Milestone 9 — UX / maintenance
 
-* [ ] `/rollback diff`
-* [ ] `/rollback status`
+* [ ] `/undo diff`
+* [ ] `/undo status`
 * [ ] startup pending recovery
 * [ ] notification dedupe
 * [ ] retention cleanup
@@ -1420,14 +1420,14 @@ interface を追加できる設計にする。
 ```text
 existing file
 → write
-→ rollback
+→ undo
 → exact original bytes
 ```
 
 ```text
 nonexistent file
 → write creates it
-→ rollback
+→ undo
 → file absent
 ```
 
@@ -1436,7 +1436,7 @@ nonexistent file
 ```text
 edit same file 3 times in one user turn
 → only first pre-image retained
-→ rollback turn
+→ undo turn
 → state before first edit
 ```
 
@@ -1447,7 +1447,7 @@ T1 edit A
 T2 edit A
 T3 edit A
 
-rollback T2
+undo T2
 → A = T1終了時点
 ```
 
@@ -1456,7 +1456,7 @@ rollback T2
 ```text
 Pi edit
 → external editor edit
-→ rollback
+→ undo
 → file skipped
 ```
 
@@ -1507,7 +1507,7 @@ snapshot storeをread-onlyにする。
 write tool
 ```
 
-自体は正常に実行され、pi-rollback warningだけ表示されること。
+自体は正常に実行され、pi-undo warningだけ表示されること。
 
 ### crash recovery
 
@@ -1597,11 +1597,11 @@ bash directory snapshotについては通常操作とは別枠とし、
 以下をすべて満たしたらv1完成とする。
 
 * [ ] `write` が変更した既存ファイルを任意の会話ターンまで復元できる
-* [ ] `write` が作成した新規ファイルをrollback時に削除できる
+* [ ] `write` が作成した新規ファイルをundo時に削除できる
 * [ ] `edit` が変更したファイルを任意の会話ターンまで復元できる
 * [ ] 同一turn・同一fileのsnapshotを重複作成しない
-* [ ] rollbackすると対象user messageを残してPi session treeがその位置へ移動する
-* [ ] `/rollback start` でPiによる当該sessionの変更をundoし、新しい空sessionへ移動する
+* [ ] undoすると対象user messageを残してPi session treeがその位置へ移動する
+* [ ] `/undo start` でPiによる当該sessionの変更をundoし、新しい空sessionへ移動する
 * [ ] user/external editをデフォルトで上書きしない
 * [ ] `--force` で明示的に上書きできる
 * [ ] bashの明示pathをbest-effortでsnapshotできる
@@ -1614,7 +1614,7 @@ bash directory snapshotについては通常操作とは別枠とし、
 * [ ] snapshot失敗時もwrite/edit/bash本体を止めない
 * [ ] snapshot失敗をユーザーへ通知する
 * [ ] total store limitを超えて無制限にディスクを消費しない
-* [ ] rollback途中の障害で可能な限り元状態へcompensating restoreできる
+* [ ] undo途中の障害で可能な限り元状態へcompensating restoreできる
 * [ ] Pi crash後にunfinished pending journalを検出できる
 
 ---
@@ -1623,12 +1623,12 @@ bash directory snapshotについては通常操作とは別枠とし、
 
 * arbitrary shell programの完全な副作用検出
 * `strace` / eBPF / filesystem filter driverによるwrite interception
-* Docker / SSH / remote filesystem rollback
+* Docker / SSH / remote filesystem undo
 * Windows filesystem filter driver
 * user editとPi editのsemantic 3-way merge
-* database rollback
-* registry rollback
-* environment variable rollback
+* database undo
+* registry undo
+* environment variable undo
 * filesystem ACL完全復元
 * Pi組み込み以外の任意custom toolの自動snapshot
 
@@ -1646,7 +1646,7 @@ bash directory snapshotについては通常操作とは別枠とし、
 3. 正確に捕捉できる write/edit を確実に戻す
 4. bash は可能な範囲で保護する
 5. 不要なsnapshotを保存しない
-6. rollback機構自身のディスク使用量を制限する
+6. undo機構自身のディスク使用量を制限する
 ```
 
 Hermes の「working directory全体をShadow Gitへ保存する」方式をそのまま移植するのではなく、
@@ -1663,4 +1663,4 @@ Pi session tree
 
 を組み合わせる。
 
-この方式を `pi-rollback` の中核アーキテクチャとする。
+この方式を `pi-undo` の中核アーキテクチャとする。

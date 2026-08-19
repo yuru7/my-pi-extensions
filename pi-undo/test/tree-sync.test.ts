@@ -6,7 +6,7 @@ import { maxFileSizeBytes } from "../src/config.ts";
 import {
   captureTrackedStates,
   executeTreeRestore,
-} from "../src/rollback.ts";
+} from "../src/undo.ts";
 import {
   collectToolCallIds,
   shouldRedoMutation,
@@ -181,7 +181,7 @@ describe("tree-synced restore", () => {
     assert.equal(readFileSync(file, "utf8"), "t2");
   });
 
-  test("returning after /rollback re-applies mutations without a leaf cache", async () => {
+  test("returning after /undo re-applies mutations without a leaf cache", async () => {
     const harness = createHarness();
     const file = join(harness.cwd, "a.txt");
     writeFileSync(file, "t0");

@@ -155,16 +155,16 @@ export function chronologicalUserIds(branch: SessionEntryLike[]): string[] {
     .map((entry) => entry.id);
 }
 
-export type ParsedRollbackArgs =
+export type ParsedUndoArgs =
   | { kind: "list" }
   | { kind: "status" }
   | { kind: "help" }
-  | { kind: "rollback"; n: number; force: boolean }
+  | { kind: "undo"; n: number; force: boolean }
   | { kind: "diff"; n: number }
   | { kind: "start"; force: boolean }
   | { kind: "error"; message: string };
 
-export function parseRollbackArgs(args: string): ParsedRollbackArgs {
+export function parseUndoArgs(args: string): ParsedUndoArgs {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) {
     return { kind: "list" };
@@ -181,7 +181,7 @@ export function parseRollbackArgs(args: string): ParsedRollbackArgs {
   }
 
   if (rest.length === 0) {
-    return force ? { kind: "error", message: "Usage: /rollback <N> --force" } : { kind: "list" };
+    return force ? { kind: "error", message: "Usage: /undo <N> --force" } : { kind: "list" };
   }
 
   const [head, ...tail] = rest;
@@ -197,7 +197,7 @@ export function parseRollbackArgs(args: string): ParsedRollbackArgs {
   if (head === "diff") {
     const n = parseTurnNumber(tail[0]);
     if (n === undefined) {
-      return { kind: "error", message: "Usage: /rollback diff <N>" };
+      return { kind: "error", message: "Usage: /undo diff <N>" };
     }
     return { kind: "diff", n };
   }
@@ -206,10 +206,10 @@ export function parseRollbackArgs(args: string): ParsedRollbackArgs {
   if (n === undefined || tail.length > 0) {
     return {
       kind: "error",
-      message: "Usage: /rollback | /rollback <N> [--force] | /rollback diff <N> | /rollback start [--force] | /rollback status",
+      message: "Usage: /undo | /undo <N> [--force] | /undo diff <N> | /undo start [--force] | /undo status",
     };
   }
-  return { kind: "rollback", n, force };
+  return { kind: "undo", n, force };
 }
 
 function parseTurnNumber(value: string | undefined): number | undefined {

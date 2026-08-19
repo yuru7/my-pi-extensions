@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RollbackConfig } from "./config.ts";
+import type { UndoConfig } from "./config.ts";
 import { maxFileSizeBytes } from "./config.ts";
 import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutation-journal.ts";
 import {
@@ -237,7 +237,7 @@ function currentDiffersFrom(
   return !fileStateEquals(current.state, expected);
 }
 
-export function createRollbackJournal(
+export function createUndoJournal(
   store: ObjectStore,
   items: RestoreItem[],
   maxFileBytes: number,
@@ -542,7 +542,7 @@ function formatSize(bytes: number): string {
 export function executeFilesystemRestore(options: {
   mutations: MutationRecord[];
   turnIds: Set<string> | "all";
-  config: RollbackConfig;
+  config: UndoConfig;
   store: ObjectStore;
   force: boolean;
 }): { plan: RestorePlan; transactionId: string } {
@@ -553,7 +553,7 @@ export function executeFilesystemRestore(options: {
     store: options.store,
     maxFileBytes: maxFileSizeBytes(options.config),
   });
-  const { transactionId } = createRollbackJournal(
+  const { transactionId } = createUndoJournal(
     options.store,
     plan.items,
     maxFileSizeBytes(options.config),
@@ -628,9 +628,9 @@ export function mutationsForTreeRedo(
 function commitRestorePlan(
   plan: RestorePlan,
   store: ObjectStore,
-  config: RollbackConfig,
+  config: UndoConfig,
 ): { plan: RestorePlan; transactionId: string } {
-  const { transactionId } = createRollbackJournal(
+  const { transactionId } = createUndoJournal(
     store,
     plan.items,
     maxFileSizeBytes(config),
@@ -651,7 +651,7 @@ export function executeTreeRestore(options: {
   newLeafId: string | null;
   journal: SessionJournal;
   store: ObjectStore;
-  config: RollbackConfig;
+  config: UndoConfig;
   force: boolean;
 }): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
   const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };

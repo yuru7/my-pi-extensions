@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, type RollbackConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, type UndoConfig } from "../src/config.ts";
 import { SessionJournal } from "../src/mutation-journal.ts";
 import { createLocalSnapshotBackend, defaultPathContext } from "../src/platform.ts";
 import { Snapshotter } from "../src/snapshot.ts";
@@ -16,12 +16,12 @@ export interface Harness {
   journal: SessionJournal;
   snapshotter: Snapshotter;
   notifications: NotifyMessage[];
-  config: RollbackConfig;
+  config: UndoConfig;
 }
 
 const tempDirs: string[] = [];
 
-export function tempDir(prefix = "pi-rollback-"): string {
+export function tempDir(prefix = "pi-undo-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
@@ -38,7 +38,7 @@ export function cleanupTempDirs(): void {
 
 export function createHarness(options: {
   sessionId?: string;
-  config?: Partial<Omit<RollbackConfig, "bash">> & { bash?: Partial<RollbackConfig["bash"]> };
+  config?: Partial<Omit<UndoConfig, "bash">> & { bash?: Partial<UndoConfig["bash"]> };
   platform?: NodeJS.Platform;
   isWsl?: boolean;
 } = {}): Harness {
@@ -46,7 +46,7 @@ export function createHarness(options: {
   const cwd = join(root, "work");
   const storeRoot = join(root, "store");
   mkdirSync(cwd, { recursive: true });
-  const config: RollbackConfig = {
+  const config: UndoConfig = {
     ...DEFAULT_CONFIG,
     ...options.config,
     bash: { ...DEFAULT_CONFIG.bash, ...options.config?.bash },
