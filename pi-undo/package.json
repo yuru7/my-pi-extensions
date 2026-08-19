@@ -1,5 +1,5 @@
 {
-  "name": "pi-undo",
+  "name": "@yuru7/pi-undo",
   "version": "0.1.0",
   "description": "A Pi extension that checkpoints file changes and undoes conversation turns",
   "keywords": [
