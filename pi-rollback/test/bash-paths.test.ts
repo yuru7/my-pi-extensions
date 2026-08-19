@@ -40,12 +40,27 @@ describe("bash path extraction", () => {
     assert.ok(extractBashTargets("sed -i s/a/b/ file.txt").paths.includes("file.txt"));
     assert.deepEqual(extractBashTargets("echo x > file.txt").paths, ["file.txt"]);
     assert.ok(extractBashTargets("find dir -name '*.js' -delete").paths.includes("dir"));
+    assert.ok(extractBashTargets("find dir -exec rm {} ;").paths.includes("dir"));
+    assert.ok(extractBashTargets("git checkout -- file.txt").paths.includes("file.txt"));
+    assert.ok(extractBashTargets("dd of=out.bin").paths.includes("out.bin"));
+  });
+
+  test("ignores inspect-only commands even when they mention paths", () => {
+    assert.deepEqual(extractBashTargets("pwd && ls -la && find . -maxdepth 3 -type f").paths, []);
+    assert.equal(extractBashTargets("pwd && ls -la && find . -maxdepth 3 -type f").mutating, false);
+    assert.deepEqual(extractBashTargets("cat ./README.md").paths, []);
+    assert.deepEqual(extractBashTargets("ls ./src").paths, []);
+    assert.deepEqual(extractBashTargets("find dir -name '*.js'").paths, []);
+    assert.equal(extractBashTargets("git status").mutating, false);
+    assert.equal(extractBashTargets("dd if=in.bin").mutating, false);
   });
 
   test("marks interpreter commands as partial coverage", () => {
     const extracted = extractBashTargets("python scripts/migrate.py");
     assert.equal(extracted.coverage, "partial");
-    assert.ok(extracted.paths.includes("scripts/migrate.py"));
+    assert.equal(extracted.interpreter, true);
+    assert.equal(extracted.mutating, true);
+    assert.deepEqual(extracted.paths, []);
   });
 
   test("detects path-like tokens", () => {

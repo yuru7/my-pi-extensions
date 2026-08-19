@@ -214,6 +214,7 @@ export interface WalkLimits {
 
 export interface WalkResult {
   paths: string[];
+  bytes: number;
   limitReached: boolean;
 }
 
@@ -276,7 +277,7 @@ export function walkCandidates(
   };
 
   visit(root);
-  return { paths, limitReached };
+  return { paths, bytes, limitReached };
 }
 
 function readdirSorted(dir: string): string[] {
@@ -365,6 +366,9 @@ export class Snapshotter {
       return;
     }
     const extracted = extractBashTargets(input.command);
+    if (!extracted.mutating && extracted.paths.length === 0 && !extracted.interpreter) {
+      return;
+    }
     if (extracted.unresolved && this.options.config.bash.warnOnUnresolvedMutation) {
       this.deduper.notify(input.sessionId, input.turnEntryId, "bash", {
         text: "pi-rollback: bash rollback coverage: partial",
@@ -374,6 +378,7 @@ export class Snapshotter {
 
     const candidates: Array<{ path: string; key: string }> = [];
     const walkRoots: string[] = [];
+    let usedBytes = 0;
     let limitReached = false;
     let coverage: Coverage = extracted.coverage;
     const limits: WalkLimits = {
@@ -388,22 +393,30 @@ export class Snapshotter {
         coverage = "partial";
         continue;
       }
+      let isDirectory = false;
       try {
-        if (lstatSync(resolved.path).isDirectory()) {
-          walkRoots.push(resolved.path);
-        }
+        isDirectory = lstatSync(resolved.path).isDirectory();
       } catch {
         // path may be created by the command
       }
       const walked = walkCandidates(resolved.path, this.options.pathContext, {
         ...limits,
         maxFiles: limits.maxFiles - candidates.length,
-        maxBytes: limits.maxBytes,
+        maxBytes: limits.maxBytes - usedBytes,
       });
+      if (isDirectory && walked.limitReached) {
+        limitReached = true;
+        coverage = "partial";
+        continue;
+      }
       if (walked.limitReached) {
         limitReached = true;
         coverage = "partial";
       }
+      if (isDirectory) {
+        walkRoots.push(resolved.path);
+      }
+      usedBytes += walked.bytes;
       for (const filePath of walked.paths) {
         candidates.push({
           path: filePath,

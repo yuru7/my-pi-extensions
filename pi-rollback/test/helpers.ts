@@ -38,7 +38,7 @@ export function cleanupTempDirs(): void {
 
 export function createHarness(options: {
   sessionId?: string;
-  config?: Partial<RollbackConfig>;
+  config?: Partial<Omit<RollbackConfig, "bash">> & { bash?: Partial<RollbackConfig["bash"]> };
   platform?: NodeJS.Platform;
   isWsl?: boolean;
 } = {}): Harness {

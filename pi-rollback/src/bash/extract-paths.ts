@@ -8,6 +8,7 @@ export interface ExtractedBashTargets {
   coverage: BashCoverage;
   unresolved: boolean;
   interpreter: boolean;
+  mutating: boolean;
 }
 
 const COMMAND_SEPARATORS = new Set(["|", "||", "&&", ";", "&"]);
@@ -50,6 +51,17 @@ const IGNORE_REDIRECT_TARGETS = new Set([
   "&1",
   "&2",
   "&-",
+]);
+
+const FIND_MUTATING_ACTIONS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fls",
+  "-fprint",
+  "-fprintf",
 ]);
 
 function baseCommand(value: string): string {
@@ -153,7 +165,8 @@ function addUnique(target: string[], value: string): void {
   }
 }
 
-function extractRedirects(tokens: Token[], into: string[]): void {
+function extractRedirects(tokens: Token[], into: string[]): boolean {
+  let mutating = false;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token.kind !== "redirect") {
@@ -162,25 +175,27 @@ function extractRedirects(tokens: Token[], into: string[]): void {
     if (token.value.includes("<") && !token.value.includes(">")) {
       continue;
     }
+    mutating = true;
     const next = tokens[i + 1];
     if (next && (next.kind === "word" || next.kind === "opaque") && !next.unresolved) {
       addUnique(into, next.value);
     }
   }
+  return mutating;
 }
 
-function extractGitPaths(tokens: Token[], into: string[]): void {
+function extractGitPaths(tokens: Token[], into: string[]): boolean {
   const words = tokens.filter((token) => token.kind === "word" || token.kind === "opaque");
   const sub = words[1]?.value;
   if (sub !== "checkout" && sub !== "restore" && sub !== "clean") {
-    return;
+    return false;
   }
   const dashDash = words.findIndex((token) => token.value === "--");
   if (dashDash >= 0) {
     for (const token of words.slice(dashDash + 1)) {
       addUnique(into, token.value);
     }
-    return;
+    return true;
   }
   if (sub === "clean") {
     const operands = nonOptionWords(words, 2);
@@ -191,11 +206,16 @@ function extractGitPaths(tokens: Token[], into: string[]): void {
         addUnique(into, operand);
       }
     }
-    return;
+    return true;
   }
   for (const operand of nonOptionWords(words, 2)) {
     addUnique(into, operand);
   }
+  return true;
+}
+
+function isFindMutating(tokens: Token[]): boolean {
+  return tokens.some((token) => token.kind === "word" && FIND_MUTATING_ACTIONS.has(token.value));
 }
 
 function extractFindPaths(tokens: Token[], into: string[]): void {
@@ -276,14 +296,16 @@ function extractMutatingCommand(tokens: Token[], into: string[]): boolean {
     case "sed":
       return extractSedPaths(prepared, into);
     case "find":
+      if (!isFindMutating(prepared)) {
+        return false;
+      }
       extractFindPaths(prepared, into);
       return true;
     case "dd":
       extractDdPaths(prepared, into);
-      return true;
+      return prepared.some((token) => token.kind === "word" && token.value.startsWith("of="));
     case "git":
-      extractGitPaths(prepared, into);
-      return true;
+      return extractGitPaths(prepared, into);
     default:
       return INTERPRETERS.has(command);
   }
@@ -296,18 +318,15 @@ export function extractBashTargets(command: string): ExtractedBashTargets {
   let interpreter = false;
   let mutating = false;
 
-  for (const token of tokens) {
-    if ((token.kind === "word" || token.kind === "opaque") && isPathLike(token.value) && !token.unresolved) {
-      addUnique(paths, token.value);
-    }
-  }
-
   for (const part of splitCommands(tokens)) {
-    extractRedirects(part, paths);
+    if (extractRedirects(part, paths)) {
+      mutating = true;
+    }
     const prepared = skipPrefixes(part);
     const commandToken = prepared.find((token) => token.kind === "word");
     if (commandToken && INTERPRETERS.has(baseCommand(commandToken.value))) {
       interpreter = true;
+      mutating = true;
     }
     if (extractMutatingCommand(part, paths)) {
       mutating = true;
@@ -319,9 +338,5 @@ export function extractBashTargets(command: string): ExtractedBashTargets {
   }
 
   const coverage: BashCoverage = unresolved || interpreter ? "partial" : "best-effort";
-  if (!mutating && paths.length === 0 && unresolved) {
-    return { paths, coverage: "partial", unresolved, interpreter };
-  }
-
-  return { paths, coverage, unresolved, interpreter };
+  return { paths, coverage, unresolved, interpreter, mutating };
 }

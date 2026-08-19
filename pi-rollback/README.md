@@ -146,7 +146,9 @@ That store path is always excluded from snapshots so the extension cannot snapsh
 | `write` / `edit` | Exact, for the local built-in tools |
 | `bash` | Best-effort path extraction and optional directory walk |
 
-`bash` coverage is partial when the command uses `$VAR`, `$(...)`, interpreters such as `python` / `node`, or hits the per-call file/byte limit. Interpreter internals are not analyzed.
+`bash` coverage is partial when the command uses `$VAR`, `$(...)`, interpreters such as `python` / `node`, or a mutating command hits the per-call file/byte limit. Inspect-only commands such as `ls`, `cat`, and `find` without `-delete` / `-exec` are not snapshotted. Interpreter internals are not analyzed.
+
+If a bash target is a directory and walking it exceeds `maxFilesPerCall` or `maxBytesPerCallMB`, that directory is skipped entirely rather than keeping a partial snapshot. Other files from the same command are still tracked when they fit.
 
 Remote or overridden tools (SSH backends, other extensions replacing `write` / `edit` / `bash`) are not snapshotted in v1.
 
@@ -171,6 +173,7 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 ## Limits and maintenance
 
 - 10 MB per file and 500 MB total store by default
+- Bash directory walks stop at 5000 files or 200 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
 - If the active session alone exceeds the cap, new snapshots are skipped and a warning is shown

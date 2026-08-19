@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { compensatingRestore, executeFilesystemRestore } from "../src/rollback.ts";
 import { parseRollbackArgs } from "../src/session.ts";
@@ -123,5 +123,60 @@ describe("rollback restore", () => {
     assert.equal(paths.some((path) => path.endsWith("same.txt")), false);
     assert.equal(harness.journal.mutations().length, 3);
     assert.equal(existsSync(join(dir, "same.txt")), true);
+  });
+
+  test("inspect-only bash commands do not snapshot the working tree", async () => {
+    const harness = createHarness();
+    writeFileSync(join(harness.cwd, "keep.txt"), "keep");
+
+    await harness.snapshotter.beginBash({
+      toolCallId: "b1",
+      command: "pwd && ls -la && find . -maxdepth 3 -type f -o -type d | head -100",
+      sessionId: "session-1",
+      turnEntryId: "turn-1",
+    });
+    writeFileSync(join(harness.cwd, "keep.txt"), "changed");
+    await harness.snapshotter.finish("b1");
+
+    assert.equal(harness.journal.mutations().length, 0);
+    assert.equal(harness.journal.listPending().length, 0);
+    assert.equal(
+      harness.notifications.some((message) => message.text.includes("Bash snapshot limit reached")),
+      false,
+    );
+  });
+
+  test("oversized bash directories are skipped instead of partially snapshotted", async () => {
+    const harness = createHarness({
+      config: { bash: { maxFilesPerCall: 3, maxBytesPerCallMB: 200 } },
+    });
+    const huge = join(harness.cwd, "huge");
+    const small = join(harness.cwd, "small");
+    mkdirSync(huge);
+    mkdirSync(small);
+    writeFileSync(join(huge, "a.txt"), "a");
+    writeFileSync(join(huge, "b.txt"), "b");
+    writeFileSync(join(huge, "c.txt"), "c");
+    writeFileSync(join(huge, "d.txt"), "d");
+    writeFileSync(join(small, "kept.txt"), "old");
+
+    await harness.snapshotter.beginBash({
+      toolCallId: "b1",
+      command: "rm -rf huge small",
+      sessionId: "session-1",
+      turnEntryId: "turn-1",
+    });
+    writeFileSync(join(huge, "a.txt"), "changed");
+    writeFileSync(join(small, "kept.txt"), "new");
+    await harness.snapshotter.finish("b1");
+
+    const paths = harness.journal.mutations().map((mutation) => mutation.path);
+    assert.equal(paths.length, 1);
+    assert.equal(paths[0]?.endsWith("kept.txt"), true);
+    assert.equal(paths.some((path) => path.split(sep).includes("huge")), false);
+    assert.equal(
+      harness.notifications.some((message) => message.text.includes("Bash snapshot limit reached")),
+      true,
+    );
   });
 });
