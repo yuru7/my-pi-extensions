@@ -47,6 +47,12 @@ export interface PendingSnapshot {
   limitReached?: boolean;
 }
 
+export interface LeafSnapshotEntry {
+  path: string;
+  key: string;
+  state: FileState;
+}
+
 export interface SessionMeta {
   sessionId: string;
   createdAt: string;
@@ -156,6 +162,25 @@ export class SessionJournal {
       }
     }
     return pending;
+  }
+
+  saveLeafSnapshot(leafId: string, entries: LeafSnapshotEntry[]): void {
+    mkdirSync(join(this.dir, "leaves"), { recursive: true });
+    const serialized = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    atomicWriteFile(this.leafPath(leafId), serialized === "" ? "" : `${serialized}\n`);
+  }
+
+  loadLeafSnapshot(leafId: string): LeafSnapshotEntry[] | undefined {
+    const file = this.leafPath(leafId);
+    if (!existsSync(file)) {
+      return undefined;
+    }
+    return readJsonl<LeafSnapshotEntry>(file);
+  }
+
+  private leafPath(leafId: string): string {
+    const safe = leafId.replace(/[^A-Za-z0-9._-]/g, "_");
+    return join(this.dir, "leaves", `${safe}.jsonl`);
   }
 
   private mutationsPath(): string {

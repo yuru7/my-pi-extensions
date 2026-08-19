@@ -31,13 +31,18 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /rollback start
 /rollback start --force
 /rollback status
+/rollback-setting-reset
 ```
 
 `/rollback` lists user turns in the current branch, newest first. Numbers in that list are what `<N>` refers to.
 
+`/rollback-setting-reset` replaces the config file with the built-in defaults.
+
+If `~/.pi/agent/pi-rollback.json` is missing, the extension writes it with those defaults on load.
+
 `--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
 
-Built-in `/tree` only moves the conversation. It does **not** restore files. Use `/rollback` when you want conversation and filesystem together.
+Built-in `/tree` also restores files by default (`syncTree: true`). Going back undoes later Pi mutations; returning to a previously visited point restores the snapshot taken when you left it. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/rollback <N>` always restores files.
 
 ## Installation
 
@@ -83,17 +88,19 @@ pi remove /absolute/path/to/my-pi-extensions/pi-rollback
 
 ## Configuration
 
-Config file (optional):
+Config file:
 
 ```text
 ~/.pi/agent/pi-rollback.json
 ```
 
-If the file is missing, defaults are used. If it cannot be parsed, Pi keeps running and you get:
+If the file is missing, it is created with the defaults below. If it cannot be parsed, Pi keeps running and you get:
 
 ```text
 pi-rollback: Failed to load configuration; using defaults.
 ```
+
+Use `/rollback-setting-reset` to overwrite the file with the same defaults.
 
 ```json
 {
@@ -102,6 +109,7 @@ pi-rollback: Failed to load configuration; using defaults.
   "maxTotalSizeMB": 500,
   "retentionDays": 14,
   "safeRestore": true,
+  "syncTree": true,
   "bash": {
     "enabled": true,
     "maxFilesPerCall": 5000,

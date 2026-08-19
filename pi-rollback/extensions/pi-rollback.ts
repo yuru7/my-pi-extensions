@@ -2,10 +2,14 @@ import type { EntryRenderer, ExtensionAPI } from "@earendil-works/pi-coding-agen
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import {
+  applyConfig,
+  DEFAULT_CONFIG,
   getConfigPath,
   getStoreRoot,
   loadConfig,
   maxFileSizeBytes,
+  saveConfig,
+  shouldRestoreOnTree,
   type RollbackConfig,
 } from "../src/config.ts";
 import {
@@ -17,12 +21,14 @@ import {
 import { runMaintenance, SessionJournal } from "../src/mutation-journal.ts";
 import { createLocalSnapshotBackend, defaultPathContext, isWsl } from "../src/platform.ts";
 import {
-  buildRestorePlan,
+  captureTrackedStates,
   compensatingRestore,
   diffPreview,
   executeFilesystemRestore,
+  executeTreeRestore,
   formatRestoreSummary,
   mutationsForTurns,
+  buildRestorePlan,
 } from "../src/rollback.ts";
 import {
   chronologicalUserIds,
@@ -81,9 +87,12 @@ interface Runtime {
 
 export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
   const home = deps.home;
-  const loaded = loadConfig(home ? getConfigPath(home) : undefined);
+  const configPath = getConfigPath(home);
+  const loaded = loadConfig(configPath);
   const config = loaded.config;
   let runtime: Runtime | undefined;
+  let pendingTreeForce = false;
+  let pendingRollbackNav = false;
   const notifyFallback: string[] = [];
 
   const show = (
@@ -145,6 +154,9 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
     if (loaded.warning) {
       ctx.ui.notify(loaded.warning, "warning");
     }
+    if (loaded.created) {
+      ctx.ui.notify("pi-rollback: wrote default configuration.", "info");
+    }
     const sessionId = ctx.sessionManager.getSessionId();
     runtime = bindRuntime(sessionId, ctx.cwd, makeNotify(ctx));
     const recovered = runtime.snapshotter.recoverPending();
@@ -165,8 +177,88 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
     runtime = undefined;
   });
 
-  pi.on("session_tree", async () => {
-    // Built-in /tree moves conversation only. Filesystem rollback is /rollback.
+  pi.on("session_before_tree", async (event) => {
+    try {
+      if (!runtime?.config.enabled) {
+        return;
+      }
+      if (!shouldRestoreOnTree(runtime.config, { fromRollbackCommand: pendingRollbackNav })) {
+        return;
+      }
+      const oldLeafId = event.preparation?.oldLeafId;
+      if (!oldLeafId) {
+        return;
+      }
+      const entries = captureTrackedStates(
+        runtime.journal.mutations(),
+        runtime.store,
+        maxFileSizeBytes(runtime.config),
+      );
+      runtime.journal.saveLeafSnapshot(oldLeafId, entries);
+    } catch {
+      // tree navigation must not fail because snapshot bookkeeping failed
+    }
+  });
+
+  pi.on("session_tree", async (event, ctx) => {
+    const force = pendingTreeForce;
+    try {
+      if (!runtime?.config.enabled) {
+        return;
+      }
+      if (
+        !shouldRestoreOnTree(runtime.config, {
+          fromExtension: event.fromExtension,
+          fromRollbackCommand: pendingRollbackNav,
+        })
+      ) {
+        return;
+      }
+      const newLeafId = event.newLeafId ?? null;
+      const oldLeafId = event.oldLeafId ?? null;
+      if (newLeafId === oldLeafId) {
+        return;
+      }
+      const sessionManager = ctx.sessionManager as {
+        getBranch: (fromId?: string) => SessionEntryLike[];
+      };
+      const newBranch = (newLeafId ? sessionManager.getBranch(newLeafId) : sessionManager.getBranch()) as SessionEntryLike[];
+      const oldBranch = (oldLeafId ? sessionManager.getBranch(oldLeafId) : []) as SessionEntryLike[];
+      const { plan, via } = executeTreeRestore({
+        mutations: runtime.journal.mutations(),
+        oldBranch,
+        newBranch,
+        newLeafId,
+        journal: runtime.journal,
+        store: runtime.store,
+        config: runtime.config,
+        force,
+      });
+      if (newLeafId) {
+        runtime.journal.saveLeafSnapshot(
+          newLeafId,
+          captureTrackedStates(
+            runtime.journal.mutations(),
+            runtime.store,
+            maxFileSizeBytes(runtime.config),
+          ),
+        );
+      }
+      if (via !== "noop" && (plan.restored > 0 || plan.skipped.length > 0)) {
+        show(
+          ctx,
+          RESULT_ENTRY,
+          formatRestoreSummary(plan, "/rollback <N> --force").split("\n"),
+        );
+      }
+    } catch (error) {
+      ctx.ui.notify(
+        error instanceof Error
+          ? `pi-rollback: Could not restore files for /tree: ${error.message}`
+          : "pi-rollback: Could not restore files for /tree.",
+        "warning",
+      );
+    }
   });
 
   pi.on("tool_call", async (event, ctx) => {
@@ -241,6 +333,7 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
           "/rollback diff <N>",
           "/rollback start [--force]",
           "/rollback status",
+          "/rollback-setting-reset",
         ]);
         return;
       }
@@ -314,19 +407,41 @@ export default function (pi: ExtensionAPI, deps: RollbackExtensionDeps = {}) {
         return;
       }
 
-      const { plan, transactionId } = executeFilesystemRestore({
-        mutations: runtime.journal.mutations(),
-        turnIds,
-        config: runtime.config,
-        store: runtime.store,
-        force: parsed.force,
-      });
-      show(ctx, RESULT_ENTRY, formatRestoreSummary(plan, `/rollback ${parsed.n} --force`).split("\n"));
-      const result = await ctx.navigateTree(turn.id, { summarize: false });
-      if (result?.cancelled) {
-        compensatingRestore(runtime.store, transactionId);
-        ctx.ui.notify("pi-rollback: tree navigation was cancelled; filesystem restore was undone.", "warning");
+      pendingRollbackNav = true;
+      pendingTreeForce = parsed.force;
+      try {
+        const result = await ctx.navigateTree(turn.id, { summarize: false });
+        if (result?.cancelled) {
+          ctx.ui.notify("pi-rollback: tree navigation was cancelled.", "warning");
+        }
+      } finally {
+        pendingRollbackNav = false;
+        pendingTreeForce = false;
       }
+    },
+  });
+
+  pi.registerCommand("rollback-setting-reset", {
+    description: "Reset pi-rollback configuration to the built-in defaults",
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI && ctx.ui.confirm) {
+        const ok = await ctx.ui.confirm(
+          "Reset pi-rollback configuration?",
+          "This replaces the config file with the default settings.",
+        );
+        if (!ok) {
+          return;
+        }
+      }
+      const next = structuredClone(DEFAULT_CONFIG);
+      try {
+        saveConfig(next, configPath);
+      } catch {
+        ctx.ui.notify("pi-rollback: Could not write the config file.", "error");
+        return;
+      }
+      applyConfig(config, next);
+      ctx.ui.notify("pi-rollback: configuration reset to defaults.", "info");
     },
   });
 }
@@ -352,6 +467,7 @@ function statusLines(runtime: Runtime): string[] {
   const cap = runtime.config.maxTotalSizeMB;
   return [
     runtime.config.enabled ? "pi-rollback enabled" : "pi-rollback disabled",
+    `  /tree restore: ${runtime.config.syncTree ? "on" : "off"}`,
     "",
     "Session:",
     `  tracked turns: ${turns.size}`,

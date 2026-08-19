@@ -6,7 +6,65 @@ export interface SessionEntryLike {
     role?: string;
     content?: unknown;
     timestamp?: number;
+    toolCallId?: string;
+    toolName?: string;
   };
+}
+
+export function isUserMessage(entry: SessionEntryLike): boolean {
+  return entry.message?.role === "user";
+}
+
+export function collectToolCallIds(branch: SessionEntryLike[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of branch) {
+    const message = entry.message;
+    if (!message) {
+      continue;
+    }
+    if (typeof message.toolCallId === "string" && message.toolCallId !== "") {
+      ids.add(message.toolCallId);
+    }
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const part of content) {
+      if (!part || typeof part !== "object") {
+        continue;
+      }
+      const record = part as { type?: unknown; id?: unknown; toolCallId?: unknown };
+      if (typeof record.toolCallId === "string" && record.toolCallId !== "") {
+        ids.add(record.toolCallId);
+      }
+      if (record.type === "toolCall" && typeof record.id === "string" && record.id !== "") {
+        ids.add(record.id);
+      }
+    }
+  }
+  return ids;
+}
+
+export function stayTurnIds(branch: SessionEntryLike[], leafId: string | null): Set<string> {
+  const ids = chronologicalUserIds(branch);
+  const leaf = branch.length > 0 ? branch[branch.length - 1] : undefined;
+  if (leaf && leaf.id === leafId && isUserMessage(leaf)) {
+    return new Set(ids.slice(0, -1));
+  }
+  return new Set(ids);
+}
+
+export function shouldUndoMutation(
+  mutation: { toolCallId: string; turnEntryId: string },
+  oldToolCallIds: Set<string>,
+  newToolCallIds: Set<string>,
+  stayTurns: Set<string>,
+): boolean {
+  const seen = oldToolCallIds.has(mutation.toolCallId) || newToolCallIds.has(mutation.toolCallId);
+  if (seen) {
+    return oldToolCallIds.has(mutation.toolCallId) && !newToolCallIds.has(mutation.toolCallId);
+  }
+  return !stayTurns.has(mutation.turnEntryId);
 }
 
 export interface UserTurn {

@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RollbackConfig } from "./config.ts";
 import { maxFileSizeBytes } from "./config.ts";
-import type { MutationRecord } from "./mutation-journal.ts";
+import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutation-journal.ts";
+import {
+  collectToolCallIds,
+  shouldUndoMutation,
+  stayTurnIds,
+  type SessionEntryLike,
+} from "./session.ts";
 import { appendJsonl, atomicWriteFile, ObjectStore, readJsonl } from "./store.ts";
 import {
   captureFileState,
@@ -459,4 +465,114 @@ export function executeFilesystemRestore(options: {
     throw error;
   }
   return { plan, transactionId };
+}
+
+export function captureTrackedStates(
+  mutations: MutationRecord[],
+  store: ObjectStore,
+  maxFileBytes: number,
+): LeafSnapshotEntry[] {
+  const seen = new Set<string>();
+  const entries: LeafSnapshotEntry[] = [];
+  for (const mutation of mutations) {
+    if (seen.has(mutation.key)) {
+      continue;
+    }
+    seen.add(mutation.key);
+    const captured = captureFileState(mutation.path, {
+      store,
+      persist: true,
+      maxFileBytes,
+    });
+    entries.push({
+      path: mutation.path,
+      key: mutation.key,
+      state: captured.status === "ok" ? captured.state : { kind: "absent" },
+    });
+  }
+  return entries;
+}
+
+export function restoreLeafEntries(entries: LeafSnapshotEntry[], store: ObjectStore): void {
+  for (const entry of entries) {
+    restoreFileState(entry.path, entry.state, store);
+  }
+}
+
+export function mutationsForTreeUndo(
+  mutations: MutationRecord[],
+  oldBranch: SessionEntryLike[],
+  newBranch: SessionEntryLike[],
+  newLeafId: string | null,
+): MutationRecord[] {
+  const oldToolCallIds = collectToolCallIds(oldBranch);
+  const newToolCallIds = collectToolCallIds(newBranch);
+  const stayTurns = stayTurnIds(newBranch, newLeafId);
+  return mutations
+    .filter((mutation) =>
+      shouldUndoMutation(mutation, oldToolCallIds, newToolCallIds, stayTurns),
+    )
+    .sort((left, right) => right.sequence - left.sequence);
+}
+
+export function executeTreeRestore(options: {
+  mutations: MutationRecord[];
+  oldBranch: SessionEntryLike[];
+  newBranch: SessionEntryLike[];
+  newLeafId: string | null;
+  journal: SessionJournal;
+  store: ObjectStore;
+  config: RollbackConfig;
+  force: boolean;
+}): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
+  const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };
+  if (options.newLeafId && !options.force) {
+    const cached = options.journal.loadLeafSnapshot(options.newLeafId);
+    if (cached && cached.length > 0) {
+      const items: RestoreItem[] = cached.map((entry) => ({
+        path: entry.path,
+        key: entry.key,
+        pre: entry.state,
+        post: { kind: "absent" },
+        coverage: "exact" as const,
+        action: actionFor(entry.state, { kind: "absent" }),
+      }));
+      const { transactionId } = createRollbackJournal(
+        options.store,
+        items,
+        maxFileSizeBytes(options.config),
+      );
+      try {
+        restoreLeafEntries(cached, options.store);
+      } catch (error) {
+        compensatingRestore(options.store, transactionId);
+        throw error;
+      }
+      const plan: RestorePlan = {
+        items,
+        restored: items.length,
+        skipped: [],
+        partialCoverage: 0,
+      };
+      return { plan, transactionId, via: "cache" };
+    }
+  }
+
+  const selected = mutationsForTreeUndo(
+    options.mutations,
+    options.oldBranch,
+    options.newBranch,
+    options.newLeafId,
+  );
+  if (selected.length === 0) {
+    return { plan: empty, transactionId: "", via: "noop" };
+  }
+  const restored = executeFilesystemRestore({
+    mutations: selected,
+    turnIds: "all",
+    config: options.config,
+    store: options.store,
+    force: options.force,
+  });
+  return { ...restored, via: "mutations" };
 }
