@@ -13,8 +13,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { deflateSync, inflateSync } from "node:zlib";
 import type { UndoConfig } from "./config.ts";
 import { maxTotalSizeBytes } from "./config.ts";
+
+const COMPRESS_MIN_BYTES = 4 * 1024;
+const DEFLATE_LEVEL = 1;
+const DEFLATE_EXT = ".deflate";
+const LEGACY_MAGIC = Buffer.from("PUO1");
+const LEGACY_HEADER_SIZE = 9;
 
 export interface MaintenanceState {
   lastGcAt?: string;
@@ -41,6 +48,48 @@ export function objectPath(root: string, hash: string): string {
   return join(root, "objects", "sha256", hash.slice(0, 2), hash);
 }
 
+function objectPaths(root: string, hash: string): { raw: string; deflate: string } {
+  const raw = objectPath(root, hash);
+  return { raw, deflate: `${raw}${DEFLATE_EXT}` };
+}
+
+function objectHashFromName(name: string): string {
+  return name.endsWith(DEFLATE_EXT) ? name.slice(0, -DEFLATE_EXT.length) : name;
+}
+
+function compressIfWorthIt(data: Uint8Array): { bytes: Uint8Array; deflate: boolean } {
+  if (data.byteLength >= COMPRESS_MIN_BYTES) {
+    const compressed = deflateSync(data, { level: DEFLATE_LEVEL });
+    if (compressed.byteLength < data.byteLength) {
+      return { bytes: compressed, deflate: true };
+    }
+  }
+  return { bytes: data, deflate: false };
+}
+
+function decodeLegacyHeaderIfPresent(stored: Buffer): Buffer {
+  if (stored.byteLength < LEGACY_HEADER_SIZE || stored.subarray(0, 4).compare(LEGACY_MAGIC) !== 0) {
+    return stored;
+  }
+  const codec = stored[4];
+  const originalSize = stored.readUInt32BE(5);
+  const payload = stored.subarray(LEGACY_HEADER_SIZE);
+  if (codec === 0) {
+    if (payload.byteLength !== originalSize) {
+      return stored;
+    }
+    return payload;
+  }
+  if (codec === 1) {
+    const inflated = inflateSync(payload);
+    if (inflated.byteLength !== originalSize) {
+      throw new Error("Corrupt CAS object: inflated size mismatch");
+    }
+    return inflated;
+  }
+  return stored;
+}
+
 export type PutResult =
   | { status: "stored"; sha256: string; bytes: number }
   | { status: "exists"; sha256: string; bytes: number }
@@ -65,40 +114,47 @@ export class ObjectStore {
   }
 
   has(hash: string): boolean {
-    return existsSync(objectPath(this.root, hash));
+    const paths = objectPaths(this.root, hash);
+    return existsSync(paths.raw) || existsSync(paths.deflate);
   }
 
   get(hash: string): Buffer | undefined {
-    const file = objectPath(this.root, hash);
-    if (!existsSync(file)) {
-      return undefined;
+    const paths = objectPaths(this.root, hash);
+    if (existsSync(paths.deflate)) {
+      return inflateSync(readFileSync(paths.deflate));
     }
-    return readFileSync(file);
+    if (existsSync(paths.raw)) {
+      return decodeLegacyHeaderIfPresent(readFileSync(paths.raw));
+    }
+    return undefined;
   }
 
   put(data: Uint8Array): PutResult {
     const hash = sha256(data);
-    const dest = objectPath(this.root, hash);
-    if (existsSync(dest)) {
+    if (this.has(hash)) {
       return { status: "exists", sha256: hash, bytes: data.byteLength };
     }
+    const stored = compressIfWorthIt(data);
     const current = this.sizeBytes();
-    if (current + data.byteLength > maxTotalSizeBytes(this.config)) {
+    if (current + stored.bytes.byteLength > maxTotalSizeBytes(this.config)) {
       return { status: "skipped-limit", sha256: hash, bytes: data.byteLength };
     }
-    atomicWriteFile(dest, data);
-    this.addSize(data.byteLength);
+    const paths = objectPaths(this.root, hash);
+    atomicWriteFile(stored.deflate ? paths.deflate : paths.raw, stored.bytes);
+    this.addSize(stored.bytes.byteLength);
     return { status: "stored", sha256: hash, bytes: data.byteLength };
   }
 
   deleteObject(hash: string): void {
-    const dest = objectPath(this.root, hash);
-    if (!existsSync(dest)) {
-      return;
+    const paths = objectPaths(this.root, objectHashFromName(hash));
+    for (const dest of [paths.raw, paths.deflate]) {
+      if (!existsSync(dest)) {
+        continue;
+      }
+      const size = statSync(dest).size;
+      unlinkSync(dest);
+      this.addSize(-size);
     }
-    const size = statSync(dest).size;
-    unlinkSync(dest);
-    this.addSize(-size);
   }
 
   sizeBytes(): number {
@@ -165,8 +221,9 @@ export class ObjectStore {
         if (!entry.isFile() || entry.name.includes(".tmp.")) {
           continue;
         }
-        if (!referenced.has(entry.name)) {
-          this.deleteObject(entry.name);
+        const hash = objectHashFromName(entry.name);
+        if (!referenced.has(hash)) {
+          this.deleteObject(hash);
           deleted += 1;
         }
       }

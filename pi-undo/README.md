@@ -4,7 +4,7 @@ A Pi extension that checkpoints file changes from `write`, `edit`, and `bash`, t
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
-Pi mutations are snapshotted **before** the tool runs. Content is stored in a SHA-256 CAS under `~/.pi/agent/pi-undo/`. Git is not required. Snapshot failures never block `write` / `edit` / `bash`.
+Pi mutations are snapshotted **before** the tool runs. Content is stored in a SHA-256 CAS under `~/.pi/agent/pi-undo/`. Objects 4 KB or larger are Deflate-compressed when that shrinks them. Git is not required. Snapshot failures never block `write` / `edit` / `bash`.
 
 ## What undo does
 
@@ -204,7 +204,7 @@ v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
 
 ## Limits and maintenance
 
-- 10 MB per file and 300 MB total store by default
+- 10 MB per file and 300 MB total store on disk by default
 - Bash directory walks stop at 2000 files or 50 MB per call by default; an oversized directory is skipped as a whole
 - Inactive session history older than `retentionDays` can be garbage-collected
 - The active session's history is not deleted automatically
