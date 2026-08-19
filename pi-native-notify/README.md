@@ -48,43 +48,11 @@ pi install npm:pi-native-notify
 
 After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
 
-### Update / uninstall
+## Quick Start
 
-```bash
-pi update npm:pi-native-notify
-pi remove npm:pi-native-notify
-```
+After `/reload`, keep using Pi as usual. Notifications are sent automatically when a run settles — no extra command is required.
 
-### Install from a local path
-
-This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-native-notify/` package.
-
-```bash
-git clone https://github.com/yuru7/my-pi-extensions.git
-pi install ./my-pi-extensions/pi-native-notify
-```
-
-If you already have a clone, pass that path:
-
-```bash
-pi install /absolute/path/to/my-pi-extensions/pi-native-notify
-```
-
-To try it temporarily:
-
-```bash
-pi -e /absolute/path/to/my-pi-extensions/pi-native-notify
-```
-
-When installed from a local path, update by running `git pull` in the repository, then restart Pi or run `/reload`. Uninstall as follows:
-
-```bash
-pi remove /absolute/path/to/my-pi-extensions/pi-native-notify
-```
-
-## Configuration
-
-Send a test notification and inspect detection:
+Confirm that your environment can deliver a native notification:
 
 ```text
 /notify-test
@@ -92,13 +60,15 @@ Send a test notification and inspect detection:
 
 This sends a native notification immediately (the time threshold is ignored). Pi also shows diagnostic details in the chat: detected environment, notification backend, and the command that was used. The details are not sent to the model.
 
-Change the threshold interactively:
+To change the "notify even while focused" threshold (default 30 seconds):
 
 ```text
 /notify-settings
 ```
 
-The current number of seconds is shown, and you can enter a new value. This is the threshold for "notify even while focused if the run took at least this long". `0` is valid and notifies on every `agent_settled`. Invalid values are rejected and the existing setting is left unchanged.
+The current number of seconds is shown, and you can enter a new value. `0` is valid and notifies on every `agent_settled`. Invalid values are rejected and the existing setting is left unchanged.
+
+## Configuration
 
 Focus detection uses the terminal's DECSET 1004 (`ESC[I` / `ESC[O`). Terminals that do not support it are not treated as unfocused; only the elapsed-time threshold applies. In tmux, `set -g focus-events on` is required.
 
