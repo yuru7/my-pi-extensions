@@ -263,17 +263,8 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         store: runtime.store,
         config: runtime.config,
         force,
+        useLeafCache: !pendingUndoNav,
       });
-      if (newLeafId) {
-        runtime.journal.saveLeafSnapshot(
-          newLeafId,
-          captureTrackedStates(
-            runtime.journal.mutations(),
-            runtime.store,
-            maxFileSizeBytes(runtime.config),
-          ),
-        );
-      }
       if (via !== "noop" && (plan.restored > 0 || plan.skipped.length > 0)) {
         show(
           ctx,

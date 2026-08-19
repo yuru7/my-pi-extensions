@@ -58,26 +58,28 @@ export function shouldUndoMutation(
   mutation: { toolCallId: string; turnEntryId: string },
   oldToolCallIds: Set<string>,
   newToolCallIds: Set<string>,
-  stayTurns: Set<string>,
+  oldStayTurns: Set<string>,
+  newStayTurns: Set<string>,
 ): boolean {
   const seen = oldToolCallIds.has(mutation.toolCallId) || newToolCallIds.has(mutation.toolCallId);
   if (seen) {
     return oldToolCallIds.has(mutation.toolCallId) && !newToolCallIds.has(mutation.toolCallId);
   }
-  return !stayTurns.has(mutation.turnEntryId);
+  return oldStayTurns.has(mutation.turnEntryId) && !newStayTurns.has(mutation.turnEntryId);
 }
 
 export function shouldRedoMutation(
   mutation: { toolCallId: string; turnEntryId: string },
   oldToolCallIds: Set<string>,
   newToolCallIds: Set<string>,
-  stayTurns: Set<string>,
+  oldStayTurns: Set<string>,
+  newStayTurns: Set<string>,
 ): boolean {
   const seen = oldToolCallIds.has(mutation.toolCallId) || newToolCallIds.has(mutation.toolCallId);
   if (seen) {
     return newToolCallIds.has(mutation.toolCallId) && !oldToolCallIds.has(mutation.toolCallId);
   }
-  return stayTurns.has(mutation.turnEntryId);
+  return newStayTurns.has(mutation.turnEntryId) && !oldStayTurns.has(mutation.turnEntryId);
 }
 
 export interface UserTurn {

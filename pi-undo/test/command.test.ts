@@ -432,6 +432,59 @@ describe("/undo command", () => {
     assert.equal(result, undefined);
   });
 
+  test("session_tree does not snapshot the destination leaf after restore", async () => {
+    const { pi, home } = setup();
+    const cwd = tempDir();
+    const file = join(cwd, "tracked.txt");
+    writeFileSync(file, "after");
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const before = store.put(Buffer.from("before"));
+    const after = store.put(Buffer.from("after"));
+    new SessionJournal(store, "s1").appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: file,
+      key: file,
+      pre: { kind: "file", sha256: before.sha256, size: before.bytes },
+      post: { kind: "file", sha256: after.sha256, size: after.bytes },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.events.get("session_tree");
+    assert.ok(handler);
+    const src = [
+      { id: "u1", type: "message", message: { role: "user", content: "edit", timestamp: 1 } },
+      { id: "a1", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }] } },
+      { id: "r1", type: "message", message: { role: "toolResult", toolCallId: "c1", toolName: "write" } },
+    ];
+    await handler(
+      { newLeafId: "dest", oldLeafId: "r1" } as never,
+      {
+        hasUI: true,
+        cwd,
+        sessionManager: {
+          getSessionId: () => "s1",
+          getBranch: (fromId?: string) => (fromId === "r1" ? src : [{ id: "dest" }]),
+        },
+        ui: { notify() {} },
+      } as never,
+    );
+
+    assert.equal(new SessionJournal(store, "s1").loadLeafSnapshot("dest"), undefined);
+  });
+
   test("session_tree with no runtime is a no-op", async () => {
     const { pi } = setup();
     const handler = pi.events.get("session_tree");

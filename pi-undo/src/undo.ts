@@ -601,10 +601,11 @@ export function mutationsForTreeUndo(
 ): MutationRecord[] {
   const oldToolCallIds = collectToolCallIds(oldBranch);
   const newToolCallIds = collectToolCallIds(newBranch);
-  const stayTurns = stayTurnIds(newBranch, newLeafId);
+  const oldStayTurns = stayTurnIds(oldBranch, oldBranch.at(-1)?.id ?? null);
+  const newStayTurns = stayTurnIds(newBranch, newLeafId);
   return mutations
     .filter((mutation) =>
-      shouldUndoMutation(mutation, oldToolCallIds, newToolCallIds, stayTurns),
+      shouldUndoMutation(mutation, oldToolCallIds, newToolCallIds, oldStayTurns, newStayTurns),
     )
     .sort((left, right) => right.sequence - left.sequence);
 }
@@ -617,10 +618,11 @@ export function mutationsForTreeRedo(
 ): MutationRecord[] {
   const oldToolCallIds = collectToolCallIds(oldBranch);
   const newToolCallIds = collectToolCallIds(newBranch);
-  const stayTurns = stayTurnIds(newBranch, newLeafId);
+  const oldStayTurns = stayTurnIds(oldBranch, oldBranch.at(-1)?.id ?? null);
+  const newStayTurns = stayTurnIds(newBranch, newLeafId);
   return mutations
     .filter((mutation) =>
-      shouldRedoMutation(mutation, oldToolCallIds, newToolCallIds, stayTurns),
+      shouldRedoMutation(mutation, oldToolCallIds, newToolCallIds, oldStayTurns, newStayTurns),
     )
     .sort((left, right) => left.sequence - right.sequence);
 }
@@ -653,9 +655,11 @@ export function executeTreeRestore(options: {
   store: ObjectStore;
   config: UndoConfig;
   force: boolean;
+  useLeafCache?: boolean;
 }): { plan: RestorePlan; transactionId: string; via: "cache" | "mutations" | "noop" } {
   const empty: RestorePlan = { items: [], restored: 0, skipped: [], partialCoverage: 0 };
-  if (options.newLeafId && !options.force) {
+  const useLeafCache = options.useLeafCache ?? true;
+  if (useLeafCache && options.newLeafId && !options.force) {
     const cached = options.journal.loadLeafSnapshot(options.newLeafId);
     if (cached && cached.length > 0) {
       const items: RestoreItem[] = cached.map((entry) => ({

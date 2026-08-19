@@ -63,6 +63,7 @@ describe("tree branch matching", () => {
         { toolCallId: "c2", turnEntryId: "u2" },
         new Set(["c1", "c2"]),
         new Set(["c1"]),
+        new Set(["u1", "u2"]),
         new Set(["u1"]),
       ),
       true,
@@ -72,6 +73,7 @@ describe("tree branch matching", () => {
         { toolCallId: "c1", turnEntryId: "u1" },
         new Set(["c1", "c2"]),
         new Set(["c1"]),
+        new Set(["u1", "u2"]),
         new Set(["u1"]),
       ),
       false,
@@ -84,6 +86,7 @@ describe("tree branch matching", () => {
         { toolCallId: "c2", turnEntryId: "u2" },
         new Set(["c1"]),
         new Set(["c1", "c2"]),
+        new Set(["u1"]),
         new Set(["u1", "u2"]),
       ),
       true,
@@ -93,9 +96,36 @@ describe("tree branch matching", () => {
         { toolCallId: "c1", turnEntryId: "u1" },
         new Set(["c1"]),
         new Set(["c1", "c2"]),
+        new Set(["u1"]),
         new Set(["u1", "u2"]),
       ),
       false,
+    );
+  });
+
+  test("does not undo abandoned-branch mutations missing from both paths", () => {
+    assert.equal(
+      shouldUndoMutation(
+        { toolCallId: "c3", turnEntryId: "u3" },
+        new Set(["c1", "c2"]),
+        new Set(["c1"]),
+        new Set(["u1", "u2"]),
+        new Set(["u1"]),
+      ),
+      false,
+    );
+  });
+
+  test("unseen mutations still undo when their turn left the old path", () => {
+    assert.equal(
+      shouldUndoMutation(
+        { toolCallId: "c2", turnEntryId: "u2" },
+        new Set(),
+        new Set(),
+        new Set(["u1", "u2"]),
+        new Set(["u1"]),
+      ),
+      true,
     );
   });
 });
@@ -179,6 +209,82 @@ describe("tree-synced restore", () => {
     });
     assert.equal(forward.via, "cache");
     assert.equal(readFileSync(file, "utf8"), "t2");
+  });
+
+  test("/undo ignores a stale leaf cache and restores from mutations", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "a.txt");
+    writeFileSync(file, "t0");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c1",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(file, "t1");
+    await harness.snapshotter.finish("c1");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c2",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u2",
+    });
+    writeFileSync(file, "t2");
+    await harness.snapshotter.finish("c2");
+
+    const fullBranch = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+      user("u2"),
+      assistantTool("a2", "c2"),
+      toolResult("r2", "c2"),
+    ];
+    const rolledBackBranch = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+    ];
+
+    harness.journal.saveLeafSnapshot(
+      "r1",
+      captureTrackedStates(
+        harness.journal.mutations(),
+        harness.store,
+        maxFileSizeBytes(harness.config),
+      ),
+    );
+
+    const cached = executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: fullBranch,
+      newBranch: rolledBackBranch,
+      newLeafId: "r1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+    });
+    assert.equal(cached.via, "cache");
+    assert.equal(readFileSync(file, "utf8"), "t2");
+
+    const undone = executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: fullBranch,
+      newBranch: rolledBackBranch,
+      newLeafId: "r1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+      useLeafCache: false,
+    });
+    assert.equal(undone.via, "mutations");
+    assert.equal(readFileSync(file, "utf8"), "t1");
   });
 
   test("returning after /undo re-applies mutations without a leaf cache", async () => {
@@ -382,5 +488,100 @@ describe("tree-synced restore", () => {
     });
     assert.equal(readFileSync(file, "utf8"), "user");
     assert.equal(forward.plan.skipped.length, 1);
+  });
+
+  test("later undo does not skip because of an already-abandoned turn", async () => {
+    const harness = createHarness();
+    const file = join(harness.cwd, "a.txt");
+    writeFileSync(file, "t0");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c1",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u1",
+    });
+    writeFileSync(file, "t1");
+    await harness.snapshotter.finish("c1");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c2",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u2",
+    });
+    writeFileSync(file, "t2");
+    await harness.snapshotter.finish("c2");
+
+    await harness.snapshotter.beginWriteEdit({
+      toolName: "edit",
+      toolCallId: "c3",
+      path: "a.txt",
+      sessionId: "session-1",
+      turnEntryId: "u3",
+    });
+    writeFileSync(file, "t3");
+    await harness.snapshotter.finish("c3");
+
+    const afterU1 = [
+      user("u1"),
+      assistantTool("a1", "c1"),
+      toolResult("r1", "c1"),
+    ];
+    const afterU2 = [
+      ...afterU1,
+      user("u2"),
+      assistantTool("a2", "c2"),
+      toolResult("r2", "c2"),
+    ];
+    const fullBranch = [
+      ...afterU2,
+      user("u3"),
+      assistantTool("a3", "c3"),
+      toolResult("r3", "c3"),
+    ];
+
+    executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: fullBranch,
+      newBranch: afterU1,
+      newLeafId: "r1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+      useLeafCache: false,
+    });
+    assert.equal(readFileSync(file, "utf8"), "t1");
+
+    executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: afterU1,
+      newBranch: afterU2,
+      newLeafId: "r2",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+      useLeafCache: false,
+    });
+    assert.equal(readFileSync(file, "utf8"), "t2");
+
+    const back = executeTreeRestore({
+      mutations: harness.journal.mutations(),
+      oldBranch: afterU2,
+      newBranch: afterU1,
+      newLeafId: "r1",
+      journal: harness.journal,
+      store: harness.store,
+      config: harness.config,
+      force: false,
+      useLeafCache: false,
+    });
+    assert.equal(back.via, "mutations");
+    assert.equal(back.plan.skipped.length, 0);
+    assert.equal(readFileSync(file, "utf8"), "t1");
   });
 });
