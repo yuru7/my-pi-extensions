@@ -1,0 +1,181 @@
+# pi-rollback
+
+A Pi extension that checkpoints file changes from `write`, `edit`, and `bash`, then rolls the current session back to an earlier user turn — or to a new empty session.
+
+Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
+
+Pi mutations are snapshotted **before** the tool runs. Content is stored in a SHA-256 CAS under `~/.pi/agent/pi-rollback/`. Git is not required. Snapshot failures never block `write` / `edit` / `bash`.
+
+## What rollback does
+
+### `/rollback <N>` — conversation turn
+
+- Keeps the selected user message
+- Drops the assistant replies and tool calls after that message from the active conversation path (`navigateTree`, no branch summary)
+- Restores files that Pi changed from that turn onward, as far as snapshots allow
+
+### `/rollback start` — session start
+
+- Restores every mutation this extension captured in the current session
+- Opens a new empty session with the old session as `parentSession`
+
+This is **not** a byte-for-byte disk image of session start. External edits that Pi never overwrote are kept. If Pi later edited the same file, the snapshot is the file as it existed immediately before that Pi write.
+
+## Commands
+
+```text
+/rollback
+/rollback <N>
+/rollback <N> --force
+/rollback diff <N>
+/rollback start
+/rollback start --force
+/rollback status
+```
+
+`/rollback` lists user turns in the current branch, newest first. Numbers in that list are what `<N>` refers to.
+
+`--force` overwrites files that changed after Pi's last write. The default `safeRestore` skips those files.
+
+Built-in `/tree` only moves the conversation. It does **not** restore files. Use `/rollback` when you want conversation and filesystem together.
+
+## Installation
+
+```bash
+pi install npm:pi-rollback
+```
+
+After installing, restart Pi or run `/reload`. Because the package includes the `pi-package` keyword, it will also appear on [Pi Packages](https://pi.dev/packages) after publication.
+
+### Update / uninstall
+
+```bash
+pi update npm:pi-rollback
+pi remove npm:pi-rollback
+```
+
+### Install from a local path
+
+This repository is a monorepo for multiple extensions. During development or before publication, point Pi at the `pi-rollback/` package.
+
+```bash
+git clone https://github.com/yuru7/my-pi-extensions.git
+pi install ./my-pi-extensions/pi-rollback
+```
+
+If you already have a clone, pass that path:
+
+```bash
+pi install /absolute/path/to/my-pi-extensions/pi-rollback
+```
+
+To try it temporarily:
+
+```bash
+pi -e /absolute/path/to/my-pi-extensions/pi-rollback
+```
+
+When installed from a local path, update by running `git pull` in the repository, then restart Pi or run `/reload`. Uninstall as follows:
+
+```bash
+pi remove /absolute/path/to/my-pi-extensions/pi-rollback
+```
+
+## Configuration
+
+Config file (optional):
+
+```text
+~/.pi/agent/pi-rollback.json
+```
+
+If the file is missing, defaults are used. If it cannot be parsed, Pi keeps running and you get:
+
+```text
+pi-rollback: Failed to load configuration; using defaults.
+```
+
+```json
+{
+  "enabled": true,
+  "maxFileSizeMB": 10,
+  "maxTotalSizeMB": 500,
+  "retentionDays": 14,
+  "safeRestore": true,
+  "bash": {
+    "enabled": true,
+    "maxFilesPerCall": 5000,
+    "maxBytesPerCallMB": 200,
+    "warnOnUnresolvedMutation": true
+  },
+  "excludeGlobs": []
+}
+```
+
+Snapshot data (not this config file) lives in:
+
+```text
+~/.pi/agent/pi-rollback/
+```
+
+That store path is always excluded from snapshots so the extension cannot snapshot itself.
+
+`.env` and `$HOME` are not excluded by name. Add globs only when you want them skipped:
+
+```json
+{
+  "excludeGlobs": [
+    "**/*.iso",
+    "**/node_modules/**"
+  ]
+}
+```
+
+## Coverage
+
+| Tool | Coverage |
+| --- | --- |
+| `write` / `edit` | Exact, for the local built-in tools |
+| `bash` | Best-effort path extraction and optional directory walk |
+
+`bash` coverage is partial when the command uses `$VAR`, `$(...)`, interpreters such as `python` / `node`, or hits the per-call file/byte limit. Interpreter internals are not analyzed.
+
+Remote or overridden tools (SSH backends, other extensions replacing `write` / `edit` / `bash`) are not snapshotted in v1.
+
+Virtual filesystems are skipped: `/proc`, `/sys`, `/dev`, `/run`, and Windows `\\.\` device paths. Sockets, FIFOs, and device files are not stored. Symlinks are not walked recursively.
+
+## Safe restore
+
+After each recorded mutation, the post-change hash is stored. On rollback, a file is skipped when the current hash does not match Pi's last write — usually because you edited it afterwards.
+
+```text
+Restored: 7 files
+Skipped: 2 files modified after Pi's last write
+
+  src/config.ts
+  README.md
+
+Use /rollback 3 --force to overwrite them.
+```
+
+v1 does not 3-way merge "Pi edits" vs "your edits" on the same file.
+
+## Limits and maintenance
+
+- 10 MB per file and 500 MB total store by default
+- Inactive session history older than `retentionDays` can be garbage-collected
+- The active session's history is not deleted automatically
+- If the active session alone exceeds the cap, new snapshots are skipped and a warning is shown
+- Unfinished `pending/` journals from a crash are reported on the next `session_start`
+
+## Supported platforms
+
+Linux, macOS, Windows, and Pi running inside WSL. Path forms such as `C:\...`, `C:/...`, Git Bash `/c/...`, WSL `/mnt/c/...`, and UNC `\\server\share\...` are normalized where the current process can actually open them.
+
+## Development
+
+```bash
+cd pi-rollback
+pnpm install
+pnpm test
+```
