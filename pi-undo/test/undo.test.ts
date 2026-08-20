@@ -7,6 +7,7 @@ import {
   executeFilesystemRestore,
   formatOverwriteSelectTitle,
   formatTreeRestoreSelectTitle,
+  listEditedFilePaths,
   listUndoPoints,
   overwriteSelectOptions,
   planTreeRestore,
@@ -88,6 +89,100 @@ describe("indexFileChangingTurns", () => {
         { id: "c", index: 1 },
       ],
     );
+  });
+});
+
+describe("listEditedFilePaths", () => {
+  const file = (sha: string) => ({ kind: "file" as const, sha256: sha.repeat(64).slice(0, 64), size: 1 });
+  const mutation = (overrides: {
+    toolCallId: string;
+    turnEntryId?: string;
+    path: string;
+    key?: string;
+    sequence?: number;
+    pre?: { kind: "absent" } | { kind: "file"; sha256: string; size: number };
+    post?: { kind: "absent" } | { kind: "file"; sha256: string; size: number };
+  }) => ({
+    sequence: overrides.sequence ?? 1,
+    sessionId: "s",
+    turnEntryId: overrides.turnEntryId ?? "u1",
+    toolCallId: overrides.toolCallId,
+    toolName: "write" as const,
+    path: overrides.path,
+    key: overrides.key ?? overrides.path,
+    pre: overrides.pre ?? { kind: "absent" as const },
+    post: overrides.post ?? file("a"),
+    coverage: "exact" as const,
+    timestamp: "2020-01-01T00:00:00.000Z",
+  });
+
+  test("lists unique relative paths with A/M/D prefixes for the current branch", () => {
+    const cwd = "/home/dev/proj";
+    const paths = listEditedFilePaths(
+      [
+        mutation({ toolCallId: "c1", path: `${cwd}/src/b.ts`, pre: file("b"), post: { kind: "absent" } }),
+        mutation({ toolCallId: "c2", path: `${cwd}/src/a.ts` }),
+        mutation({ toolCallId: "c2", path: `${cwd}/src/a.ts`, sequence: 2, pre: file("a"), post: file("c") }),
+        mutation({
+          toolCallId: "c4",
+          path: `${cwd}/src/c.ts`,
+          sequence: 3,
+          pre: file("d"),
+          post: file("e"),
+        }),
+        mutation({ toolCallId: "c3", turnEntryId: "u-other", path: `${cwd}/src/skip.ts` }),
+      ],
+      cwd,
+      [
+        { id: "u1", message: { role: "user", content: "edit" } },
+        {
+          id: "a1",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "c1" }, { type: "toolCall", id: "c2" }, { type: "toolCall", id: "c4" }],
+          },
+        },
+      ],
+      "linux",
+    );
+    assert.deepEqual(paths, ["A  src/a.ts", "D  src/b.ts", "M  src/c.ts"]);
+  });
+
+  test("includes session-start mutations with no user turn", () => {
+    const cwd = "/home/dev/proj";
+    const paths = listEditedFilePaths(
+      [mutation({ toolCallId: "c0", turnEntryId: "__session__", path: `${cwd}/boot.ts` })],
+      cwd,
+      [],
+      "linux",
+    );
+    assert.deepEqual(paths, ["A  boot.ts"]);
+  });
+
+  test("omits a file whose start and current states match", () => {
+    const cwd = "/home/dev/proj";
+    const original = file("a");
+    const paths = listEditedFilePaths(
+      [
+        mutation({ toolCallId: "c1", path: `${cwd}/tmp.ts`, pre: { kind: "absent" }, post: original }),
+        mutation({
+          toolCallId: "c2",
+          path: `${cwd}/tmp.ts`,
+          sequence: 2,
+          pre: original,
+          post: { kind: "absent" },
+        }),
+      ],
+      cwd,
+      [
+        {
+          id: "a1",
+          message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }, { type: "toolCall", id: "c2" }] },
+        },
+      ],
+      "linux",
+    );
+    assert.deepEqual(paths, []);
   });
 });
 

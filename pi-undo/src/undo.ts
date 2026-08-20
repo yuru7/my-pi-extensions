@@ -5,6 +5,7 @@ import type { UndoConfig } from "./config.ts";
 import { maxFileSizeBytes } from "./config.ts";
 import type { LeafSnapshotEntry, MutationRecord, SessionJournal } from "./mutation-journal.ts";
 import { removeJournalDir } from "./mutation-journal.ts";
+import { toRelativeDisplayPath } from "./platform.ts";
 import {
   collectToolCallIds,
   indexFileChangingTurns,
@@ -53,6 +54,16 @@ export function actionFor(pre: FileState, post: FileState): RestoreAction {
   }
   if (pre.kind !== "absent" && post.kind === "absent") {
     return "add";
+  }
+  return "modify";
+}
+
+export function changeActionFor(start: FileState, current: FileState): RestoreAction {
+  if (start.kind === "absent" && current.kind !== "absent") {
+    return "add";
+  }
+  if (start.kind !== "absent" && current.kind === "absent") {
+    return "delete";
   }
   return "modify";
 }
@@ -955,4 +966,39 @@ export function executeTreeRestore(options: {
     return { ...planned, transactionId: "" };
   }
   return { ...commitRestorePlan(planned.plan, options.store, options.config), via: planned.via };
+}
+
+export function listEditedFilePaths(
+  mutations: MutationRecord[],
+  cwd: string,
+  branch: SessionEntryLike[],
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const toolCallIds = collectToolCallIds(branch);
+  const byKey = new Map<string, { path: string; start: FileState; current: FileState }>();
+  const ordered = [...mutations].sort((left, right) => left.sequence - right.sequence);
+  for (const mutation of ordered) {
+    if (!toolCallIds.has(mutation.toolCallId) && mutation.turnEntryId !== "__session__") {
+      continue;
+    }
+    const existing = byKey.get(mutation.key);
+    if (!existing) {
+      byKey.set(mutation.key, {
+        path: mutation.path,
+        start: mutation.pre,
+        current: mutation.post,
+      });
+      continue;
+    }
+    existing.path = mutation.path;
+    existing.current = mutation.post;
+  }
+  return [...byKey.values()]
+    .filter((file) => !fileStateEquals(file.start, file.current))
+    .map((file) => ({
+      path: toRelativeDisplayPath(file.path, cwd, platform),
+      action: changeActionFor(file.start, file.current),
+    }))
+    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+    .map((file) => `${restoreActionLabel(file.action)}  ${file.path}`);
 }

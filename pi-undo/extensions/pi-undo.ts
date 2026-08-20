@@ -29,6 +29,7 @@ import {
   formatOverwriteSelectTitle,
   formatRestoreSummary,
   formatTreeRestoreSelectTitle,
+  listEditedFilePaths,
   listUndoPoints,
   overlayFromEntries,
   overwriteSelectOptions,
@@ -53,6 +54,7 @@ const LIST_ENTRY = "pi-undo/list";
 const STATUS_ENTRY = "pi-undo/status";
 const DIFF_ENTRY = "pi-undo/diff";
 const RESULT_ENTRY = "pi-undo/result";
+const EDITED_FILES_ENTRY = "pi-undo/edited-files";
 const CONFIRM_NO = "No";
 const CONFIRM_YES = "Yes";
 
@@ -294,6 +296,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   pi.registerEntryRenderer(STATUS_ENTRY, renderLines);
   pi.registerEntryRenderer(DIFF_ENTRY, renderLines);
   pi.registerEntryRenderer(RESULT_ENTRY, renderLines);
+  pi.registerEntryRenderer(EDITED_FILES_ENTRY, renderLines);
 
   pi.on("session_start", async (_event, ctx) => {
     if (loaded.warning) {
@@ -577,6 +580,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
           "/undo-diff [N]",
           "/undo-start [--force]",
           "/undo-status",
+          "/edited-file-list",
           "/redo [--force]",
           "/pi-undo:reset-setting",
           "/pi-undo:clear-undo-store",
@@ -804,6 +808,25 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     description: "Show pi-undo status for the current session",
     handler: async (_args, ctx) => {
       show(ctx, STATUS_ENTRY, statusLines(ensureRuntime(ctx)));
+    },
+  });
+
+  pi.registerCommand("edited-file-list", {
+    description: "List files changed since this session started",
+    handler: async (_args, ctx) => {
+      const current = ensureRuntime(ctx);
+      const branch = ctx.sessionManager.getBranch() as SessionEntryLike[];
+      const paths = listEditedFilePaths(
+        current.journal.mutations(),
+        ctx.cwd,
+        branch,
+        deps.platform,
+      );
+      if (paths.length === 0) {
+        show(ctx, EDITED_FILES_ENTRY, ["No edited files since session start."]);
+        return;
+      }
+      show(ctx, EDITED_FILES_ENTRY, ["Edited files (since session start):", ...paths]);
     },
   });
 

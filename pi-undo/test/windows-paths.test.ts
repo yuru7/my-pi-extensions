@@ -8,7 +8,7 @@ import {
   isWindowsDrivePath,
   normalizeWindowsSeparators,
 } from "../src/bash/windows-path.ts";
-import { resolveCanonicalPath, type PathContext } from "../src/platform.ts";
+import { resolveCanonicalPath, toRelativeDisplayPath, type PathContext } from "../src/platform.ts";
 
 function ctx(partial: Partial<PathContext> & Pick<PathContext, "platform">): PathContext {
   return {
@@ -57,6 +57,36 @@ describe("Windows path normalization", () => {
     assert.equal(
       canonicalizePathKey("C:\\Foo\\bar.txt", "win32"),
       canonicalizePathKey("c:\\foo\\BAR.txt", "win32"),
+    );
+  });
+});
+
+describe("toRelativeDisplayPath", () => {
+  test("returns a posix-style path under cwd", () => {
+    assert.equal(
+      toRelativeDisplayPath("/home/dev/proj/src/a.ts", "/home/dev/proj", "linux"),
+      "src/a.ts",
+    );
+  });
+
+  test("keeps a relative path when the file is outside cwd", () => {
+    assert.equal(
+      toRelativeDisplayPath("/tmp/x", "/home/dev/proj", "linux"),
+      "../../../tmp/x",
+    );
+  });
+
+  test("uses forward slashes for Windows paths under cwd", () => {
+    assert.equal(
+      toRelativeDisplayPath("C:\\Users\\test\\src\\a.ts", "C:\\Users\\test", "win32"),
+      "src/a.ts",
+    );
+  });
+
+  test("normalizes a different Windows drive to forward slashes", () => {
+    assert.equal(
+      toRelativeDisplayPath("D:\\other\\a.ts", "C:\\Users\\test", "win32"),
+      "D:/other/a.ts",
     );
   });
 });

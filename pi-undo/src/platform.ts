@@ -127,6 +127,20 @@ export function isInsideDir(parent: string, child: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
+export function toRelativeDisplayPath(
+  filePath: string,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const impl = platform === "win32" ? path.win32 : path.posix;
+  const relative = impl.relative(cwd, filePath);
+  if (relative === "") {
+    return ".";
+  }
+  const normalized = impl.isAbsolute(relative) ? filePath : relative;
+  return normalized.split(/[\\/]/).join("/");
+}
+
 export function isVirtualFsPath(filePath: string): boolean {
   const posix = filePath.replaceAll("\\", "/");
   return POSIX_VIRTUAL_PREFIXES.some(

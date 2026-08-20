@@ -43,6 +43,7 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 /undo-status
 /redo
 /redo --force
+/edited-file-list
 /pi-undo:reset-setting
 /pi-undo:clear-undo-store
 ```
@@ -56,6 +57,8 @@ This is **not** a byte-for-byte disk image of session start. External edits that
 `/undo-status` shows store usage and how many turns and files this session has tracked.
 
 `/redo` returns to the conversation and files as they were immediately before the last `/undo` or `/undo <N>`. There is nothing to redo until an undo succeeds.
+
+`/edited-file-list` lists the unique files Pi changed from session start to the current conversation point, as paths relative to the working directory. Each line is prefixed with `A` (added), `M` (modified), or `D` (deleted).
 
 `/pi-undo:reset-setting` replaces the config file with the built-in defaults. You get a selector: **No** (default) or **Yes**. Esc cancels.
 

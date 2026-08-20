@@ -76,6 +76,7 @@ describe("/undo command", () => {
     assert.equal(pi.commands.has("undo-diff"), true);
     assert.equal(pi.commands.has("undo-start"), true);
     assert.equal(pi.commands.has("undo-status"), true);
+    assert.equal(pi.commands.has("edited-file-list"), true);
     assert.equal(pi.commands.has("redo"), true);
     assert.equal(pi.commands.has("pi-undo:reset-setting"), true);
     assert.equal(pi.commands.has("pi-undo:clear-undo-store"), true);
@@ -98,6 +99,10 @@ describe("/undo command", () => {
     assert.equal(
       pi.commands.get("undo-status")?.description,
       "Show pi-undo status for the current session",
+    );
+    assert.equal(
+      pi.commands.get("edited-file-list")?.description,
+      "List files changed since this session started",
     );
     assert.equal(
       pi.commands.get("redo")?.description,
@@ -627,6 +632,116 @@ describe("/undo command", () => {
     assert.equal(diffs.length, 2);
     const secondLines = (diffs[1]?.data as { lines: Array<{ text: string }> }).lines;
     assert.equal(secondLines[0]?.text, "Undo to turn 1");
+  });
+
+  test("/edited-file-list shows unique relative paths for the current branch", async () => {
+    const { pi, home } = setup();
+    const cwd = tempDir();
+    const store = new ObjectStore(getStoreRoot(home), DEFAULT_CONFIG);
+    const stored = store.put(Buffer.from("snapshot-bytes"));
+    const journal = new SessionJournal(store, "s1");
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c1",
+      toolName: "write",
+      path: join(cwd, "src", "b.ts"),
+      key: join(cwd, "src", "b.ts"),
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c2",
+      toolName: "write",
+      path: join(cwd, "src", "a.ts"),
+      key: join(cwd, "src", "a.ts"),
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u1",
+      toolCallId: "c2",
+      toolName: "write",
+      path: join(cwd, "src", "a.ts"),
+      key: join(cwd, "src", "a.ts"),
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+    journal.appendMutation({
+      sessionId: "s1",
+      turnEntryId: "u-other",
+      toolCallId: "c-other",
+      toolName: "write",
+      path: join(cwd, "src", "skip.ts"),
+      key: join(cwd, "src", "skip.ts"),
+      pre: { kind: "file", sha256: stored.sha256, size: 14 },
+      post: { kind: "absent" },
+      coverage: "exact",
+      timestamp: new Date().toISOString(),
+    });
+
+    const start = pi.events.get("session_start");
+    assert.ok(start);
+    await start(undefined as never, {
+      cwd,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+      ui: { notify() {} },
+    } as never);
+
+    const handler = pi.commands.get("edited-file-list")?.handler;
+    assert.ok(handler);
+    await handler("", {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [
+          { id: "u1", message: { role: "user", content: "edit files", timestamp: 1 } },
+          {
+            id: "a1",
+            message: { role: "assistant", content: [{ type: "toolCall", id: "c1" }, { type: "toolCall", id: "c2" }] },
+          },
+        ],
+      },
+      cwd,
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+
+    const listed = pi.entries.find((entry) => entry.customType === "pi-undo/edited-files");
+    assert.ok(listed);
+    const lines = (listed.data as { lines: Array<{ text: string }> }).lines.map((line) => line.text);
+    assert.deepEqual(lines, ["Edited files (since session start):", "D  src/a.ts", "D  src/b.ts"]);
+  });
+
+  test("/edited-file-list is empty when nothing has been changed", async () => {
+    const { pi } = setup();
+    const handler = pi.commands.get("edited-file-list")?.handler;
+    assert.ok(handler);
+    await handler("", {
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getBranch: () => [{ id: "u1", message: { role: "user", content: "hello", timestamp: 1 } }],
+      },
+      cwd: process.cwd(),
+      waitForIdle: async () => {},
+      ui: { notify() {} },
+    } as never);
+
+    const listed = pi.entries.find((entry) => entry.customType === "pi-undo/edited-files");
+    assert.ok(listed);
+    const lines = (listed.data as { lines: Array<{ text: string }> }).lines.map((line) => line.text);
+    assert.deepEqual(lines, ["No edited files since session start."]);
   });
 
   test("/undo <N> ignores turns that did not change files", async () => {
