@@ -65,7 +65,7 @@ If `~/.pi/agent/pi-undo.json` is missing, the extension writes it with those def
 
 On `/undo`, `/redo`, and `/tree`, files that changed after Pi's last write are not overwritten automatically. You get a selector: **No (Do not overwrite)** (default) or **Yes (Overwrite)**. Esc cancels the navigation. `--force` on `/undo` and `/redo` overwrites without asking.
 
-Built-in `/tree` also restores files by default (`syncTree: true`). Going to a conversation point restores Pi's last write at that point. An `external edit` undo point restores Pi's last write, discarding that outside change. `/undo` of a later turn restores files as they were immediately before that turn's tools, including those edits. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
+Built-in `/tree` (also opened by Esc + Esc, a quick double-press) restores files by default (`syncTree: true`). Before restoring, you get a selector: **No (Do not restore)** (default) keeps the current files and only moves the conversation. **Yes (Restore)** restores Pi's last write at that point. If some of those files also changed after Pi's last write, a second selector asks whether to overwrite them. Esc on either selector cancels the navigation. An `external edit` undo point restores Pi's last write, discarding that outside change. `/undo` of a later turn restores files as they were immediately before that turn's tools, including those edits. Set `syncTree` to `false` if you want `/tree` to move the conversation only. `/undo <N>` and `/redo` always restore files.
 
 ## Installation
 
@@ -179,6 +179,18 @@ Virtual filesystems are skipped: `/proc`, `/sys`, `/dev`, `/run`, and Windows `\
 After each recorded mutation, the post-change hash is stored. On restore, a file is treated as externally edited when the current hash does not match Pi's last write.
 
 `/undo`, `/redo`, and `/tree` ask before overwriting those files. **No (Do not overwrite)** is the default selection and keeps your edits. Move the selection to **Yes (Overwrite)** to overwrite. Esc cancels the navigation. `--force` on `/undo` and `/redo` skips the prompt and overwrites.
+
+On `/tree`, you are also asked every time whether to restore files at all. **No (Do not restore)** is the default and only moves the conversation. If you choose **Yes (Restore)** and some files were modified after Pi's last write, the overwrite selector appears next.
+
+```text
+Restore 2 files to match this conversation point?
+
+  src/config.ts
+  README.md
+
+→ No (Do not restore)
+  Yes (Restore)
+```
 
 ```text
 Overwrite 2 files modified after Pi's last write?

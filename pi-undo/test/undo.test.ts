@@ -6,9 +6,11 @@ import {
   compensatingRestore,
   executeFilesystemRestore,
   formatOverwriteSelectTitle,
+  formatTreeRestoreSelectTitle,
   listUndoPoints,
   overwriteSelectOptions,
   planTreeRestore,
+  treeRestoreSelectOptions,
 } from "../src/undo.ts";
 import { indexFileChangingTurns, listUserTurns, parseOptionalForce, parseRequiredTurn, parseUndoArgs } from "../src/session.ts";
 import { maxFileSizeBytes } from "../src/config.ts";
@@ -409,6 +411,22 @@ describe("overwrite select", () => {
   test("describes skipped files in the selector title", () => {
     const title = formatOverwriteSelectTitle(["src/a.ts", "README.md"]);
     assert.equal(title.startsWith("Overwrite 2 files modified after Pi's last write?"), true);
+    assert.equal(title.includes("src/a.ts"), true);
+    assert.equal(title.includes("README.md"), true);
+  });
+});
+
+describe("tree restore select", () => {
+  test("lists No before Yes so No is the default selection", () => {
+    assert.deepEqual(treeRestoreSelectOptions(), [
+      "No (Do not restore)",
+      "Yes (Restore)",
+    ]);
+  });
+
+  test("describes restore files in the selector title", () => {
+    const title = formatTreeRestoreSelectTitle(["src/a.ts", "README.md"]);
+    assert.equal(title.startsWith("Restore 2 files to match this conversation point?"), true);
     assert.equal(title.includes("src/a.ts"), true);
     assert.equal(title.includes("README.md"), true);
   });

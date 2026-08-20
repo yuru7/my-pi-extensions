@@ -314,6 +314,23 @@ export function formatOverwriteSelectTitle(skipped: string[]): string {
   ].join("\n");
 }
 
+export const TREE_RESTORE_SELECT_NO = "No (Do not restore)";
+export const TREE_RESTORE_SELECT_YES = "Yes (Restore)";
+
+export function treeRestoreSelectOptions(): string[] {
+  return [TREE_RESTORE_SELECT_NO, TREE_RESTORE_SELECT_YES];
+}
+
+export function formatTreeRestoreSelectTitle(paths: string[]): string {
+  const count = paths.length;
+  const noun = count === 1 ? "file" : "files";
+  return [
+    `Restore ${count} ${noun} to match this conversation point?`,
+    "",
+    ...paths.map((path) => `  ${path}`),
+  ].join("\n");
+}
+
 export function restoreActionLabel(action: RestoreAction): string {
   switch (action) {
     case "modify":

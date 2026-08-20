@@ -28,11 +28,14 @@ import {
   executeTreeRestore,
   formatOverwriteSelectTitle,
   formatRestoreSummary,
+  formatTreeRestoreSelectTitle,
   listUndoPoints,
   overlayFromEntries,
   overwriteSelectOptions,
   OVERWRITE_SELECT_YES,
   planTreeRestore,
+  TREE_RESTORE_SELECT_YES,
+  treeRestoreSelectOptions,
   type UndoListItem,
 } from "../src/undo.ts";
 import {
@@ -140,6 +143,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   const config = loaded.config;
   let runtime: Runtime | undefined;
   let pendingTreeForce = false;
+  let pendingSkipTreeRestore = false;
   let pendingUndoNav = false;
   let pendingDestOverlay: UndoListItem["overlay"];
   let pendingResetIfDiskDiffers = false;
@@ -246,6 +250,46 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
     return { force: choice === OVERWRITE_SELECT_YES, cancelled: false };
   };
 
+  const confirmTreeRestoreIfNeeded = async (
+    ctx: {
+      hasUI?: boolean;
+      ui: {
+        select?: (title: string, options: string[]) => Promise<string | undefined>;
+      };
+    },
+    current: Runtime,
+    options: {
+      oldBranch: SessionEntryLike[];
+      newBranch: SessionEntryLike[];
+      newLeafId: string;
+    },
+  ): Promise<{ restore: boolean; cancelled: boolean }> => {
+    const { plan, via } = planTreeRestore({
+      mutations: current.journal.mutations(),
+      oldBranch: options.oldBranch,
+      newBranch: options.newBranch,
+      newLeafId: options.newLeafId,
+      journal: current.journal,
+      store: current.store,
+      config: current.config,
+      force: false,
+    });
+    if (via === "noop" || plan.items.length === 0) {
+      return { restore: false, cancelled: false };
+    }
+    if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
+      return { restore: true, cancelled: false };
+    }
+    const choice = await ctx.ui.select(
+      formatTreeRestoreSelectTitle(plan.items.map((item) => item.path)),
+      treeRestoreSelectOptions(),
+    );
+    if (choice === undefined) {
+      return { restore: false, cancelled: true };
+    }
+    return { restore: choice === TREE_RESTORE_SELECT_YES, cancelled: false };
+  };
+
   pi.registerEntryRenderer(LIST_ENTRY, renderLines);
   pi.registerEntryRenderer(STATUS_ENTRY, renderLines);
   pi.registerEntryRenderer(DIFF_ENTRY, renderLines);
@@ -292,12 +336,27 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         return;
       }
       if (!pendingUndoNav && targetId) {
+        pendingSkipTreeRestore = false;
         const sessionManager = ctx.sessionManager as {
           getBranch: (fromId?: string) => SessionEntryLike[];
         };
+        const oldBranch = sessionManager.getBranch(oldLeafId) as SessionEntryLike[];
+        const newBranch = sessionManager.getBranch(targetId) as SessionEntryLike[];
+        const restore = await confirmTreeRestoreIfNeeded(ctx, runtime, {
+          oldBranch,
+          newBranch,
+          newLeafId: targetId,
+        });
+        if (restore.cancelled) {
+          return { cancel: true };
+        }
+        if (!restore.restore) {
+          pendingSkipTreeRestore = true;
+          return;
+        }
         const overwrite = await confirmOverwriteIfNeeded(ctx, runtime, {
-          oldBranch: sessionManager.getBranch(oldLeafId) as SessionEntryLike[],
-          newBranch: sessionManager.getBranch(targetId) as SessionEntryLike[],
+          oldBranch,
+          newBranch,
           newLeafId: targetId,
           force: false,
         });
@@ -315,8 +374,12 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
   pi.on("session_tree", async (event, ctx) => {
     const force = pendingTreeForce;
     const forceFlag = pendingForceFlag;
+    const skipRestore = pendingSkipTreeRestore && !pendingUndoNav;
     try {
       if (!runtime?.config.enabled) {
+        return;
+      }
+      if (skipRestore) {
         return;
       }
       if (
@@ -365,6 +428,7 @@ export default function (pi: ExtensionAPI, deps: UndoExtensionDeps = {}) {
         "warning",
       );
     } finally {
+      pendingSkipTreeRestore = false;
       if (!pendingUndoNav) {
         pendingTreeForce = false;
         pendingForceFlag = "/undo <N> --force";

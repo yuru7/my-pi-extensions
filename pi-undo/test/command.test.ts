@@ -8,9 +8,13 @@ import { SessionJournal } from "../src/mutation-journal.ts";
 import { ObjectStore } from "../src/store.ts";
 import {
   formatOverwriteSelectTitle,
+  formatTreeRestoreSelectTitle,
   OVERWRITE_SELECT_NO,
   OVERWRITE_SELECT_YES,
   overwriteSelectOptions,
+  TREE_RESTORE_SELECT_NO,
+  TREE_RESTORE_SELECT_YES,
+  treeRestoreSelectOptions,
 } from "../src/undo.ts";
 import { cleanupTempDirs, tempDir } from "./helpers.ts";
 
@@ -1002,7 +1006,7 @@ function toolResult(id: string, toolCallId: string) {
   };
 }
 
-async function setupExternalEditUndo() {
+async function setupExternalEditUndo(options: { disk?: string } = {}) {
   const { pi, home } = setup();
   const cwd = tempDir();
   const file = join(cwd, "notes.txt");
@@ -1011,7 +1015,7 @@ async function setupExternalEditUndo() {
   const original = store.put(Buffer.from("original"));
   const afterPi = store.put(Buffer.from("pi"));
   const mode = statSync(file).mode & 0o777;
-  writeFileSync(file, "user");
+  writeFileSync(file, options.disk ?? "user");
   new SessionJournal(store, "s1").appendMutation({
     sessionId: "s1",
     turnEntryId: "u1",
@@ -1229,7 +1233,7 @@ describe("/undo overwrite prompt", () => {
     assert.equal(readFileSync(file, "utf8"), "pi");
   });
 
-  test("/tree No keeps external edits", async () => {
+  test("/tree restore No keeps files and does not ask to overwrite", async () => {
     const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
     const selectCalls: Array<{ title: string; options: string[] }> = [];
     const ctx = {
@@ -1239,7 +1243,7 @@ describe("/undo overwrite prompt", () => {
       ui: {
         select: async (title: string, options: string[]) => {
           selectCalls.push({ title, options });
-          return OVERWRITE_SELECT_NO;
+          return TREE_RESTORE_SELECT_NO;
         },
         notify() {},
       },
@@ -1256,18 +1260,61 @@ describe("/undo overwrite prompt", () => {
     );
 
     assert.equal(selectCalls.length, 1);
-    assert.deepEqual(selectCalls[0]?.options, overwriteSelectOptions());
+    assert.deepEqual(selectCalls[0]?.options, treeRestoreSelectOptions());
+    assert.equal(selectCalls[0]?.title, formatTreeRestoreSelectTitle([file]));
     assert.equal(readFileSync(file, "utf8"), "user");
   });
 
-  test("/tree Yes overwrites external edits", async () => {
+  test("/tree restore Yes then overwrite No keeps external edits", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
+    const selectCalls: Array<{ title: string; options: string[] }> = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async (title: string, options: string[]) => {
+          selectCalls.push({ title, options });
+          if (options[0] === TREE_RESTORE_SELECT_NO) {
+            return TREE_RESTORE_SELECT_YES;
+          }
+          return OVERWRITE_SELECT_NO;
+        },
+        notify() {},
+      },
+    };
+
+    const before = await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    assert.equal((before as { cancel?: boolean } | undefined)?.cancel, undefined);
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+      ctx as never,
+    );
+
+    assert.equal(selectCalls.length, 2);
+    assert.deepEqual(selectCalls[0]?.options, treeRestoreSelectOptions());
+    assert.equal(selectCalls[0]?.title, formatTreeRestoreSelectTitle([file]));
+    assert.deepEqual(selectCalls[1]?.options, overwriteSelectOptions());
+    assert.equal(selectCalls[1]?.title, formatOverwriteSelectTitle([file]));
+    assert.equal(readFileSync(file, "utf8"), "user");
+  });
+
+  test("/tree restore Yes then overwrite Yes overwrites external edits", async () => {
     const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
     const ctx = {
       hasUI: true,
       sessionManager: { getSessionId: () => "s1", getBranch },
       cwd,
       ui: {
-        select: async () => OVERWRITE_SELECT_YES,
+        select: async (_title: string, options: string[]) => {
+          if (options[0] === TREE_RESTORE_SELECT_NO) {
+            return TREE_RESTORE_SELECT_YES;
+          }
+          return OVERWRITE_SELECT_YES;
+        },
         notify() {},
       },
     };
@@ -1284,7 +1331,38 @@ describe("/undo overwrite prompt", () => {
     assert.equal(readFileSync(file, "utf8"), "original");
   });
 
-  test("/tree Yes does not prompt again on later /tree moves", async () => {
+  test("/tree restore Yes without external edits restores with one prompt", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } =
+      await setupExternalEditUndo({ disk: "pi" });
+    const selectCalls: Array<{ title: string; options: string[] }> = [];
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async (title: string, options: string[]) => {
+          selectCalls.push({ title, options });
+          return TREE_RESTORE_SELECT_YES;
+        },
+        notify() {},
+      },
+    };
+
+    await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    await sessionTree(
+      { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+      ctx as never,
+    );
+
+    assert.equal(selectCalls.length, 1);
+    assert.deepEqual(selectCalls[0]?.options, treeRestoreSelectOptions());
+    assert.equal(readFileSync(file, "utf8"), "original");
+  });
+
+  test("/tree restore Yes asks again on later /tree moves, overwrite only when needed", async () => {
     const { file, cwd, getBranch, getLeaf, setLeaf, sessionBeforeTree, sessionTree } =
       await setupExternalEditUndo();
     const selectCalls: Array<{ title: string; options: string[] }> = [];
@@ -1295,6 +1373,9 @@ describe("/undo overwrite prompt", () => {
       ui: {
         select: async (title: string, options: string[]) => {
           selectCalls.push({ title, options });
+          if (options[0] === TREE_RESTORE_SELECT_NO) {
+            return TREE_RESTORE_SELECT_YES;
+          }
           return OVERWRITE_SELECT_YES;
         },
         notify() {},
@@ -1311,7 +1392,9 @@ describe("/undo overwrite prompt", () => {
       ctx as never,
     );
     setLeaf("u1");
-    assert.equal(selectCalls.length, 1);
+    assert.equal(selectCalls.length, 2);
+    assert.deepEqual(selectCalls[0]?.options, treeRestoreSelectOptions());
+    assert.deepEqual(selectCalls[1]?.options, overwriteSelectOptions());
     assert.equal(readFileSync(file, "utf8"), "original");
 
     await sessionBeforeTree(
@@ -1323,7 +1406,8 @@ describe("/undo overwrite prompt", () => {
       ctx as never,
     );
     setLeaf("u2");
-    assert.equal(selectCalls.length, 1);
+    assert.equal(selectCalls.length, 3);
+    assert.deepEqual(selectCalls[2]?.options, treeRestoreSelectOptions());
     assert.equal(readFileSync(file, "utf8"), "pi");
 
     await sessionBeforeTree(
@@ -1334,11 +1418,12 @@ describe("/undo overwrite prompt", () => {
       { newLeafId: "u1", oldLeafId: "u2", fromExtension: false } as never,
       ctx as never,
     );
-    assert.equal(selectCalls.length, 1);
+    assert.equal(selectCalls.length, 4);
+    assert.deepEqual(selectCalls[3]?.options, treeRestoreSelectOptions());
     assert.equal(readFileSync(file, "utf8"), "original");
   });
 
-  test("/tree cancel leaves conversation and files unchanged", async () => {
+  test("/tree cancel on restore prompt leaves conversation and files unchanged", async () => {
     const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
     let restored = false;
     const ctx = {
@@ -1347,6 +1432,42 @@ describe("/undo overwrite prompt", () => {
       cwd,
       ui: {
         select: async () => undefined,
+        notify() {},
+      },
+    };
+
+    const before = await sessionBeforeTree(
+      { preparation: { targetId: "u1", oldLeafId: getLeaf() } } as never,
+      ctx as never,
+    );
+    assert.deepEqual(before, { cancel: true });
+    if (!(before as { cancel?: boolean }).cancel) {
+      restored = true;
+      await sessionTree(
+        { newLeafId: "u1", oldLeafId: getLeaf(), fromExtension: false } as never,
+        ctx as never,
+      );
+    }
+
+    assert.equal(restored, false);
+    assert.equal(getLeaf(), "u2");
+    assert.equal(readFileSync(file, "utf8"), "user");
+  });
+
+  test("/tree cancel on overwrite prompt leaves conversation and files unchanged", async () => {
+    const { file, cwd, getBranch, getLeaf, sessionBeforeTree, sessionTree } = await setupExternalEditUndo();
+    let restored = false;
+    const ctx = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "s1", getBranch },
+      cwd,
+      ui: {
+        select: async (_title: string, options: string[]) => {
+          if (options[0] === TREE_RESTORE_SELECT_NO) {
+            return TREE_RESTORE_SELECT_YES;
+          }
+          return undefined;
+        },
         notify() {},
       },
     };
