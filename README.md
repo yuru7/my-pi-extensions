@@ -2,7 +2,7 @@
 
 Personal extensions for [Pi](https://pi.dev), the coding agent.
 
-Each package lives in its own directory and is published independently. See that directory's README for install, commands, and configuration.
+Each package lives in its own directory and is published independently. See that directory's README for install, commands, and configuration. The release flow (pnpm → npm) is in [docs/PUBLISH.md](./docs/PUBLISH.md).
 
 ## Packages
 
