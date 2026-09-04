@@ -149,7 +149,7 @@ export function buildReviewSystemPrompt(
 		: DEFAULT_TENANT_POLICY;
 	const language =
 		assessmentLanguage && assessmentLanguage !== "auto"
-			? assessmentLanguage
+			? `**${assessmentLanguage}**`
 			: AUTO_LANGUAGE_PHRASE;
 	return REVIEW_POLICY_TEMPLATE.replace(
 		"{{ tenant_policy_config }}",

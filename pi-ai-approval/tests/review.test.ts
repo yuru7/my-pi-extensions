@@ -356,7 +356,10 @@ test("lets configuration pin the assessment comment language", () => {
 		/in the user's primary conversation language from the transcript; fall back to English when unclear\./,
 	);
 	const japanese = buildReviewSystemPrompt(undefined, "Japanese");
-	assert.match(japanese, /Write `action_summary` and `rationale` in Japanese\./);
+	assert.match(
+		japanese,
+		/Write `action_summary` and `rationale` in \*\*Japanese\*\*\./,
+	);
 	assert.doesNotMatch(japanese, /fall back to English when unclear/);
 });
 
