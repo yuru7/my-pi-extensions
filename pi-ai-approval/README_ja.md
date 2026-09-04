@@ -107,7 +107,7 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 
 ```json
 {
-  "assessmentLanguage": "日本語"
+  "assessmentLanguage": "Japanese"
 }
 ```
 
@@ -169,7 +169,7 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 ## インストール
 
 ```bash
-pi install npm:pi-ai-approval
+pi install npm:@yuru7/pi-ai-approval
 ```
 
 ## 開発

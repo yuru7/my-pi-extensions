@@ -107,7 +107,7 @@ Environment overrides (`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY
 
 ```json
 {
-  "assessmentLanguage": "日本語"
+  "assessmentLanguage": "Japanese"
 }
 ```
 
@@ -169,7 +169,7 @@ Being reviewed does not mean being blocked: a reviewed call goes to the AI revie
 ## Install
 
 ```bash
-pi install npm:pi-ai-approval
+pi install npm:@yuru7/pi-ai-approval
 ```
 
 ## Development
