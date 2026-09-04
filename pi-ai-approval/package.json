@@ -1,0 +1,57 @@
+{
+  "name": "@yuru7/pi-ai-approval",
+  "version": "0.1.0",
+  "description": "A fail-closed approval gate for Pi that classifies every covered tool call into six risk levels with an isolated AI reviewer and enforces per-level allow/ask/deny from local configuration.",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "approval-gate",
+    "guardian",
+    "risk-review"
+  ],
+  "license": "MIT",
+  "author": "yuru7",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuru7/my-pi-extensions.git",
+    "directory": "pi-ai-approval"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "README_ja.md",
+    "LICENSE",
+    "LICENSES"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "pnpm run typecheck && pnpm run test",
+    "package:check": "npm pack --dry-run"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-server": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.85.0",
+    "@earendil-works/pi-coding-agent": "^0.85.0",
+    "@earendil-works/pi-server": "^0.85.0",
+    "@earendil-works/pi-tui": "^0.85.0",
+    "@types/node": "^24.5.2",
+    "typescript": "^7.0.2"
+  }
+}
