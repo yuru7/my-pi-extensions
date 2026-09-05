@@ -10,6 +10,8 @@ test("builds the default configuration file contents", () => {
 	assert.deepEqual(buildDefaultConfigFile(), {
 		primaryModel: "CURRENT",
 		secondaryModel: "CURRENT",
+		primaryThinkingLevel: "low",
+		secondaryThinkingLevel: "low",
 		timeoutMs: 90000,
 		assessmentLanguage: "auto",
 		riskActions: {
@@ -512,4 +514,98 @@ test("warns when a model setting is neither a spec nor CURRENT", () => {
 		config.warnings.join("\n"),
 		/Invalid secondaryModel in .*: expected provider\/model-id or CURRENT\./,
 	);
+});
+
+test("defaults reviewer thinking levels to low", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const config = loadApprovalConfig({
+		cwd: join(root, "project"),
+		projectTrusted: false,
+		agentDir: join(root, "agent"),
+		env: {},
+	});
+	assert.equal(config.primaryThinkingLevel, "low");
+	assert.equal(config.secondaryThinkingLevel, "low");
+	assert.equal(config.primaryThinkingLevelSource, "default");
+	assert.equal(config.secondaryThinkingLevelSource, "default");
+	assert.equal(config.warnings.length, 0);
+});
+
+test("loads fixed reviewer thinking levels with documented precedence", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "ai-approval.json"),
+		JSON.stringify({
+			primaryThinkingLevel: "medium",
+			secondaryThinkingLevel: "high",
+		}),
+	);
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ primaryThinkingLevel: "max" }),
+	);
+	const config = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: { PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL: "minimal" },
+	});
+	assert.equal(config.primaryThinkingLevel, "max");
+	assert.equal(config.primaryThinkingLevelSource, "project");
+	assert.equal(config.secondaryThinkingLevel, "minimal");
+	assert.equal(config.secondaryThinkingLevelSource, "environment");
+	assert.equal(config.warnings.length, 0);
+});
+
+test("accepts CURRENT reviewer thinking levels", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const agentDir = join(root, "agent");
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "ai-approval.json"),
+		JSON.stringify({
+			primaryThinkingLevel: "CURRENT",
+			secondaryThinkingLevel: "CURRENT",
+		}),
+	);
+	const config = loadApprovalConfig({
+		cwd: join(root, "project"),
+		projectTrusted: false,
+		agentDir,
+		env: {},
+	});
+	assert.equal(config.primaryThinkingLevel, "CURRENT");
+	assert.equal(config.secondaryThinkingLevel, "CURRENT");
+	assert.equal(config.primaryThinkingLevelSource, "global");
+	assert.equal(config.warnings.length, 0);
+});
+
+test("warns and falls back to low for invalid thinking levels", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const agentDir = join(root, "agent");
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "ai-approval.json"),
+		JSON.stringify({
+			primaryThinkingLevel: "ultra",
+			secondaryThinkingLevel: "",
+		}),
+	);
+	const config = loadApprovalConfig({
+		cwd: join(root, "project"),
+		projectTrusted: false,
+		agentDir,
+		env: { PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL: "bogus" },
+	});
+	assert.equal(config.primaryThinkingLevel, "low");
+	assert.equal(config.primaryThinkingLevelSource, "default");
+	assert.equal(config.secondaryThinkingLevel, "low");
+	assert.equal(config.secondaryThinkingLevelSource, "default");
+	assert.match(config.warnings.join("\n"), /Invalid primaryThinkingLevel/);
+	assert.match(config.warnings.join("\n"), /Invalid secondaryThinkingLevel/);
+	assert.match(config.warnings.join("\n"), /PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL/);
 });

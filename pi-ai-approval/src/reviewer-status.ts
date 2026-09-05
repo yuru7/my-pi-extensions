@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
 	CURRENT_MODEL_SETTING,
+	DEFAULT_REVIEWER_THINKING_LEVEL,
 	loadApprovalConfig,
 	RISK_LEVEL_KEYS,
 } from "./config.ts";
@@ -11,6 +12,7 @@ import { formatDuration, riskLabel } from "./review-presentation.ts";
 import {
 	buildReviewerChannels,
 	currentReviewerChannel,
+	isReviewerThinkingLevel,
 	modelSpecFor,
 	reviewerChannelForSetting,
 	reviewerChannelIdentity,
@@ -29,6 +31,19 @@ function modelSettingDisplay(
 	return channel.model
 		? `CURRENT (${modelSpecFor(channel.model)})`
 		: "CURRENT (no current session model)";
+}
+
+/** Shows the thinking setting; CURRENT expands to the effective level. */
+function thinkingSettingDisplay(
+	setting: string,
+	channel: ReviewerChannel,
+	sessionThinkingLevel?: string,
+): string {
+	const effective = channel.thinkingLevel;
+	if (setting !== CURRENT_MODEL_SETTING) return setting;
+	if (isReviewerThinkingLevel(sessionThinkingLevel))
+		return `CURRENT (${effective} from current session)`;
+	return `CURRENT (${effective} default; no session thinking level)`;
 }
 
 export interface ReviewerStatusCallbacks {
@@ -56,8 +71,14 @@ export function syncReviewerRuntimeHealth(
 		config,
 		ctx.modelRegistry,
 		ctx.model,
+		ctx.thinkingLevel,
 	);
-	const health = reviewerHealth(config, ctx.modelRegistry, ctx.model);
+	const health = reviewerHealth(
+		config,
+		ctx.modelRegistry,
+		ctx.model,
+		ctx.thinkingLevel,
+	);
 	if (health.selectedFallback) {
 		const selected = channels.find(
 			(channel) => channel.role === health.selectedFallback,
@@ -83,18 +104,23 @@ export async function showApprovalConfiguration(
 		config.primaryModel,
 		ctx.modelRegistry,
 		ctx.model,
+		config.primaryThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL,
+		ctx.thinkingLevel,
 	);
 	const secondaryChannel = reviewerChannelForSetting(
 		"secondary",
 		config.secondaryModel,
 		ctx.modelRegistry,
 		ctx.model,
+		config.secondaryThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL,
+		ctx.thinkingLevel,
 	);
-	const currentChannel = currentReviewerChannel(ctx.model);
+	const currentChannel = currentReviewerChannel(ctx.model, ctx.thinkingLevel);
 	const channels = buildReviewerChannels(
 		config,
 		ctx.modelRegistry,
 		ctx.model,
+		ctx.thinkingLevel,
 	);
 	const checkChannel = async (
 		channel: ReviewerChannel,
@@ -222,9 +248,9 @@ export async function showApprovalConfiguration(
 			temporaryBypassActive
 				? "Temporary bypass: active; covered agent tool calls are not being reviewed. Run /ai-approval enable to restore protection."
 				: "Temporary bypass: inactive",
-			`Primary: ${modelSettingDisplay(config.primaryModel, primaryChannel)} (${config.primaryModelSource}) · ${channelStatus(issues.get(primaryIdentity))}`,
-			`Secondary: ${modelSettingDisplay(config.secondaryModel, secondaryChannel)} (${config.secondaryModelSource}) · ${secondaryStatus}`,
-			`Current-model fallback: ${currentChannel?.modelSpec ?? "unavailable"} · ${currentFallbackStatus}`,
+			`Primary: ${modelSettingDisplay(config.primaryModel, primaryChannel)} (${config.primaryModelSource}) · thinking ${thinkingSettingDisplay(config.primaryThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL, primaryChannel, ctx.thinkingLevel)} (${config.primaryThinkingLevelSource ?? "default"}) · ${channelStatus(issues.get(primaryIdentity))}`,
+			`Secondary: ${modelSettingDisplay(config.secondaryModel, secondaryChannel)} (${config.secondaryModelSource}) · thinking ${thinkingSettingDisplay(config.secondaryThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL, secondaryChannel, ctx.thinkingLevel)} (${config.secondaryThinkingLevelSource ?? "default"}) · ${secondaryStatus}`,
+			`Current-model fallback: ${currentChannel?.modelSpec ?? "unavailable"} · thinking ${currentChannel ? thinkingSettingDisplay(CURRENT_MODEL_SETTING, currentChannel, ctx.thinkingLevel) : "unavailable"} · ${currentFallbackStatus}`,
 			`${formatDuration(config.timeoutMs)} deadline (${config.timeoutSource}) · up to 3 attempts per distinct reviewer channel`,
 			`Assessment language: ${config.assessmentLanguage} (${config.assessmentLanguageSource})`,
 			`Policy: ${config.policy ? `customized (${config.policySources.join(" + ")})` : "default"}`,

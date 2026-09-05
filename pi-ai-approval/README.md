@@ -57,6 +57,8 @@ Worked examples: editing a file to fix the reported bug → `low`; installing a 
 {
   "primaryModel": "CURRENT",
   "secondaryModel": "CURRENT",
+  "primaryThinkingLevel": "low",
+  "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
   "riskActions": {
     "very_low": "allow",
@@ -97,9 +99,20 @@ To confirm every non-trivial action with a human, use:
 
 `primaryModel` and `secondaryModel` configure the two-step reviewer chain; the current session model always remains the last-resort third channel. Both settings accept either an explicit `provider/model-id` or the special value `CURRENT` — which is also the default, meaning "use the current session model".
 
-A model that appears more than once in the chain is tried only once: the first channel that resolves to it owns the attempt and later duplicates are skipped, so a temporarily unavailable model is never requested repeatedly. For example, with `primaryModel: "openai/gpt-5.6-luna"` failing and `secondaryModel: "openai/gpt-5.6-luna"`, the secondary is skipped. If every distinct channel fails, the action is blocked — the risk is never guessed.
+A model that appears more than once in the chain is tried only once: the first channel that resolves to it owns the attempt and later duplicates are skipped, so a temporarily unavailable model is never requested repeatedly. Duplicate detection uses the model only; thinking levels never create a separate channel. For example, with `primaryModel: "openai/gpt-5.6-luna"` failing and `secondaryModel: "openai/gpt-5.6-luna"`, the secondary is skipped even when their thinking levels differ. If every distinct channel fails, the action is blocked — the risk is never guessed.
 
-Environment overrides (`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY_MODEL`, `PI_AI_APPROVAL_TIMEOUT_MS`, `PI_AI_APPROVAL_POLICY`) are also supported.
+### Reviewer thinking levels
+
+`primaryThinkingLevel` and `secondaryThinkingLevel` set the thinking effort for each reviewer channel. Allowed values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and the special value `CURRENT` — which inherits the current session's thinking level at review time. The default is `low`. When `CURRENT` is set but the session thinking level is unavailable, `low` is used. The last-resort current-model channel always uses the session's thinking level (or `low` when unavailable).
+
+```json
+{
+  "primaryThinkingLevel": "low",
+  "secondaryThinkingLevel": "CURRENT"
+}
+```
+
+Environment overrides (`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY_MODEL`, `PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL`, `PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL`, `PI_AI_APPROVAL_TIMEOUT_MS`, `PI_AI_APPROVAL_POLICY`) are also supported.
 
 ### Assessment language
 

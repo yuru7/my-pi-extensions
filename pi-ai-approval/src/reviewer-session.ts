@@ -9,6 +9,7 @@ import {
 	type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 // pi-lens-ignore: find-import-file-without-extension
+import type { ReviewerThinkingLevel } from "./config.ts";
 import {
 	REVIEW_MAX_ATTEMPTS,
 	type ReviewResult,
@@ -60,6 +61,7 @@ export interface ReviewerSessionOptions {
 	systemPrompt: string;
 	timeoutMs: number;
 	tools?: ReviewerToolName[];
+	thinkingLevel?: ReviewerThinkingLevel;
 }
 
 // Session lifecycle, retry, deadline, and transcript cursor state are cohesive here.
@@ -349,7 +351,7 @@ export class ReviewerSessionController {
 		const sessionOptions: Record<string, unknown> = {
 			cwd: this.options.cwd,
 			model: this.options.model,
-			thinkingLevel: "low",
+			thinkingLevel: this.options.thinkingLevel ?? "low",
 			...reviewerToolSessionOptions(
 				this.options.cwd,
 				this.options.tools ?? DEFAULT_REVIEWER_TOOLS,

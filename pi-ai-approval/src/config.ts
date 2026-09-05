@@ -14,9 +14,34 @@ export const CURRENT_MODEL_SETTING = "CURRENT";
 
 export const PRIMARY_MODEL_ENV = "PI_AI_APPROVAL_PRIMARY_MODEL";
 export const SECONDARY_MODEL_ENV = "PI_AI_APPROVAL_SECONDARY_MODEL";
+export const PRIMARY_THINKING_ENV = "PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL";
+export const SECONDARY_THINKING_ENV = "PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL";
 export const POLICY_ENV = "PI_AI_APPROVAL_POLICY";
 export const TIMEOUT_ENV = "PI_AI_APPROVAL_TIMEOUT_MS";
 export const CONFIG_FILE_NAME = "ai-approval.json";
+
+/**
+ * Thinking effort for a reviewer channel. Mirrors Pi's ThinkingLevel plus
+ * the special value "CURRENT", which inherits the current session's
+ * thinking level at review time.
+ */
+export type ReviewerThinkingSetting =
+	| ReviewerThinkingLevel
+	| typeof CURRENT_MODEL_SETTING;
+
+export const REVIEWER_THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+
+export type ReviewerThinkingLevel = (typeof REVIEWER_THINKING_LEVELS)[number];
+
+export const DEFAULT_REVIEWER_THINKING_LEVEL: ReviewerThinkingLevel = "low";
 
 export type ReviewLevel =
 	| "always"
@@ -83,6 +108,8 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 	return {
 		primaryModel: CURRENT_MODEL_SETTING,
 		secondaryModel: CURRENT_MODEL_SETTING,
+		primaryThinkingLevel: DEFAULT_REVIEWER_THINKING_LEVEL,
+		secondaryThinkingLevel: DEFAULT_REVIEWER_THINKING_LEVEL,
 		timeoutMs: REVIEW_TIMEOUT_MS,
 		assessmentLanguage: "auto",
 		riskActions: { ...DEFAULT_RISK_ACTIONS },
@@ -93,6 +120,8 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 interface ApprovalConfigFile {
 	primaryModel?: unknown;
 	secondaryModel?: unknown;
+	primaryThinkingLevel?: unknown;
+	secondaryThinkingLevel?: unknown;
 	timeoutMs?: unknown;
 	policy?: unknown;
 	review?: unknown;
@@ -107,6 +136,10 @@ export interface ApprovalConfig {
 	primaryModel: string;
 	/** Reviewer model setting: a provider/model-id or "CURRENT". */
 	secondaryModel: string;
+	/** Reviewer thinking setting: a thinking level or "CURRENT". */
+	primaryThinkingLevel: ReviewerThinkingSetting;
+	/** Reviewer thinking setting: a thinking level or "CURRENT". */
+	secondaryThinkingLevel: ReviewerThinkingSetting;
 	timeoutMs: number;
 	policy?: string;
 	review: Record<string, ReviewLevel>;
@@ -116,6 +149,8 @@ export interface ApprovalConfig {
 	projectConfigPresent: boolean;
 	primaryModelSource: ConfigSource;
 	secondaryModelSource: ConfigSource;
+	primaryThinkingLevelSource: ConfigSource;
+	secondaryThinkingLevelSource: ConfigSource;
 	timeoutSource: ConfigSource;
 	policySources: Array<"environment" | "project" | "global">;
 	riskActions: RiskActions;
@@ -157,6 +192,22 @@ export function loadApprovalConfig(
 		);
 	}
 	if (
+		env[PRIMARY_THINKING_ENV] !== undefined &&
+		!isThinkingSettingString(env[PRIMARY_THINKING_ENV])
+	) {
+		warnings.push(
+			`Invalid ${PRIMARY_THINKING_ENV}: expected off, minimal, low, medium, high, xhigh, max, or CURRENT.`,
+		);
+	}
+	if (
+		env[SECONDARY_THINKING_ENV] !== undefined &&
+		!isThinkingSettingString(env[SECONDARY_THINKING_ENV])
+	) {
+		warnings.push(
+			`Invalid ${SECONDARY_THINKING_ENV}: expected off, minimal, low, medium, high, xhigh, max, or CURRENT.`,
+		);
+	}
+	if (
 		env[TIMEOUT_ENV] !== undefined &&
 		firstTimeout(env[TIMEOUT_ENV]) === undefined
 	) {
@@ -178,6 +229,16 @@ export function loadApprovalConfig(
 		["environment", env[SECONDARY_MODEL_ENV]],
 		["project", projectConfig.secondaryModel],
 		["global", globalConfig.secondaryModel],
+	);
+	const primaryThinkingValue = firstThinkingSettingWithSource(
+		["environment", env[PRIMARY_THINKING_ENV]],
+		["project", projectConfig.primaryThinkingLevel],
+		["global", globalConfig.primaryThinkingLevel],
+	);
+	const secondaryThinkingValue = firstThinkingSettingWithSource(
+		["environment", env[SECONDARY_THINKING_ENV]],
+		["project", projectConfig.secondaryThinkingLevel],
+		["global", globalConfig.secondaryThinkingLevel],
 	);
 	const timeoutValue = firstTimeoutWithSource(
 		["environment", env[TIMEOUT_ENV]],
@@ -224,6 +285,10 @@ export function loadApprovalConfig(
 	return {
 		primaryModel: primaryModelValue?.value ?? CURRENT_MODEL_SETTING,
 		secondaryModel: secondaryModelValue?.value ?? CURRENT_MODEL_SETTING,
+		primaryThinkingLevel:
+			primaryThinkingValue?.value ?? DEFAULT_REVIEWER_THINKING_LEVEL,
+		secondaryThinkingLevel:
+			secondaryThinkingValue?.value ?? DEFAULT_REVIEWER_THINKING_LEVEL,
 		timeoutMs: timeoutValue?.value ?? REVIEW_TIMEOUT_MS,
 		policy:
 			policySources.length > 0
@@ -243,6 +308,8 @@ export function loadApprovalConfig(
 		projectConfigPresent: existsSync(projectPath),
 		primaryModelSource: primaryModelValue?.source ?? "default",
 		secondaryModelSource: secondaryModelValue?.source ?? "default",
+		primaryThinkingLevelSource: primaryThinkingValue?.source ?? "default",
+		secondaryThinkingLevelSource: secondaryThinkingValue?.source ?? "default",
 		timeoutSource: timeoutValue?.source ?? "default",
 		policySources,
 		warnings,
@@ -271,6 +338,8 @@ function readConfigFile(path: string, warnings: string[]): ApprovalConfigFile {
 const CONFIG_FILE_KEYS = new Set([
 	"primaryModel",
 	"secondaryModel",
+	"primaryThinkingLevel",
+	"secondaryThinkingLevel",
 	"timeoutMs",
 	"policy",
 	"review",
@@ -384,6 +453,22 @@ function validateConfigFile(
 		);
 	}
 	if (
+		config.primaryThinkingLevel !== undefined &&
+		!isThinkingSettingString(config.primaryThinkingLevel)
+	) {
+		warnings.push(
+			`Invalid primaryThinkingLevel in ${path}: expected off, minimal, low, medium, high, xhigh, max, or CURRENT.`,
+		);
+	}
+	if (
+		config.secondaryThinkingLevel !== undefined &&
+		!isThinkingSettingString(config.secondaryThinkingLevel)
+	) {
+		warnings.push(
+			`Invalid secondaryThinkingLevel in ${path}: expected off, minimal, low, medium, high, xhigh, max, or CURRENT.`,
+		);
+	}
+	if (
 		config.timeoutMs !== undefined &&
 		firstTimeout(config.timeoutMs) === undefined
 	) {
@@ -455,6 +540,30 @@ function firstModelSettingWithSource(
 	for (const [source, value] of values) {
 		if (isModelSettingString(value)) {
 			return { source, value: value.trim() };
+		}
+	}
+	return undefined;
+}
+
+function isThinkingSettingString(value: unknown): value is ReviewerThinkingSetting {
+	if (typeof value !== "string") return false;
+	const trimmed = value.trim();
+	if (!trimmed) return false;
+	if (trimmed === CURRENT_MODEL_SETTING) return true;
+	return (REVIEWER_THINKING_LEVELS as readonly string[]).includes(trimmed);
+}
+
+function firstThinkingSettingWithSource(
+	...values: Array<[ApprovalConfig["primaryThinkingLevelSource"], unknown]>
+):
+	| {
+			source: ApprovalConfig["primaryThinkingLevelSource"];
+			value: ReviewerThinkingSetting;
+	  }
+	| undefined {
+	for (const [source, value] of values) {
+		if (isThinkingSettingString(value)) {
+			return { source, value: value.trim() as ReviewerThinkingSetting };
 		}
 	}
 	return undefined;

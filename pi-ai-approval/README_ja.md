@@ -57,6 +57,8 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 {
   "primaryModel": "CURRENT",
   "secondaryModel": "CURRENT",
+  "primaryThinkingLevel": "low",
+  "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
   "riskActions": {
     "very_low": "allow",
@@ -97,9 +99,20 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 
 `primaryModel` と `secondaryModel` でレビュワーチェーンの2段階を設定し、現在のセッションモデルが常に最後の第3チャネルとして残ります。どちらの設定も明示的な `provider/model-id` か、特殊値 `CURRENT`(デフォルト。「現在のセッションモデルを使用」の意味)を受け付けます。
 
-チェーン内に同じモデルが複数回現れた場合、試行されるのは1回だけです。先頭のチャネルがそのモデルを担当し、2つ目以降の重複はスキップされるため、一時的に利用できないモデルへ何度もリクエストすることはありません。たとえば `primaryModel: "openai/gpt-5.6-luna"` が失敗し `secondaryModel: "openai/gpt-5.6-luna"` の場合、secondary はスキップされます。すべてのチャネルが失敗した場合はブロックされます。リスクを推測することはありません。
+チェーン内に同じモデルが複数回現れた場合、試行されるのは1回だけです。先頭のチャネルがそのモデルを担当し、2つ目以降の重複はスキップされるため、一時的に利用できないモデルへ何度もリクエストすることはありません。重複判定はモデルのみで行い、思考量の違いで別チャネルになることはありません。たとえば `primaryModel: "openai/gpt-5.6-luna"` が失敗し `secondaryModel: "openai/gpt-5.6-luna"` の場合、思考量が異なっていても secondary はスキップされます。すべてのチャネルが失敗した場合はブロックされます。リスクを推測することはありません。
 
-環境変数での上書き(`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY_MODEL`, `PI_AI_APPROVAL_TIMEOUT_MS`, `PI_AI_APPROVAL_POLICY`)にも対応しています。
+### レビュワーの思考量
+
+`primaryThinkingLevel` と `secondaryThinkingLevel` で各レビュワーチャネルの思考量を設定します。指定できる値は `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` と、特殊値 `CURRENT`(レビュー時点のセッション思考量を継承)です。デフォルトは `low` です。`CURRENT` 指定時にセッション思考量が取得できない場合は `low` を使います。最後の current-model チャネルは常にセッションの思考量(取得できなければ `low`)を使います。
+
+```json
+{
+  "primaryThinkingLevel": "low",
+  "secondaryThinkingLevel": "CURRENT"
+}
+```
+
+環境変数での上書き(`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY_MODEL`, `PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL`, `PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL`, `PI_AI_APPROVAL_TIMEOUT_MS`, `PI_AI_APPROVAL_POLICY`)にも対応しています。
 
 ### 判定コメントの言語
 

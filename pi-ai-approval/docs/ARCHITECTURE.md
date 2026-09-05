@@ -82,15 +82,15 @@ tool_call イベント
 
 | モジュール | 役割 |
 | --- | --- |
-| `src/config.ts` | 設定スキーマ、既定値、ファイル・環境変数の読み込み、優先順位、厳格化のみのマージ、警告。`riskActions`、`review` ルール、`primaryModel` / `secondaryModel`（`CURRENT` = セッションモデル）、`timeoutMs`、`assessmentLanguage`、`policy`。 |
+| `src/config.ts` | 設定スキーマ、既定値、ファイル・環境変数の読み込み、優先順位、厳格化のみのマージ、警告。`riskActions`、`review` ルール、`primaryModel` / `secondaryModel`（`CURRENT` = セッションモデル）、`primaryThinkingLevel` / `secondaryThinkingLevel`（思考量または `CURRENT` = セッション継承、既定 `low`）、`timeoutMs`、`assessmentLanguage`、`policy`。 |
 | `src/tool-actions.ts` | `tool_call` → `ReviewAction \| undefined`。`bash.command`、`read/grep/find/ls.path`、`write/edit.path`、および汎用 `<tool>.path`（既定 `private-only`）を振り分ける。`private_data_read` を付与。 |
 | `src/gate.ts` | ゲート共通基盤: `ReviewResult`・決定型、`DenialCircuitBreaker`、`ReviewBatchTracker`、パス分類（`classifyMutationPath`、`classifyReadPath`、`shouldReviewPath`）、ディレクトリのプライベートデータ走査。 |
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
 | `src/shell-private-data.ts` | `bash.command` 用ヒューリスティクス: シェルをトークン化し `~` を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
 | `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`、文字数制限付きのプロンプト・トランスクリプト構築、`parseRiskAssessment`（未知レベル・要約/根拠欠落を拒否する厳密検証）。 |
 | `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。 |
-| `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
-| `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。 |
+| `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
+| `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
 | `src/risk-policy.ts` | 純粋な `assessment → allow/ask/deny` 変換（`resolveRiskAction` / `applyRiskPolicy`）。手作り設定で迂回されても `very_high` / `critical` の `allow` を拒否。I/O・UI なし。 |
 | `src/approval-prompt.ts` | `ask` の UX: `No/Yes` 選択肢で `No` が初期選択（Enter = ブロック）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。 |
@@ -104,9 +104,9 @@ tool_call イベント
 
 `loadApprovalConfig({ cwd, projectTrusted, agentDir, env })`:
 
-- モデル・タイムアウト（`primaryModel`、`secondaryModel`、`timeoutMs`）:
+- モデル・思考量・タイムアウト（`primaryModel`、`secondaryModel`、`primaryThinkingLevel`、`secondaryThinkingLevel`、`timeoutMs`）:
   環境変数 > 信頼済みプロジェクトファイル > グローバルファイル > 組み込み既定値
-  （`CURRENT` = セッションモデルであり、既定値でもある）。
+  （モデル `CURRENT` = セッションモデルであり、既定値でもある。思考量 `CURRENT` = セッション思考量の継承。思考量の既定値は `low`、current-model チャネルは常にセッション思考量）。
 - `assessmentLanguage`: 信頼済みプロジェクトファイル > グローバルファイル > 既定値（`auto`）。
 - `policy`: 上書きではなく連結 —
   グローバルファイル → 信頼済みプロジェクトファイル → `PI_AI_APPROVAL_POLICY` 環境変数。

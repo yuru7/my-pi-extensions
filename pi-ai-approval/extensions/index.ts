@@ -491,6 +491,7 @@ export default function aiApproval(
 				config,
 				ctx.modelRegistry,
 				ctx.model,
+				ctx.thinkingLevel,
 			);
 			const { result, finalChannel, attempts } = await runReviewWithFallbackChain(
 				channels,
@@ -612,10 +613,17 @@ export default function aiApproval(
 				? buildPrivateDataReviewSystemPrompt(baseSystemPrompt)
 				: baseSystemPrompt;
 			const reviewerTools = reviewerToolsForAction(action);
+			// The context key tracks configuration only, not the live session
+			// thinking level: fixed-thinking controllers stay reusable across
+			// session thinking changes, while CURRENT channels resolve anew per
+			// review and land on a distinct per-channel key below (bounded by
+			// the small thinking-level vocabulary, so stale entries do not grow).
 			const nextContextKey = JSON.stringify({
 				cwd: ctx.cwd,
 				primaryModel: config.primaryModel,
 				secondaryModel: config.secondaryModel,
+				primaryThinkingLevel: config.primaryThinkingLevel,
+				secondaryThinkingLevel: config.secondaryThinkingLevel,
 				timeoutMs: config.timeoutMs,
 				baseSystemPrompt,
 			});
@@ -628,6 +636,7 @@ export default function aiApproval(
 				channel: channel.role,
 				modelSpec: channel.modelSpec,
 				model: `${model.provider}/${model.id}`,
+				thinkingLevel: channel.thinkingLevel,
 				privateDataReview,
 			});
 			let controller = controllers.get(key);
@@ -639,6 +648,7 @@ export default function aiApproval(
 					systemPrompt,
 					timeoutMs: config.timeoutMs,
 					tools: reviewerTools,
+					thinkingLevel: channel.thinkingLevel,
 				});
 				controllers.set(key, controller);
 			}

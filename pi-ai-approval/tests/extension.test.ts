@@ -41,8 +41,10 @@ function event(toolName: string, input: Record<string, unknown>): ToolCallEvent 
 function channel(
 	role: ReviewerChannel["role"],
 	modelSpec: string,
+	thinkingLevelSetting: ReviewerChannel["thinkingLevelSetting"] = "low",
+	thinkingLevel: ReviewerChannel["thinkingLevel"] = "low",
 ): ReviewerChannel {
-	return { role, modelSpec };
+	return { role, modelSpec, thinkingLevelSetting, thinkingLevel };
 }
 
 function assessed(risk_level: "low" | "medium" | "high" = "low") {
@@ -1342,11 +1344,11 @@ test("reports lifecycle health without writing footer status", async () => {
 	assert.match(notices.join("\n"), /same as primary \(no separate channel\)/);
 	assert.match(
 		notices.join("\n"),
-		/Secondary: CURRENT \(openai-codex\/codex-auto-review\) \(default\) · same as primary/,
+		/Secondary: CURRENT \(openai-codex\/codex-auto-review\) \(default\) · thinking low \(default\) · same as primary/,
 	);
 		assert.match(
 			notices.join("\n"),
-			/Current-model fallback: openai-codex\/codex-auto-review · same as primary/,
+			/Current-model fallback: openai-codex\/codex-auto-review · thinking CURRENT \(low default; no session thinking level\) · same as primary/,
 		);
 		assert.doesNotMatch(notices.join("\n"), /Fallback unavailable:/);
 	} finally {
