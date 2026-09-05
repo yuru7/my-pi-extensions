@@ -237,7 +237,9 @@ export function classifyMutationPath(
 	);
 	const normalizedSegments = absolutePath.split(/[\\/]+/).filter(Boolean);
 	const file = basename(absolutePath).toLowerCase();
-	const privatePath = classifyReadPath(path, cwd).private;
+	// The read classifier runs on the already-resolved absolute path so the
+	// same path is not canonicalized twice (no extra filesystem syscalls).
+	const privatePath = classifyAbsoluteReadPrivacy(absolutePath).private;
 	const sensitive =
 		privatePath ||
 		isSensitiveMutationBasename(file) ||
@@ -430,8 +432,14 @@ export function directoryMayContainPrivatePath(
 			scanned++;
 			if (scanned > maxEntries) return finish(true);
 			const child = join(current.directory, entry.name);
+			// Names alone classify regular entries; only symlinks go through
+			// the resolving classifier so a link with an innocuous name
+			// pointing into private storage is never missed.
 			const childPrivate =
-				current.privateAncestor || classifyReadPath(child, cwd).private;
+				current.privateAncestor ||
+				(entry.isSymbolicLink()
+					? classifyReadPath(child, cwd).private
+					: classifyAbsoluteReadPrivacy(child).private);
 			if (entry.isDirectory()) {
 				if (!GREP_SCOPE_SKIP_DIRECTORIES.has(entry.name.toLowerCase())) {
 					pending.push({ directory: child, privateAncestor: childPrivate });

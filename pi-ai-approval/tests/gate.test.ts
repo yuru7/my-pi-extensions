@@ -476,3 +476,36 @@ test("reviews sensitive paths inside the project", () => {
 		false,
 	);
 });
+
+test("flags private mutation targets from a single resolved lookup", () => {
+	const target = classifyMutationPath(".env", "/repo/project");
+	assert.equal(target.private, true);
+	assert.equal(target.sensitive, true);
+	assert.deepEqual(target.reasons, ["sensitive path"]);
+});
+
+test("detects private data reached through a symlink during directory scans", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-scan-symlink-"));
+	const project = join(root, "project");
+	const scope = join(project, "scope");
+	mkdirSync(scope, { recursive: true });
+	mkdirSync(join(root, ".ssh"));
+	writeFileSync(join(root, ".ssh", "id_rsa"), "private-key");
+	writeFileSync(join(scope, "app.ts"), "export {};");
+	symlinkSync(join(root, ".ssh", "id_rsa"), join(scope, "notes.txt"), "file");
+	assert.equal(
+		directoryMayContainPrivatePath(scope, project),
+		true,
+		"a symlink pointing at private storage must still be flagged",
+	);
+});
+
+test("ignores benign symlinks during directory scans", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-scan-benign-"));
+	const project = join(root, "project");
+	const scope = join(project, "scope");
+	mkdirSync(scope, { recursive: true });
+	writeFileSync(join(scope, "app.ts"), "export {};");
+	symlinkSync(join(scope, "app.ts"), join(scope, "notes-link.txt"), "file");
+	assert.equal(directoryMayContainPrivatePath(scope, project), false);
+});

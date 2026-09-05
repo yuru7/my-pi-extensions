@@ -258,15 +258,22 @@ export function buildReviewTranscript(messages: ReviewMessage[]): string {
 	const included = new Set<number>();
 	let messageChars = 0;
 	let toolChars = 0;
-	const rendered = entries.map((entry, index) =>
-		renderTranscriptEntry(entry, index),
-	);
+	// Render lazily: long sessions discard most entries, so only selected
+	// lines are ever serialized.
+	const rendered = new Map<number, string>();
+	const renderedLine = (index: number): string => {
+		const cached = rendered.get(index);
+		if (cached !== undefined) return cached;
+		const line = renderTranscriptEntry(entries[index], index);
+		rendered.set(index, line);
+		return line;
+	};
 	const userIndices = entries.flatMap((entry, index) =>
 		entry.kind === "user" ? [index] : [],
 	);
 	const includeUser = (index: number | undefined) => {
 		if (index === undefined || included.has(index)) return;
-		const size = rendered[index].length + 1;
+		const size = renderedLine(index).length + 1;
 		if (messageChars + size > MESSAGE_SELECTION_CHARS) return;
 		included.add(index);
 		messageChars += size;
@@ -284,7 +291,7 @@ export function buildReviewTranscript(messages: ReviewMessage[]): string {
 		index--
 	) {
 		if (entries[index].kind === "user" || included.has(index)) continue;
-		const size = rendered[index].length + 1;
+		const size = renderedLine(index).length + 1;
 		if (entries[index].kind === "tool") {
 			if (toolChars + size > TOOL_SELECTION_CHARS) continue;
 			toolChars += size;
@@ -296,7 +303,10 @@ export function buildReviewTranscript(messages: ReviewMessage[]): string {
 		recent++;
 	}
 
-	const output = rendered.filter((_entry, index) => included.has(index));
+	const output: string[] = [];
+	for (let index = 0; index < entries.length; index++) {
+		if (included.has(index)) output.push(renderedLine(index));
+	}
 	if (included.size < entries.length) output.push(TRANSCRIPT_NOTICE);
 	return output.join("\n");
 }

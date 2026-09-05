@@ -587,3 +587,54 @@ test("declined approvals tell the agent not to retry the same action", () => {
 		"Choose a materially safer alternative or ask the user in conversation.",
 	);
 });
+
+test("keeps selection order, budgets, and notice stable for large transcripts", () => {
+	const messages: ReviewMessage[] = [
+		{
+			role: "user",
+			content: "First user goal.",
+			authorizationSource: "direct",
+		},
+	];
+	for (let index = 0; index < 120; index++) {
+		messages.push({
+			role: "assistant",
+			content: [{ type: "text", text: `Assistant note ${index} ${"x".repeat(500)}` }],
+		});
+		messages.push({
+			role: "toolResult",
+			toolName: "read",
+			content: [{ type: "text", text: `Tool output ${index} ${"y".repeat(500)}` }],
+		});
+		if (index === 60) {
+			messages.push({
+				role: "user",
+				content: "Middle user goal.",
+				authorizationSource: "direct",
+			});
+		}
+	}
+	messages.push({
+		role: "user",
+		content: "Latest user goal.",
+		authorizationSource: "direct",
+	});
+	const transcript = buildReviewTranscript(messages);
+	const lines = transcript.split("\n");
+	assert.match(lines.at(-1) ?? "", /omitted/);
+	assert.match(transcript, /First user goal\./);
+	assert.match(transcript, /Latest user goal\./);
+	assert.ok(
+		transcript.length < 82_000,
+		`large transcript must stay within budgets, got ${transcript.length}`,
+	);
+	let previousIndex = 0;
+	for (const line of lines.slice(0, -1)) {
+		const parsed = JSON.parse(line) as { index: number };
+		assert.ok(
+			parsed.index > previousIndex,
+			"transcript lines must stay in ascending order",
+		);
+		previousIndex = parsed.index;
+	}
+});

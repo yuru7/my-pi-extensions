@@ -139,17 +139,21 @@ function pathPatternReferencesPrivateData(expression: string): boolean {
 		for (let index = 0; index < segments.length; index++) {
 			const pattern = segments[index] ?? "";
 			if (
-				[...PRIVATE_GLOB_DIRECTORY_CANDIDATES, ...PRIVATE_GLOB_FILE_CANDIDATES].some(
-					(candidate) => shellGlobMatches(pattern, candidate),
+				patternMatchesCandidates(
+					pattern,
+					PRIVATE_GLOB_CANDIDATES,
+					PRIVATE_GLOB_CANDIDATE_SET,
 				)
 			) {
 				return true;
 			}
 			if (
 				index > 0 &&
-				shellGlobMatches(segments[index - 1] ?? "", ".config") &&
-				PRIVATE_CONFIG_GLOB_DIRECTORY_CANDIDATES.some((candidate) =>
-					shellGlobMatches(pattern, candidate),
+				patternMatchesLiteral(segments[index - 1] ?? "", ".config") &&
+				patternMatchesCandidates(
+					pattern,
+					PRIVATE_CONFIG_GLOB_DIRECTORY_CANDIDATES,
+					PRIVATE_CONFIG_GLOB_CANDIDATE_SET,
 				)
 			) {
 				return true;
@@ -159,14 +163,58 @@ function pathPatternReferencesPrivateData(expression: string): boolean {
 	});
 }
 
-function shellGlobMatches(pattern: string, candidate: string): boolean {
-	return expandBracePatterns(pattern).some((expanded) => {
+// Hoisted once so hot shell scans never reallocate the candidate list.
+const PRIVATE_GLOB_CANDIDATES: readonly string[] = [
+	...PRIVATE_GLOB_DIRECTORY_CANDIDATES,
+	...PRIVATE_GLOB_FILE_CANDIDATES,
+];
+const PRIVATE_GLOB_CANDIDATE_SET = new Set(
+	PRIVATE_GLOB_CANDIDATES.map((candidate) => candidate.toLowerCase()),
+);
+const PRIVATE_CONFIG_GLOB_CANDIDATE_SET = new Set(
+	PRIVATE_CONFIG_GLOB_DIRECTORY_CANDIDATES.map((candidate) =>
+		candidate.toLowerCase(),
+	),
+);
+
+function hasGlobSyntax(pattern: string): boolean {
+	return /[*?\[{]/.test(pattern);
+}
+
+function patternMatchesLiteral(pattern: string, candidate: string): boolean {
+	if (!hasGlobSyntax(pattern))
+		return pattern.toLowerCase() === candidate.toLowerCase();
+	return compileShellGlobMatchers(pattern).some((matcher) =>
+		matcher.test(candidate),
+	);
+}
+
+function patternMatchesCandidates(
+	pattern: string,
+	candidates: readonly string[],
+	candidateSet: ReadonlySet<string>,
+): boolean {
+	// Patterns without glob syntax can only match by exact (case-insensitive)
+	// equality, so a set lookup replaces one regex build per candidate.
+	if (!hasGlobSyntax(pattern)) return candidateSet.has(pattern.toLowerCase());
+	// One compiled matcher per brace expansion, tested against every
+	// candidate — the same matches as compiling per candidate, with far fewer
+	// RegExp constructions.
+	const matchers = compileShellGlobMatchers(pattern);
+	return matchers.some((matcher) =>
+		candidates.some((candidate) => matcher.test(candidate)),
+	);
+}
+
+function compileShellGlobMatchers(pattern: string): RegExp[] {
+	const matchers: RegExp[] = [];
+	for (const expanded of expandBracePatterns(pattern)) {
 		const literal = expanded.replace(/\[[^\]]*\]/g, "").replace(/[*?]/g, "");
-		if (literal.length === 0) return false;
+		if (literal.length === 0) continue;
 		let source = "^";
 		for (let index = 0; index < expanded.length; index++) {
 			const character = expanded[index];
-			if (character === "*") {
+		if (character === "*") {
 				source += ".*";
 			} else if (character === "?") {
 				source += ".";
@@ -185,11 +233,13 @@ function shellGlobMatches(pattern: string, candidate: string): boolean {
 			}
 		}
 		try {
-			return new RegExp(`${source}$`, "i").test(candidate);
+			matchers.push(new RegExp(`${source}$`, "i"));
 		} catch {
-			return false;
+			// An uncompilable branch matches nothing, as before; other
+			// brace branches are still tried.
 		}
-	});
+	}
+	return matchers;
 }
 
 function expandBracePatterns(pattern: string, depth = 0): string[] {

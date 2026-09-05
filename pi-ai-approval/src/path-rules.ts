@@ -278,6 +278,7 @@ export function isProjectPrivateSegment(segment: string): boolean {
 }
 
 export function isCommonPrivateDirectory(segments: string[]): boolean {
+	const joined = `/${segments.join("/")}/`;
 	return (
 		segments.some((segment) => externalPrivateSegments.has(segment)) ||
 		segments.some(
@@ -285,9 +286,7 @@ export function isCommonPrivateDirectory(segments: string[]): boolean {
 				segment === ".config" &&
 				externalPrivateConfigSegments.has(segments[index + 1] ?? ""),
 		) ||
-		PRIVATE_PATH_FRAGMENTS.some((fragment) =>
-			`/${segments.join("/")}/`.includes(fragment),
-		)
+		PRIVATE_PATH_FRAGMENTS.some((fragment) => joined.includes(fragment))
 	);
 }
 
