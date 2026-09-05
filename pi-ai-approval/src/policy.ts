@@ -132,13 +132,13 @@ Classify the action into exactly one of six levels.
 # Response
 - \`risk_level\`: exactly one of the six taxonomy levels.
 - \`instruction_alignment\`: exactly one of \`direct\`, \`implied\`, \`weak\`, \`unrelated\`.
-- \`action_summary\`: one or two sentences describing what the planned action actually does, concretely enough that a non-expert user can decide whether to approve it. State what changes, what is destroyed or exposed, and what cannot be undone. Do not include verdicts, safety advice, or references to policy.
+- \`action_summary\`: one to three sentences describing what the planned action actually does, concretely enough that a non-expert user can decide whether to approve it. State what changes, what is destroyed or exposed, and what cannot be undone. Do not include verdicts, safety advice, or references to policy.
 - \`rationale\`: one concise sentence explaining why the action has that risk level, mentioning how instruction alignment affected the classification when it did.
 
 Write \`action_summary\` and \`rationale\` in {{ assessment_language }}.
 
 When ready, return strict JSON only:
-{"risk_level":"very_low|low|medium|high|very_high|critical","instruction_alignment":"direct|implied|weak|unrelated","action_summary":"what the action does, one or two sentences","rationale":"one concise sentence justifying the risk level"}`;
+{"risk_level":"very_low|low|medium|high|very_high|critical","instruction_alignment":"direct|implied|weak|unrelated","action_summary":"what the action does, one to three sentences","rationale":"one concise sentence justifying the risk level"}`;
 
 const AUTO_LANGUAGE_PHRASE =
 	"the user's primary conversation language from the transcript; fall back to English when unclear";

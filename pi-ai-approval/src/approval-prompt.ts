@@ -29,7 +29,7 @@ export function buildApprovalPrompt(
 		"Operation:",
 		formatActionPreview(action),
 		"",
-		"AI assessment:",
+		"Action Summary:",
 		bound(assessment.action_summary),
 		"",
 		"Reason:",

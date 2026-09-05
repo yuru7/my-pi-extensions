@@ -59,7 +59,7 @@ test("builds the approval prompt with risk, operation, and AI explanation", () =
 	assert.match(prompt, /^Instruction alignment: direct$/m);
 	assert.match(prompt, /^Operation:$/m);
 	assert.match(prompt, /^\$ git reset --hard HEAD~1$/m);
-	assert.match(prompt, /^AI assessment:$/m);
+	assert.match(prompt, /^Action Summary:$/m);
 	assert.match(prompt, /Force-resets the current branch one commit back/m);
 	assert.match(prompt, /^Reason:$/m);
 	assert.match(prompt, /Uncommitted changes may be lost/m);
