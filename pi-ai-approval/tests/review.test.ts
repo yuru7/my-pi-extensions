@@ -638,3 +638,37 @@ test("keeps selection order, budgets, and notice stable for large transcripts", 
 		previousIndex = parsed.index;
 	}
 });
+
+test("treats an explicitly requested plain local commit as low, not destructive", () => {
+	assert.match(
+		REVIEW_POLICY,
+		/plain additive local `git commit` that only records already-staged changes/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/A plain additive commit is not a destructive git history operation/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/Chained read-only companions such as `git status` or `git log` do not raise its level/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/An explicitly requested plain local `git commit` of already-staged changes/,
+	);
+});
+
+test("keeps history rewrites at medium or above", () => {
+	assert.match(
+		REVIEW_POLICY,
+		/`commit --amend`, rebases, and other history rewrites stay at `medium` or above/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/`git commit --amend`, rebases, or other history rewrites → `medium` or above/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/An unrequested `git reset --hard` is at least `high`/,
+	);
+});

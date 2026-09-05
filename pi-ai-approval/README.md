@@ -47,7 +47,7 @@ Key principles:
 | `very_high` | Even when explicitly requested, blast radius, recovery cost, or irreversibility requires human re-verification: bulk production data operations, mass deletions, major IAM changes, protected-branch force updates |
 | `critical` | Beyond normal agent auto-execution regardless of instruction: secret exfiltration, unrecoverable mass destruction, permanent security-mechanism disablement, broad privilege grants |
 
-Worked examples: editing a file to fix the reported bug → `low`; installing a needed dependency → `medium`; an unrequested `git reset --hard` → `high` (explicitly requested → `medium`); a production DB migration, even explicitly requested → `high`; bulk-deleting production data → `very_high`; sending secrets to an external URL, even if requested → `critical`.
+Worked examples: editing a file to fix the reported bug → `low`; installing a needed dependency → `medium`; an explicitly requested plain local `git commit` → `low` (`--amend` and history rewrites stay `medium` or above); an unrequested `git reset --hard` → `high` (explicitly requested → `medium`); a production DB migration, even explicitly requested → `high`; bulk-deleting production data → `very_high`; sending secrets to an external URL, even if requested → `critical`.
 
 ## Configuration
 

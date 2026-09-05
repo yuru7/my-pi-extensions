@@ -88,7 +88,7 @@ tool_call イベント
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
 | `src/shell-private-data.ts` | `bash.command` 用ヒューリスティクス: シェルをトークン化し `~` を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
 | `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`、文字数制限付きのプロンプト・トランスクリプト構築、`parseRiskAssessment`（未知レベル・要約/根拠欠落を拒否する厳密検証）。 |
-| `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。 |
+| `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。明示依頼の通常ローカル commit は `low`、履歴書き換え系は `medium` 以上に据え置く。 |
 | `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
