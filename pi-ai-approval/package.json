@@ -1,6 +1,6 @@
 {
   "name": "@yuru7/pi-ai-approval",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A fail-closed approval gate for Pi that classifies every covered tool call into six risk levels with an isolated AI reviewer and enforces per-level allow/ask/deny from local configuration.",
   "keywords": [
     "pi-package",
