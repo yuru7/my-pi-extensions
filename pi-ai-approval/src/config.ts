@@ -107,8 +107,8 @@ export const DEFAULT_REVIEW_RULES: Readonly<Record<string, ReviewLevel>> = {
 export function buildDefaultConfigFile(): Record<string, unknown> {
 	return {
 		primaryModel: CURRENT_MODEL_SETTING,
-		secondaryModel: CURRENT_MODEL_SETTING,
 		primaryThinkingLevel: DEFAULT_REVIEWER_THINKING_LEVEL,
+		secondaryModel: CURRENT_MODEL_SETTING,
 		secondaryThinkingLevel: DEFAULT_REVIEWER_THINKING_LEVEL,
 		timeoutMs: REVIEW_TIMEOUT_MS,
 		assessmentLanguage: "auto",

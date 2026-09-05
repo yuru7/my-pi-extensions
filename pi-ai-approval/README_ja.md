@@ -51,13 +51,13 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 
 ## 設定
 
-`ai-approval.json` はグローバルのエージェントディレクトリ(`~/.pi/agent/`)と、信頼済みプロジェクトではプロジェクト側の `.pi/ai-approval.json` から読み込まれます。プロジェクト設定はポリシーを厳しくすることだけができ、緩めることはできません。
+`ai-approval.json` はグローバルのエージェントディレクトリ(`~/.pi/agent/`)と、信頼済みプロジェクトではプロジェクト側の `.pi/ai-approval.json` から読み込まれます。プロジェクト設定はポリシーを厳しくすることだけができ、緩めることはできません。両方のファイルが存在しない場合は起動時に警告し、`/ai-approval init` で作成するよう案内します。作成されるまではビルトインのデフォルトが有効です。
 
 ```json
 {
   "primaryModel": "CURRENT",
-  "secondaryModel": "CURRENT",
   "primaryThinkingLevel": "low",
+  "secondaryModel": "CURRENT",
   "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
   "riskActions": {

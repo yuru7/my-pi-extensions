@@ -1357,6 +1357,113 @@ test("reports lifecycle health without writing footer status", async () => {
 	}
 });
 
+test("warns on startup when no configuration file exists", async () => {
+	const handlers = new Map<string, (event: unknown, ctx: never) => unknown>();
+	const commands = new Map<string, { handler: (args: string, ctx: never) => unknown }>();
+	aiApproval({
+		on: (name: string, handler: (event: unknown, ctx: never) => unknown) => {
+			handlers.set(name, handler);
+		},
+		registerCommand: (
+			name: string,
+		options: { handler: (args: string, ctx: never) => unknown },
+		) => commands.set(name, options),
+	} as never);
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousPrimary = process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
+	const previousSecondary = process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
+	const previousTimeout = process.env.PI_AI_APPROVAL_TIMEOUT_MS;
+	const previousPolicy = process.env.PI_AI_APPROVAL_POLICY;
+	delete process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
+	delete process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
+	delete process.env.PI_AI_APPROVAL_TIMEOUT_MS;
+	delete process.env.PI_AI_APPROVAL_POLICY;
+	const model = { provider: "test", id: "reviewer" };
+	const makeCtx = (cwd: string, notices: string[]) =>
+		({
+			cwd,
+			mode: "tui",
+			isProjectTrusted: () => false,
+			model,
+			modelRegistry: {
+				find: () => model,
+				hasConfiguredAuth: () => true,
+				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
+			},
+			sessionManager: { getBranch: () => [] },
+			signal: undefined,
+			abort: () => undefined,
+			waitForIdle: async () => undefined,
+			ui: {
+				theme: { fg: (_color: string, text: string) => text },
+				setStatus: () => undefined,
+				setWidget: () => undefined,
+				notify: (message: string) => notices.push(message),
+			},
+		}) as never;
+	try {
+		// Both global and project configs are absent: startup suggests init.
+		const missingRoot = mkdtempSync(join(tmpdir(), "ai-approval-missing-"));
+		const missingProject = join(missingRoot, "project");
+		mkdirSync(missingProject, { recursive: true });
+		process.env.PI_CODING_AGENT_DIR = join(missingRoot, "agent");
+		let notices: string[] = [];
+		await handlers.get("session_start")?.({}, makeCtx(missingProject, notices));
+		assert.match(notices.join("\n"), /\/ai-approval init/);
+
+		// Global config present: no startup suggestion.
+		const globalRoot = mkdtempSync(join(tmpdir(), "ai-approval-global-"));
+		const globalAgentDir = join(globalRoot, "agent");
+		const globalProject = join(globalRoot, "project");
+		mkdirSync(globalAgentDir, { recursive: true });
+		mkdirSync(globalProject, { recursive: true });
+		writeFileSync(join(globalAgentDir, "ai-approval.json"), JSON.stringify({}));
+		process.env.PI_CODING_AGENT_DIR = globalAgentDir;
+		notices = [];
+		await handlers.get("session_start")?.({}, makeCtx(globalProject, notices));
+		assert.doesNotMatch(notices.join("\n"), /\/ai-approval init/);
+
+		// Project config present: no startup suggestion.
+		const projectRoot = mkdtempSync(join(tmpdir(), "ai-approval-project-"));
+		const projectDir = join(projectRoot, "project");
+		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		writeFileSync(
+			join(projectDir, ".pi", "ai-approval.json"),
+			JSON.stringify({}),
+		);
+		process.env.PI_CODING_AGENT_DIR = join(projectRoot, "agent");
+		notices = [];
+		await handlers.get("session_start")?.({}, makeCtx(projectDir, notices));
+		assert.doesNotMatch(notices.join("\n"), /\/ai-approval init/);
+
+		// Re-enabling review must not repeat the missing-config suggestion.
+		process.env.PI_CODING_AGENT_DIR = join(missingRoot, "agent");
+		notices = [];
+		const ctx = makeCtx(missingProject, notices);
+		await handlers.get("session_start")?.({}, ctx);
+		assert.match(notices.join("\n"), /\/ai-approval init/);
+		notices.length = 0;
+		await commands.get("ai-approval")?.handler("bypass", ctx);
+		notices.length = 0;
+		await commands.get("ai-approval")?.handler("enable", ctx);
+		assert.doesNotMatch(notices.join("\n"), /\/ai-approval init/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousPrimary === undefined)
+			delete process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
+		else process.env.PI_AI_APPROVAL_PRIMARY_MODEL = previousPrimary;
+		if (previousSecondary === undefined)
+			delete process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
+		else process.env.PI_AI_APPROVAL_SECONDARY_MODEL = previousSecondary;
+		if (previousTimeout === undefined)
+			delete process.env.PI_AI_APPROVAL_TIMEOUT_MS;
+		else process.env.PI_AI_APPROVAL_TIMEOUT_MS = previousTimeout;
+		if (previousPolicy === undefined) delete process.env.PI_AI_APPROVAL_POLICY;
+		else process.env.PI_AI_APPROVAL_POLICY = previousPolicy;
+	}
+});
+
 test("temporarily bypasses reviews with only a persistent below-editor warning", async () => {
 	const handlers = new Map<string, (event: unknown, ctx: never) => unknown>();
 	const commands = new Map<

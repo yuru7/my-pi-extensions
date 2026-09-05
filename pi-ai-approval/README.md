@@ -51,13 +51,13 @@ Worked examples: editing a file to fix the reported bug → `low`; installing a 
 
 ## Configuration
 
-`ai-approval.json` is read from the global agent directory (`~/.pi/agent/`) and, for trusted projects, from `.pi/ai-approval.json` in the project. Project settings can only make the policy stricter; they cannot weaken it.
+`ai-approval.json` is read from the global agent directory (`~/.pi/agent/`) and, for trusted projects, from `.pi/ai-approval.json` in the project. Project settings can only make the policy stricter; they cannot weaken it. If neither file exists, the extension warns on startup and suggests running `/ai-approval init` to create one; built-in defaults stay active until then.
 
 ```json
 {
   "primaryModel": "CURRENT",
-  "secondaryModel": "CURRENT",
   "primaryThinkingLevel": "low",
+  "secondaryModel": "CURRENT",
   "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
   "riskActions": {

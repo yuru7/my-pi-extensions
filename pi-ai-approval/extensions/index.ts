@@ -191,7 +191,7 @@ export default function aiApproval(
 		const wasBypassed = temporaryBypassActive;
 		resetRuntime();
 		if (wasBypassed) clearBypassWarning(ctx);
-		syncReviewerRuntimeHealth(ctx, statusCallbacks);
+		syncReviewerRuntimeHealth(ctx, statusCallbacks, true);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		resetRuntime();

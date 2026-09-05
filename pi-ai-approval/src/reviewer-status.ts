@@ -61,12 +61,23 @@ export interface ReviewerStatusCallbacks {
 export function syncReviewerRuntimeHealth(
 	ctx: ExtensionContext,
 	callbacks: ReviewerStatusCallbacks,
+	warnIfMissingConfig = false,
 ): void {
 	const config = loadApprovalConfig({
 		cwd: ctx.cwd,
 		projectTrusted: ctx.isProjectTrusted(),
 	});
 	callbacks.syncConfigurationWarnings(ctx, config.warnings);
+	if (
+		warnIfMissingConfig &&
+		!config.globalConfigPresent &&
+		!config.projectConfigPresent
+	) {
+		ctx.ui.notify(
+			"AI Approval configuration was not found. Built-in defaults are active. Run /ai-approval init to create ai-approval.json.",
+			"warning",
+		);
+	}
 	const channels = buildReviewerChannels(
 		config,
 		ctx.modelRegistry,
