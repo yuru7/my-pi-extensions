@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | [`pi-native-notify/`](../pi-native-notify) | `@yuru7/pi-native-notify` | `pi install npm:@yuru7/pi-native-notify` |
 | [`pi-undo/`](../pi-undo) | `@yuru7/pi-undo` | `pi install npm:@yuru7/pi-undo` |
+| [`pi-print-stream/`](../pi-print-stream) | `@yuru7/pi-print-stream` | `pi install npm:@yuru7/pi-print-stream` |
 
 どちらもスコープ付きです。スコープ付きパッケージは初回公開時の既定が **restricted**（非公開）なので、少なくとも初回は `--access public` が必要です。
 
@@ -73,6 +74,7 @@ pnpm pack --dry-run
 
 - `pi-native-notify`: `extensions/`、`README.md`、`LICENSE`
 - `pi-undo`: `extensions/`、`src/`、`README.md`、`LICENSE`
+- `pi-print-stream`: `extensions/`、`src/`、`README.md`、`LICENSE`
 
 ### 4. バージョンを上げる
 
@@ -130,7 +132,7 @@ npm view @yuru7/pi-native-notify version
 
 - [ ] パッケージディレクトリへ `cd` した
 - [ ] `pnpm whoami` が `yuru7`
-- [ ] テストが通る（`pi-undo` は typecheck も）
+- [ ] テストが通る（`pi-undo` と `pi-print-stream` は typecheck も）
 - [ ] `pnpm pack --dry-run` に意図したファイルだけが出る
 - [ ] `package.json` の `version` がレジストリ上にまだ無い
 - [ ] `keywords` に `pi-package` がある

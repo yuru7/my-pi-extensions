@@ -1,0 +1,53 @@
+{
+  "name": "@yuru7/pi-print-stream",
+  "version": "0.1.0",
+  "description": "A Pi extension that streams non-interactive runs: realtime text, tool JSONL, transient thinking, and usage summary",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "stream"
+  ],
+  "license": "MIT",
+  "author": "yuru7",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuru7/my-pi-extensions.git",
+    "directory": "pi-print-stream"
+  },
+  "bugs": {
+    "url": "https://github.com/yuru7/my-pi-extensions/issues"
+  },
+  "homepage": "https://github.com/yuru7/my-pi-extensions/tree/main/pi-print-stream#readme",
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "dependencies": {
+    "string-width": "^8.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@types/node": "^24.5.2",
+    "typescript": "^7.0.2"
+  }
+}
