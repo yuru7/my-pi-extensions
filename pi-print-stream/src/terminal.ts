@@ -106,11 +106,20 @@ export function formatTps(outputTokens: number, generationMs: number): string {
   return `${(safeOutput / (generationMs / 1000)).toFixed(1)} tok/s`;
 }
 
-/** Separator line used for thinking view and final summary. */
+/** Separator line used for the thinking view. */
 export function separatorLine(columns: number, maxWidth = 40): string {
   const width = Math.floor(Number.isFinite(columns) ? columns : maxWidth);
   const clamped = Math.max(10, Math.min(width, maxWidth));
   return "─".repeat(clamped);
+}
+
+/** ANSI wrappers for subtle (gray/dimmed) output. TTY only. */
+export const DIM = "\x1b[2m";
+export const RESET = "\x1b[0m";
+
+/** Wrap text in dim styling. Callers must skip this when not on a TTY. */
+export function dimText(text: string): string {
+  return `${DIM}${text}${RESET}`;
 }
 
 /**

@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import { describe, test } from "node:test";
 import {
   createColumnsProbe,
+  DIM,
+  dimText,
   formatCount,
   formatSeconds,
   formatTps,
@@ -66,6 +68,10 @@ describe("terminal helpers", () => {
   test("formatTps divides output by generation seconds", () => {
     assert.equal(formatTps(3842, 11600), "331.2 tok/s");
     assert.equal(formatTps(100, 0), "-");
+  });
+
+  test("dimText wraps text in dim styling", () => {
+    assert.equal(dimText("hello"), `${DIM}hello\x1b[0m`);
   });
 
   test("separatorLine is clamped", () => {

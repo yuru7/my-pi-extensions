@@ -3,12 +3,14 @@ import { MAX_THINKING_LINES, ThinkingBuffer } from "./thinking-view.ts";
 import type { StatsSnapshot } from "./stats.ts";
 import {
   createColumnsProbe,
+  dimText,
   formatCount,
   formatSeconds,
   formatTps,
   isRealTTY,
   safeJsonStringify,
   separatorLine,
+  stripAnsi,
   writeRealStdout,
 } from "./terminal.ts";
 
@@ -55,7 +57,8 @@ export class Renderer {
   private thinkingActive = false;
   private renderedRows = 0;
   private persistentEmpty = true;
-  private persistentEndsWithNewline = true;
+  private tail = "";
+  private lastWasToolEvent = false;
 
   constructor(options: RendererOptions = {}) {
     const stdout = options.stdout;
@@ -107,7 +110,31 @@ export class Renderer {
       return;
     }
     this.persistentEmpty = false;
-    this.persistentEndsWithNewline = chunk.endsWith("\n");
+    // Measure the visible tail so dimmed (ANSI-wrapped) lines still count
+    // as the single screen line they occupy.
+    this.tail = (this.tail + stripAnsi(chunk)).slice(-2);
+  }
+
+  private get endsWithNewline(): boolean {
+    return this.tail.endsWith("\n");
+  }
+
+  private get endsWithBlankLine(): boolean {
+    return this.tail === "\n\n";
+  }
+
+  /**
+   * Separate the upcoming block from previous output with a blank line.
+   * No-op at the start of the run or when already separated, so consecutive
+   * lines within one group (tool start/end, answer deltas) stay together.
+   */
+  private ensureBlankLineBefore(): void {
+    if (this.persistentEmpty || this.endsWithBlankLine) {
+      return;
+    }
+    const sep = this.endsWithNewline ? "\n" : "\n\n";
+    this.write(sep);
+    this.trackPersistent(sep);
   }
 
   private currentColumns(): number {
@@ -168,6 +195,10 @@ export class Renderer {
     // Errors are persistent output and always end the thinking session,
     // matching the failure path which clears the transient view first.
     this.endThinkingForPersistent();
+    if (this.lastWasToolEvent) {
+      this.ensureBlankLineBefore();
+      this.lastWasToolEvent = false;
+    }
     const line = message.endsWith("\n") ? message : `${message}\n`;
     this.write(line);
     this.trackPersistent(line);
@@ -208,6 +239,10 @@ export class Renderer {
     // Text takes over the screen: drop the thinking session entirely so the
     // answer stream is never interleaved with a repainted thinking block.
     this.endThinkingForPersistent();
+    if (this.lastWasToolEvent) {
+      this.ensureBlankLineBefore();
+      this.lastWasToolEvent = false;
+    }
     this.write(delta);
     this.trackPersistent(delta);
   }
@@ -216,6 +251,8 @@ export class Renderer {
     // Tool args come from the model and can contain anything, including
     // circular structures or BigInt. The JSONL stream must stay intact, so
     // serialization here is total: it always emits one JSON object line.
+    // On a TTY the line is dimmed to keep it unobtrusive; redirected output
+    // stays plain so grep/jq keep working.
     let line = safeJsonStringify(event);
     if (!line.startsWith("{")) {
       line = (
@@ -224,10 +261,19 @@ export class Renderer {
         `"name":${JSON.stringify(event.name)},"unserializable":true}`
       );
     }
+    if (this.isTTY) {
+      line = dimText(line);
+    }
     const framed = `${line}\n`;
     this.endThinkingForPersistent();
+    // Consecutive tool events stay together as one group; only the first
+    // one after other output is separated by a blank line.
+    if (!this.lastWasToolEvent) {
+      this.ensureBlankLineBefore();
+    }
     this.write(framed);
     this.trackPersistent(framed);
+    this.lastWasToolEvent = true;
   }
 
   /** Repaint the active thinking view, e.g. after a terminal resize. */
@@ -239,39 +285,29 @@ export class Renderer {
     this.renderThinkingView();
   }
 
-  private writeSummaryBlock(title: string, stats: StatsSnapshot): void {
+  private writeSummaryBlock(succeeded: boolean, stats: StatsSnapshot): void {
     this.endThinkingForPersistent();
-    if (!this.persistentEmpty && !this.persistentEndsWithNewline) {
-      this.write("\n");
-      this.trackPersistent("\n");
-    }
-    const separator = separatorLine(40);
-    const lines = [
-      separator,
-      title,
-      "",
-      "Tokens",
-      `  ${"Input".padEnd(12)}${formatCount(stats.input)}`,
-      `  ${"Cache read".padEnd(12)}${formatCount(stats.cacheRead)}`,
-      `  ${"Output".padEnd(12)}${formatCount(stats.output)}`,
-      `  ${"Cache write".padEnd(12)}${formatCount(stats.cacheWrite)}`,
-      "",
-      `  ${"Elapsed".padEnd(12)}${formatSeconds(stats.elapsedMs)}`,
-      `  ${"Generation".padEnd(12)}${formatSeconds(stats.generationMs)}`,
-      `  ${"TPS".padEnd(12)}${formatTps(stats.output, stats.generationMs)}`,
-      separator,
-      "",
-    ];
-    const block = `${lines.join("\n")}`;
-    this.write(block);
-    this.trackPersistent(block);
+    this.ensureBlankLineBefore();
+    this.lastWasToolEvent = false;
+    const title = succeeded ? "Done" : "Failed";
+    const body =
+      `${title} in ${formatSeconds(stats.elapsedMs)}\n` +
+      `Tokens: Input ${formatCount(stats.input)}` +
+      ` / Cache read ${formatCount(stats.cacheRead)}` +
+      ` / Output ${formatCount(stats.output)}` +
+      ` / Cache write ${formatCount(stats.cacheWrite)}\n` +
+      `TPS: ${formatTps(stats.output, stats.generationMs)}\n`;
+    // Dimmed on a TTY so the summary stays unobtrusive; plain otherwise so
+    // redirected logs stay clean.
+    this.write(this.isTTY ? dimText(body) : body);
+    this.trackPersistent(body);
   }
 
   finish(stats: StatsSnapshot): void {
-    this.writeSummaryBlock("Done", stats);
+    this.writeSummaryBlock(true, stats);
   }
 
   fail(stats: StatsSnapshot): void {
-    this.writeSummaryBlock("Failed", stats);
+    this.writeSummaryBlock(false, stats);
   }
 }

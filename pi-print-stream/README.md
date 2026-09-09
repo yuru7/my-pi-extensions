@@ -48,7 +48,9 @@ pi -e ./extensions/index.ts -p "your prompt" --stream
 
 ### Tool calls
 
-Tool activity is emitted as compact JSONL, one event per line:
+Tool activity is emitted as compact JSONL, one event per line. On a TTY the
+lines are dimmed to stay unobtrusive; redirected output stays plain so
+grep/jq keep working:
 
 ```json
 {"type":"tool_start","id":"tool_1","name":"read","args":{"path":"src/index.ts"}}
@@ -93,24 +95,17 @@ machine-readable.
 
 ### Final summary
 
+A compact 3-line block:
+
 ```text
-────────────────────────────────────────
-Done
-
-Tokens
-  Input        12,481
-  Cache read   48,220
-  Output        3,842
-  Cache write       0
-
-Elapsed        24.8s
-Generation     11.6s
-TPS            331.2 tok/s
-────────────────────────────────────────
+Done in 24.8s
+Tokens: Input 12,481 / Cache read 48,220 / Output 3,842 / Cache write 0
+TPS: 331.2 tok/s
 ```
 
 On failure the title is `Failed` and the statistics collected so far are
 shown. A missing trailing newline in the answer is added before the summary.
+On a TTY the block is dimmed; otherwise it is plain text.
 
 ## TPS definition
 
