@@ -45,8 +45,10 @@ export interface ToolEndEvent {
  * Splits output into persistent (scrollback) and transient (thinking) parts.
  *
  * Thinking is only rendered when stdout is a TTY. It is drawn as a trailing
- * block of at most 8 screen rows plus header/separator lines, and is always
- * erased before persistent output or the final summary is written.
+ * block of at most 8 screen rows plus header/separator lines. The block is
+ * erased before answer text, errors, or the final summary. Tool events
+ * alone never end the thinking session: the view is hidden, the tool line
+ * is written, and the thinking view is repainted below it.
  */
 export class Renderer {
   private readonly isTTY: boolean;
@@ -265,7 +267,11 @@ export class Renderer {
       line = dimText(line);
     }
     const framed = `${line}\n`;
-    this.endThinkingForPersistent();
+    // Tool calls alone must not end the thinking session: hide the
+    // transient view, write the tool line, then repaint thinking below it.
+    // The session ends only when answer text (or an error/summary) takes
+    // over.
+    this.clearThinkingView();
     // Consecutive tool events stay together as one group; only the first
     // one after other output is separated by a blank line.
     if (!this.lastWasToolEvent) {
@@ -274,6 +280,7 @@ export class Renderer {
     this.write(framed);
     this.trackPersistent(framed);
     this.lastWasToolEvent = true;
+    this.renderThinkingView();
   }
 
   /** Repaint the active thinking view, e.g. after a terminal resize. */

@@ -84,7 +84,7 @@ describe("Renderer", () => {
     assert.equal(renderer.isThinkingActive(), false);
   });
 
-  test("TTY thinking is cleared before tool events", () => {
+  test("TTY thinking survives tool events and is repainted below them", () => {
     const fake = createFakeStdout(true);
     const renderer = new Renderer({
       isTTY: true,
@@ -94,9 +94,33 @@ describe("Renderer", () => {
     renderer.appendThinking("thought");
     renderer.writeToolEvent({ type: "tool_start", id: "t1", name: "bash", args: {} });
     const text = output(fake);
-    assert.ok(text.indexOf("\x1b[") !== -1);
+    // Tool line is written...
     assert.ok(text.includes('"type":"tool_start"'));
+    // ...but the thinking session survives tool calls alone.
+    assert.equal(renderer.isThinkingActive(), true);
+    // The thinking view is hidden before the tool line and repainted after
+    // it, so the thought is still visible below the tool event.
+    const toolIndex = text.indexOf('"type":"tool_start"');
+    const repaintIndex = text.indexOf("thought", toolIndex);
+    assert.ok(toolIndex !== -1);
+    assert.ok(repaintIndex !== -1, "expected thinking repaint after tool event");
+  });
+
+  test("TTY thinking ends when answer text takes over", () => {
+    const fake = createFakeStdout(true);
+    const renderer = new Renderer({
+      isTTY: true,
+      stdout: asWriteStream(fake),
+      columns: () => 80,
+    });
+    renderer.appendThinking("thought");
+    renderer.writeToolEvent({ type: "tool_start", id: "t1", name: "bash", args: {} });
+    assert.equal(renderer.isThinkingActive(), true);
+    renderer.writeText("answer");
     assert.equal(renderer.isThinkingActive(), false);
+    const text = output(fake);
+    // No repaint after the answer: the thought must not reappear below it.
+    assert.ok(!text.slice(text.indexOf("answer")).includes("thought"));
   });
 
   test("thinking view shows at most 8 body rows plus chrome", () => {

@@ -67,7 +67,8 @@ export class StreamProcessor {
         if (role === undefined || role === "assistant") {
           this.stats.startGeneration();
         }
-        this.renderer.clearThinking();
+        // Tool-only message boundaries must not drop the thinking session;
+        // it survives until answer text takes over.
         break;
       }
       case "message_update": {
@@ -122,7 +123,8 @@ export class StreamProcessor {
             this.assistantError = true;
           }
         }
-        this.renderer.clearThinking();
+        // Same as message_start: only answer text ends the thinking
+        // session, so tool-only boundaries leave the view intact.
         break;
       }
       default: {

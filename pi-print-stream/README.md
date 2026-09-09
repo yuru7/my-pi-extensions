@@ -82,11 +82,13 @@ Thinking
 - At most 8 screen rows are shown (wrapping-aware: CJK, emoji, and ANSI
   sequences are measured by display width, not `string.length`).
 - Older content scrolls off the top; only the latest rows are visible.
-- The block is erased before answer text, tool events, errors, or the final
-  summary are written, so outputs never interleave.
+- Tool calls alone never end the thinking session: the block is hidden,
+  the tool line is written, and the thinking view is repainted below it.
+- The block is erased when answer text starts, and before errors or the
+  final summary are written, so outputs never interleave.
 - The block is erased on resize and repainted with the new terminal width.
-- Thinking sessions reset per assistant message: once answer text or a tool
-  event takes over, the thinking view is dropped rather than repainted.
+- The thinking session ends when answer text takes over; tool-only message
+  boundaries leave the view intact.
 
 When stdout is not a TTY (redirect, pipe, `tee`, scripts), thinking is
 discarded completely and no ANSI control sequences are emitted. Only answer
