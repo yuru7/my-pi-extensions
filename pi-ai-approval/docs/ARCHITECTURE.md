@@ -93,7 +93,7 @@ tool_call イベント
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
 | `src/risk-policy.ts` | 純粋な `assessment → allow/ask/deny` 変換（`resolveRiskAction` / `applyRiskPolicy`）。手作り設定で迂回されても `very_high` / `critical` の `allow` を拒否。I/O・UI なし。 |
-| `src/approval-prompt.ts` | `ask` の UX: `No/Yes` 選択肢で `No` が初期選択（Enter = ブロック）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。 |
+| `src/approval-prompt.ts` | `ask` の UX: `No/Yes` 選択肢で `No` が初期選択（Enter = ブロック）、対話 TUI + TTY では表示時に BEL でベルを鳴らす（失敗してもプロンプト継続、RPC/JSON/print では鳴らさない）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。 |
 | `src/review-presentation.ts` | 人・ agent 向け文面: `riskLabel`、操作プレビュー、`formatReviewResult`（UI 通知用）、`rejectionReason`（agent 向けブロック理由。回避策禁止の指示付き）。 |
 | `src/reviewer-status.ts` | `/ai-approval` の status・`rules` 出力、起動時ヘルス同期、フォールバック通知。両方の設定ファイルが存在しない場合の起動時 `/ai-approval init` 案内を含む。 |
 | `src/authorization-provenance.ts` | `DirectUserInputTracker` + `collectReviewMessages`: 展開前入力と保存済みユーザーメッセージを突合し、完全一致した対話・RPC のみを `direct_user` とする。 |

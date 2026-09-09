@@ -14,6 +14,24 @@ export type ApprovalDecision =
 	| { kind: "approved" }
 	| { kind: "declined"; detail?: string };
 
+/** Minimal writable used for the terminal bell (defaults to `process.stdout`). */
+export interface BellOutput {
+	isTTY?: boolean;
+	write(data: string): unknown;
+}
+
+export function ringTerminalBell(
+	mode: ExtensionContext["mode"],
+	output: BellOutput = process.stdout,
+): void {
+	if (mode !== "tui" || !output.isTTY) return;
+	try {
+		output.write("\x07");
+	} catch {
+		// Bell failure must not prevent the approval prompt.
+	}
+}
+
 export function buildApprovalPrompt(
 	action: ReviewAction,
 	assessment: RiskAssessment,
@@ -52,6 +70,7 @@ export async function showApprovalPrompt(
 		};
 	}
 	try {
+		ringTerminalBell(ctx.mode);
 		const choice = await ctx.ui.select(
 			buildApprovalPrompt(action, assessment, assessor),
 			[...APPROVAL_CHOICES],

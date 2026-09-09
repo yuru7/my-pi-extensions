@@ -23,7 +23,7 @@ deny ─────────→ block
 ```
 
 - **`allow`** runs the tool call without confirmation.
-- **`ask`** shows an approval prompt with the model and channel rank that produced the assessment (`Risk Assessor:`), the risk level, how directly the action follows the user's instruction, the planned operation, the AI's summary, and its reason. The choice list is fixed to **No / Yes with No preselected**, so pressing Enter keeps the action blocked. Esc, Ctrl-C, and an unavailable UI also block (fail closed).
+- **`ask`** shows an approval prompt with the model and channel rank that produced the assessment (`Risk Assessor:`), the risk level, how directly the action follows the user's instruction, the planned operation, the AI's summary, and its reason. In interactive TUI mode the terminal bell rings when the prompt appears. The choice list is fixed to **No / Yes with No preselected**, so pressing Enter keeps the action blocked. Esc, Ctrl-C, and an unavailable UI also block (fail closed).
 - **`deny`** blocks the tool call and returns the AI's rationale to the agent, together with instructions not to retry the same action through a workaround.
 
 A Yes applies to exactly that one tool call. The next call is reviewed and approved on its own. Concurrent `ask` outcomes are serialized so only one prompt is ever visible.

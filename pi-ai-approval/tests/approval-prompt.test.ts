@@ -5,6 +5,7 @@ import {
 	APPROVAL_CHOICES,
 	ApprovalQueue,
 	buildApprovalPrompt,
+	ringTerminalBell,
 	showApprovalPrompt,
 } from "../src/approval-prompt.ts";
 import type { ReviewAction } from "../src/review.ts";
@@ -167,4 +168,45 @@ test("approval queue keeps running after a failing task", async () => {
 		ran = true;
 	});
 	assert.equal(ran, true);
+});
+
+test("ringTerminalBell writes BEL only in TUI mode on a TTY", () => {
+	const writes: string[] = [];
+	ringTerminalBell("tui", {
+		isTTY: true,
+		write: (data: string) => {
+			writes.push(data);
+		},
+	});
+	assert.deepEqual(writes, ["\x07"]);
+});
+
+test("ringTerminalBell stays silent outside TUI mode or without a TTY", () => {
+	for (const [mode, isTTY] of [
+		["rpc", true],
+		["print", true],
+		["json", true],
+		["tui", false],
+		["tui", undefined],
+	] as const) {
+		let calls = 0;
+		ringTerminalBell(mode, {
+			isTTY,
+			write: () => {
+				calls++;
+		},
+		});
+		assert.equal(calls, 0, `mode=${mode} isTTY=${isTTY}`);
+	}
+});
+
+test("ringTerminalBell never throws when the output fails", () => {
+	assert.doesNotThrow(() =>
+		ringTerminalBell("tui", {
+			isTTY: true,
+			write: () => {
+				throw new Error("EIO");
+			},
+		}),
+	);
 });
