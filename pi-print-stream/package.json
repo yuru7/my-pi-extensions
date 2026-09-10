@@ -1,6 +1,6 @@
 {
   "name": "@yuru7/pi-print-stream",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Pi extension that streams non-interactive runs: realtime text, tool JSONL, transient thinking, and usage summary",
   "keywords": [
     "pi-package",
