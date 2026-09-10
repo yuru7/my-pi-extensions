@@ -157,7 +157,7 @@ describe("Renderer", () => {
       generationMs: 0,
       tps: 0,
     });
-    assert.ok(output(fake).includes("no-newline\n\nDone in 0.0s\n"));
+    assert.ok(output(fake).includes("no-newline\n\nDone in 0.0s  TPS: -\n"));
   });
 
   test("blank lines separate text, tool groups, and the summary", () => {
@@ -176,8 +176,8 @@ describe("Renderer", () => {
     const endLine = '{"type":"tool_end","id":"t1","name":"read","status":"success","elapsed_ms":1}';
     assert.equal(
       output(fake),
-      `hello\n\n${startLine}\n${endLine}\n\nworld\n\nDone in 1.0s\n` +
-        `Tokens: Input 0 / Cache read 0 / Output 0 / Cache write 0\nTPS: -\n`,
+      `hello\n\n${startLine}\n${endLine}\n\nworld\n\nDone in 1.0s  TPS: -\n` +
+        `Tokens: Input 0 / Cache read 0 / Output 0 / Cache write 0\n`,
     );
   });
 
@@ -196,7 +196,7 @@ describe("Renderer", () => {
       stdout: asWriteStream(fake2),
     });
     renderer2.finish({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, elapsedMs: 500, generationMs: 0, tps: 0 });
-    assert.ok(output(fake2).startsWith("Done in 0.5s\n"));
+    assert.ok(output(fake2).startsWith("Done in 0.5s  TPS: -\n"));
   });
 
   test("fail writes compact Failed summary with dash TPS when generation is zero", () => {
@@ -215,9 +215,63 @@ describe("Renderer", () => {
       tps: 0,
     });
     const text = output(fake);
-    assert.ok(text.includes("Failed in 8.2s\n"));
+    assert.ok(text.includes("Failed in 8.2s  TPS: -\n"));
     assert.ok(text.includes("Tokens: Input 6,956 / Cache read 12,996 / Output 2,482 / Cache write 0\n"));
-    assert.ok(text.includes("TPS: -\n"));
+    assert.ok(!text.includes("To resume this session:"));
+  });
+
+  test("summary shows TPS on the Done line and resume command next", () => {
+    const fake = createFakeStdout(false);
+    const renderer = new Renderer({
+      isTTY: false,
+      stdout: asWriteStream(fake),
+    });
+    renderer.finish(
+      {
+        input: 24258,
+        output: 1110,
+        cacheRead: 59716,
+        cacheWrite: 0,
+        elapsedMs: 34400,
+        generationMs: 8960,
+        tps: 123.9,
+      },
+      "01a089b9-ae47-7772-8ce5-bd7cbb67bc29",
+    );
+    assert.equal(
+      output(fake),
+      "Done in 34.4s  TPS: 123.9 tok/s\n" +
+        "Tokens: Input 24,258 / Cache read 59,716 / Output 1,110 / Cache write 0\n" +
+        "To resume this session: pi --session 01a089b9-ae47-7772-8ce5-bd7cbb67bc29\n",
+    );
+  });
+
+  test("fail summary also shows resume command when session ID exists", () => {
+    const fake = createFakeStdout(false);
+    const renderer = new Renderer({
+      isTTY: false,
+      stdout: asWriteStream(fake),
+    });
+    renderer.fail(
+      { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, elapsedMs: 1000, generationMs: 500, tps: 4 },
+      "abc123",
+    );
+    const text = output(fake);
+    assert.ok(text.includes("Failed in 1.0s  TPS:"));
+    assert.ok(text.includes("To resume this session: pi --session abc123\n"));
+  });
+
+  test("blank session ID omits the resume command line", () => {
+    const fake = createFakeStdout(false);
+    const renderer = new Renderer({
+      isTTY: false,
+      stdout: asWriteStream(fake),
+    });
+    renderer.finish(
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, elapsedMs: 1000, generationMs: 0, tps: 0 },
+      "   ",
+    );
+    assert.ok(!output(fake).includes("To resume this session:"));
   });
 
   test("TTY dims tool events and the summary", () => {
@@ -239,7 +293,7 @@ describe("Renderer", () => {
     });
     const text = output(fake);
     assert.ok(text.includes("\x1b[2m{\"type\":\"tool_start\""));
-    assert.ok(text.includes("\x1b[2mDone in 1.0s\n"));
+    assert.ok(text.includes("\x1b[2mDone in 1.0s  TPS:"));
     assert.ok(text.trimEnd().endsWith("\x1b[0m"));
   });
 

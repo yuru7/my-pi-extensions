@@ -13,7 +13,7 @@ While the turn runs:
 - Thinking appears as a transient block of at most 8 screen rows (TTY only)
   and never pollutes the scrollback or redirected output.
 - When the run finishes, a usage summary shows tokens, elapsed time,
-  generation time, and TPS.
+  TPS, and a command to continue the session.
 
 ## How it works
 
@@ -108,10 +108,15 @@ machine-readable.
 A compact 3-line block:
 
 ```text
-Done in 24.8s
+Done in 24.8s  TPS: 331.2 tok/s
 Tokens: Input 12,481 / Cache read 48,220 / Output 3,842 / Cache write 0
-TPS: 331.2 tok/s
+To resume this session: pi --session 01a089b9-ae47-7772-8ce5-bd7cbb67bc29
 ```
+
+The session ID comes from the leading `{"type":"session",...}` header of
+the child `--mode json` stream. The `To resume this session` line is omitted when
+no session ID is available (for example `--no-session` or a failure before
+the header arrives).
 
 On failure the title is `Failed` and the statistics collected so far are
 shown. A missing trailing newline in the answer is added before the summary.

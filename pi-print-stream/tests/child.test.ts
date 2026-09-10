@@ -5,6 +5,7 @@ import { describe, test } from "node:test";
 import {
   buildChildArgs,
   flagOn,
+  hasNoSessionFlag,
   isChildGuardSet,
   runChildStream,
   swallowedPrompt,
@@ -108,6 +109,14 @@ describe("isChildGuardSet", () => {
   });
 });
 
+describe("hasNoSessionFlag", () => {
+  test("detects --no-session", () => {
+    assert.equal(hasNoSessionFlag(["--mode", "json", "-p", "hi"]), false);
+    assert.equal(hasNoSessionFlag(["--mode", "json", "-p", "hi", "--no-session"]), true);
+    assert.equal(hasNoSessionFlag([]), false);
+  });
+});
+
 class FakeChild extends EventEmitter {
   stdout: PassThrough;
   killedWith: string | undefined;
@@ -162,6 +171,9 @@ describe("runChildStream", () => {
         child = new FakeChild();
         queueMicrotask(() => {
           child.stdout.write(
+            '{"type":"session","id":"sess-123","cwd":"/tmp","timestamp":"2026-01-01T00:00:00.000Z"}\n',
+          );
+          child.stdout.write(
             '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"hi"}}\n',
           );
           child.stdout.write(
@@ -177,6 +189,7 @@ describe("runChildStream", () => {
     assert.ok(out.includes("hi"));
     assert.ok(out.includes("Done"));
     assert.ok(out.includes("10"));
+    assert.ok(out.includes("To resume this session: pi --session sess-123\n"));
   });
 
   test("assistant error maps to exit 1 with Failed summary", async () => {
@@ -194,6 +207,9 @@ describe("runChildStream", () => {
         const child = new FakeChild();
         queueMicrotask(() => {
           child.stdout.write(
+            '{"type":"session","id":"sess-fail","cwd":"/tmp","timestamp":"2026-01-01T00:00:00.000Z"}\n',
+          );
+          child.stdout.write(
             '{"type":"message_end","message":{"role":"assistant","usage":{},"stopReason":"error"}}\n',
           );
           child.emit("close", 0, null);
@@ -202,7 +218,37 @@ describe("runChildStream", () => {
       },
     });
     assert.equal(exitCode, 1);
-    assert.ok(capture.outChunks.join("").includes("Failed"));
+    const out = capture.outChunks.join("");
+    assert.ok(out.includes("Failed"));
+    assert.ok(out.includes("To resume this session: pi --session sess-fail\n"));
+  });
+
+  test("--no-session omits the resume command even with a session header", async () => {
+    const capture = createCapture(false);
+    const renderer = new Renderer({ isTTY: false, stdout: capture.stdout });
+    const stats = new RunStats(() => 0);
+    const processor = new StreamProcessor(renderer, stats);
+    const exitCode = await runChildStream(["--mode", "json", "-p", "hi", "--no-session"], {
+      renderer,
+      stats,
+      processor,
+      stdout: capture.stdout,
+      stderr: capture.stderr,
+      spawnFn: () => {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"session","id":"ephemeral-id","cwd":"/tmp","timestamp":"2026-01-01T00:00:00.000Z"}\n',
+          );
+          child.emit("close", 0, null);
+        });
+        return child as never;
+      },
+    });
+    assert.equal(exitCode, 0);
+    const out = capture.outChunks.join("");
+    assert.ok(out.includes("Done"));
+    assert.ok(!out.includes("To resume this session:"));
   });
 
   test("non-zero child exit propagates with Failed summary", async () => {

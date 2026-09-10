@@ -386,33 +386,35 @@ export class Renderer {
     this.renderThinkingView();
   }
 
-  private writeSummaryBlock(succeeded: boolean, stats: StatsSnapshot): void {
+  private writeSummaryBlock(succeeded: boolean, stats: StatsSnapshot, sessionId?: string): void {
     this.endThinkingForPersistent();
     this.ensureBlankLineBefore();
     this.lastWasToolEvent = false;
     const title = succeeded ? "Done" : "Failed";
-    const body =
-      `${title} in ${formatSeconds(stats.elapsedMs)}\n` +
+    let body =
+      `${title} in ${formatSeconds(stats.elapsedMs)}  TPS: ${formatTps(stats.output, stats.generationMs)}\n` +
       `Tokens: Input ${formatCount(stats.input)}` +
       ` / Cache read ${formatCount(stats.cacheRead)}` +
       ` / Output ${formatCount(stats.output)}` +
-      ` / Cache write ${formatCount(stats.cacheWrite)}\n` +
-      `TPS: ${formatTps(stats.output, stats.generationMs)}\n`;
+      ` / Cache write ${formatCount(stats.cacheWrite)}\n`;
+    if (sessionId !== undefined && sessionId.trim().length > 0) {
+      body += `To resume this session: pi --session ${sessionId}\n`;
+    }
     // Dimmed on a TTY so the summary stays unobtrusive; plain otherwise so
     // redirected logs stay clean.
     this.write(this.isTTY ? dimText(body) : body);
     this.trackPersistent(body);
   }
 
-  finish(stats: StatsSnapshot): void {
+  finish(stats: StatsSnapshot, sessionId?: string): void {
     this.endThinkingForPersistent();
     this.finishMarkdown();
-    this.writeSummaryBlock(true, stats);
+    this.writeSummaryBlock(true, stats, sessionId);
   }
 
-  fail(stats: StatsSnapshot): void {
+  fail(stats: StatsSnapshot, sessionId?: string): void {
     this.endThinkingForPersistent();
     this.finishMarkdown();
-    this.writeSummaryBlock(false, stats);
+    this.writeSummaryBlock(false, stats, sessionId);
   }
 }

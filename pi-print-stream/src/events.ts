@@ -40,6 +40,7 @@ export class StreamProcessor {
   private readonly toolStartedAt = new Map<string, number>();
   private readonly now: () => number;
   private assistantError = false;
+  private sessionId: string | undefined;
 
   constructor(renderer: Renderer, stats: RunStats, options: ProcessorOptions = {}) {
     this.renderer = renderer;
@@ -49,6 +50,11 @@ export class StreamProcessor {
 
   hasError(): boolean {
     return this.assistantError;
+  }
+
+  /** Session ID from the leading `{"type":"session",...}` header, if seen. */
+  getSessionId(): string | undefined {
+    return this.sessionId;
   }
 
   handle(event: unknown): void {
@@ -61,6 +67,13 @@ export class StreamProcessor {
       return;
     }
     switch (type) {
+      case "session": {
+        const id = asString(record.id);
+        if (id !== undefined && id.trim().length > 0) {
+          this.sessionId = id;
+        }
+        break;
+      }
       case "message_start": {
         const message = asRecord(record.message);
         const role = message ? asString(message.role) : undefined;

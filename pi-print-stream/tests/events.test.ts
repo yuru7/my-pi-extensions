@@ -182,6 +182,38 @@ describe("StreamProcessor", () => {
     assert.equal(harness.processor.hasError(), true);
   });
 
+  test("session header ID is captured for the resume command", () => {
+    const harness = createHarness();
+    assert.equal(harness.processor.getSessionId(), undefined);
+    harness.processor.handle({
+      type: "session",
+      id: "01a089b9-ae47-7772-8ce5-bd7cbb67bc29",
+      cwd: "/tmp",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    });
+    assert.equal(
+      harness.processor.getSessionId(),
+      "01a089b9-ae47-7772-8ce5-bd7cbb67bc29",
+    );
+    // Latest header wins.
+    harness.processor.handle({ type: "session", id: "second-id" });
+    assert.equal(harness.processor.getSessionId(), "second-id");
+  });
+
+  test("non-string or blank session IDs are ignored", () => {
+    const harness = createHarness();
+    harness.processor.handle({ type: "session", id: "  " });
+    harness.processor.handle({ type: "session", id: 123 });
+    harness.processor.handle({ type: "session" });
+    assert.equal(harness.processor.getSessionId(), undefined);
+    // A valid ID after invalid ones is still accepted.
+    harness.processor.handle({ type: "session", id: "ok-id" });
+    assert.equal(harness.processor.getSessionId(), "ok-id");
+    // Invalid IDs never clear a previously captured ID.
+    harness.processor.handle({ type: "session", id: "" });
+    assert.equal(harness.processor.getSessionId(), "ok-id");
+  });
+
   test("unknown and malformed events are ignored", () => {
     const harness = createHarness();
     harness.processor.handle({ type: "definitely_unknown_future_event" });

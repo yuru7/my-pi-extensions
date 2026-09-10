@@ -101,6 +101,17 @@ export function isChildGuardSet(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[CHILD_GUARD] === "1";
 }
 
+/**
+ * True when the child runs with an ephemeral session.
+ *
+ * `--no-session` still emits a `{"type":"session",...}` header with a
+ * generated ID, but nothing is persisted, so `pi --session <id>` could not
+ * continue it. The summary must omit the resume command in that case.
+ */
+export function hasNoSessionFlag(childArgs: readonly string[]): boolean {
+  return childArgs.includes("--no-session");
+}
+
 export interface ChildRunDeps {
   renderer?: Renderer;
   stats?: RunStats;
@@ -192,7 +203,7 @@ export function runChildStream(
       const message = error instanceof Error ? error.message : String(error);
       renderer.writeError(`[stream] failed to spawn child: ${message}`);
       processor.abortGeneration();
-      renderer.fail(stats.snapshot());
+      renderer.fail(stats.snapshot(), hasNoSessionFlag(childArgs) ? undefined : processor.getSessionId());
       resolve(1);
       return;
     }
@@ -208,11 +219,12 @@ export function runChildStream(
       cleanup();
       processor.abortGeneration();
       const failed = code !== 0 || processor.hasError();
+      const sessionId = hasNoSessionFlag(childArgs) ? undefined : processor.getSessionId();
       try {
         if (failed) {
-          renderer.fail(stats.snapshot());
+          renderer.fail(stats.snapshot(), sessionId);
         } else {
-          renderer.finish(stats.snapshot());
+          renderer.finish(stats.snapshot(), sessionId);
         }
       } catch {
         // Summary must not mask the exit code.
