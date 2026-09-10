@@ -71,7 +71,8 @@ describe("StreamProcessor", () => {
     assert.equal(renderer.isThinkingActive(), true);
     processor.handle({
       type: "message_update",
-      assistantMessageEvent: { type: "text_delta", delta: "answer" },
+      // Markdown streams line by line: terminate the line to flush it.
+      assistantMessageEvent: { type: "text_delta", delta: "answer\n" },
     });
     assert.equal(renderer.isThinkingActive(), false);
     assert.ok(chunks.join("").includes("answer"));

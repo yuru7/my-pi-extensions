@@ -74,7 +74,8 @@ describe("Renderer", () => {
     assert.ok(output(fake).includes("transient thought"));
     const beforeText = output(fake).length;
 
-    renderer.writeText("answer");
+    // Markdown streams line by line, so terminate the line to flush it.
+    renderer.writeText("answer\n");
     const text = output(fake);
     const clearIndex = text.indexOf("\x1b[", beforeText - 50);
     const answerIndex = text.indexOf("answer");
@@ -116,7 +117,7 @@ describe("Renderer", () => {
     renderer.appendThinking("thought");
     renderer.writeToolEvent({ type: "tool_start", id: "t1", name: "bash", args: {} });
     assert.equal(renderer.isThinkingActive(), true);
-    renderer.writeText("answer");
+    renderer.writeText("answer\n");
     assert.equal(renderer.isThinkingActive(), false);
     const text = output(fake);
     // No repaint after the answer: the thought must not reappear below it.
@@ -284,5 +285,256 @@ describe("Renderer", () => {
     // Exactly one erase sequence (the pre-error clear), no repaint after.
     assert.equal(text.split("\x1b[").length - 1 >= 1, true);
     assert.ok(!text.slice(text.indexOf("[stream] boom")).includes("thought"));
+  });
+});
+
+describe("Renderer Markdown (TTY)", () => {
+  const stats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, elapsedMs: 1000, generationMs: 0, tps: 0 };
+
+  function createTtyRenderer(fake: FakeStdout, options: Record<string, unknown> = {}): Renderer {
+    return new Renderer({
+      isTTY: true,
+      stdout: asWriteStream(fake),
+      columns: () => 80,
+      ...options,
+    } as ConstructorParameters<typeof Renderer>[0]);
+  }
+
+  test("heading is decorated and markers are hidden", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("## Hello\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("Hello"));
+    assert.ok(!text.includes("##"));
+    assert.ok(text.includes("\x1b["), "expected ANSI formatting");
+  });
+
+  test("bold markers are replaced with ANSI styling", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("This is **important**.\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("important"));
+    assert.ok(!text.includes("**"));
+    assert.ok(text.includes("\x1b[1m"), "expected bold SGR");
+  });
+
+  test("inline code stays readable", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("Run `pnpm test`.\n");
+    renderer.finish(stats);
+    assert.ok(output(fake).includes("pnpm test"));
+  });
+
+  test("unordered list items are preserved", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("- one\n- two\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("one"));
+    assert.ok(text.includes("two"));
+  });
+
+  test("code block split across deltas is emitted once without fences", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("```ts\n");
+    renderer.writeText("console.log(\n");
+    renderer.writeText('"hello");\n');
+    renderer.writeText("```\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes('console.log('));
+    assert.ok(text.includes('"hello"'));
+    assert.ok(!text.includes("```"));
+    assert.equal(text.split('console.log(').length - 1, 1);
+  });
+
+  test("split bold markers across delta boundaries do not corrupt output", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("**");
+    renderer.writeText("bold");
+    renderer.writeText("**\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("bold"));
+    assert.ok(!text.includes("**"));
+  });
+
+  test("GFM table split across deltas renders as a box", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("| Name | Value |\n");
+    renderer.writeText("|---|---|\n");
+    renderer.writeText("| foo | bar |\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("foo"));
+    assert.ok(text.includes("bar"));
+    assert.ok(text.includes("│") || text.includes("┌"), "expected table borders");
+  });
+
+  test("streaming is append-only: earlier output is a prefix of later output", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("## First\n");
+    const first = output(fake);
+    assert.ok(first.includes("First"));
+    renderer.writeText("second line\n");
+    const both = output(fake);
+    assert.ok(both.startsWith(first));
+    assert.ok(both.includes("second line"));
+  });
+
+  test("trailing partial line is flushed before the summary", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("trailing without newline");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("trailing without newline"));
+    assert.ok(text.indexOf("trailing without newline") < text.indexOf("Done"));
+  });
+
+  test("answer then error keeps Markdown and shows the error", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("## Title\n");
+    renderer.writeError("[stream] boom");
+    const text = output(fake);
+    assert.ok(text.includes("Title"));
+    assert.ok(!text.includes("##"));
+    assert.ok(text.includes("[stream] boom\n"));
+    assert.ok(text.indexOf("Title") < text.indexOf("[stream] boom"));
+  });
+
+  test("unclosed fence is flushed as content on error, never throws", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("```typescript\nconst x = \n");
+    renderer.writeError("[stream] boom");
+    const text = output(fake);
+    assert.ok(text.includes("const x = "));
+    assert.ok(text.includes("[stream] boom"));
+  });
+
+  test("tool call mid-answer does not reset Markdown state", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("## Investigation\n\nThe issue is caused by:\n");
+    renderer.writeToolEvent({ type: "tool_end", id: "t1", name: "bash", status: "success", elapsed_ms: 1 });
+    renderer.writeText("- condition A\n- condition B\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("Investigation"));
+    assert.ok(text.includes('"type":"tool_end"'));
+    assert.ok(text.includes("condition A"));
+    assert.ok(text.includes("condition B"));
+    assert.ok(text.indexOf("condition A") > text.indexOf('"type":"tool_end"'));
+  });
+
+  test("thinking view is cleared before Markdown answer output", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.appendThinking("transient thought");
+    renderer.writeText("# Answer\n");
+    const text = output(fake);
+    assert.ok(text.includes("Answer"));
+    assert.ok(!text.slice(text.indexOf("Answer")).includes("transient thought"));
+    assert.equal(renderer.isThinkingActive(), false);
+  });
+
+  test("Markdown failure falls back to raw text without failing the run", () => {
+    const fake = createFakeStdout(true);
+    const throwingStreamer = {
+      push: () => { throw new Error("render boom"); },
+      finish: () => "",
+      reset: () => {},
+    };
+    const renderer = createTtyRenderer(fake, {
+      createMarkdownStreamer: () => throwingStreamer,
+    });
+    renderer.writeText("hello **world**\n");
+    // Streamer is disabled after the failure: later deltas stay raw too.
+    renderer.writeText("more text\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("hello **world**\n"));
+    assert.ok(text.includes("more text\n"));
+    assert.ok(text.includes("Done"));
+  });
+
+  test("streamer factory failure falls back to raw text", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake, {
+      createMarkdownStreamer: () => { throw new Error("init boom"); },
+    });
+    renderer.writeText("## Hello\n");
+    renderer.finish(stats);
+    assert.ok(output(fake).includes("## Hello\n"));
+  });
+
+  test("finish failure still shows the summary without failing the run", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake, {
+      createMarkdownStreamer: () => ({
+        push: () => "",
+        finish: () => { throw new Error("finish boom"); },
+        reset: () => {},
+      }),
+    });
+    renderer.writeText("partial\n");
+    renderer.finish(stats);
+    assert.ok(output(fake).includes("Done"));
+    // The error path degrades the same way.
+    const fake2 = createFakeStdout(true);
+    const renderer2 = createTtyRenderer(fake2, {
+      createMarkdownStreamer: () => ({
+        push: () => "",
+        finish: () => { throw new Error("finish boom"); },
+        reset: () => {},
+      }),
+    });
+    renderer2.writeError("[stream] boom");
+    assert.ok(output(fake2).includes("[stream] boom\n"));
+  });
+
+  test("links render without OSC-8 sequences", () => {
+    const fake = createFakeStdout(true);
+    const renderer = createTtyRenderer(fake);
+    renderer.writeText("See [docs](https://example.com).\n");
+    renderer.finish(stats);
+    const text = output(fake);
+    assert.ok(text.includes("docs"));
+    assert.ok(text.includes("https://example.com"));
+    assert.ok(!text.includes("\x1b]8"), "OSC-8 hyperlinks must stay off");
+  });
+});
+
+describe("Renderer Markdown (non-TTY)", () => {
+  test("raw Markdown passes through byte-identical with no ANSI", () => {
+    const fake = createFakeStdout(false);
+    const renderer = new Renderer({
+      isTTY: false,
+      stdout: asWriteStream(fake),
+    });
+    const input = "## Hello\n\n**world**\n\n- one\n- two\n\n```ts\nconsole.log(1);\n```\n";
+    renderer.writeText(input);
+    renderer.finish({
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, elapsedMs: 1000, generationMs: 0, tps: 0,
+    });
+    const text = output(fake);
+    assert.ok(text.startsWith(input));
+    assert.ok(!text.includes("\x1b"));
+    // No renderer-added decoration: the Markdown source is intact.
+    assert.ok(text.includes("## Hello"));
+    assert.ok(text.includes("**world**"));
+    assert.ok(text.includes("```ts"));
   });
 });

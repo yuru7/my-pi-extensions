@@ -1,4 +1,5 @@
 import * as readline from "node:readline";
+import { createMarkdownStreamer, render as renderMarkdown } from "markdansi";
 import { MAX_THINKING_LINES, ThinkingBuffer } from "./thinking-view.ts";
 import type { StatsSnapshot } from "./stats.ts";
 import {
@@ -17,6 +18,11 @@ import {
 export interface RendererOptions {
   isTTY?: boolean;
   columns?: () => number;
+  /**
+   * Test seam for Markdown streamer creation. Production code omits this
+   * and uses markdansi's `createMarkdownStreamer` directly.
+   */
+  createMarkdownStreamer?: typeof createMarkdownStreamer;
   /** Direct write seam. Defaults to the real stdout (fd 1). */
   write?: (chunk: string) => void;
   /**
@@ -61,6 +67,13 @@ export class Renderer {
   private persistentEmpty = true;
   private tail = "";
   private lastWasToolEvent = false;
+  /**
+   * Markdown streamer for answer text (TTY only). Undefined on non-TTY
+   * output, or after Markdown rendering fails and we fall back to raw.
+   * Tool events never touch it: tool JSONL and Markdown parser state stay
+   * independent, so a tool call mid-answer does not reset rendering.
+   */
+  private markdownStreamer: ReturnType<typeof createMarkdownStreamer> | undefined;
 
   constructor(options: RendererOptions = {}) {
     const stdout = options.stdout;
@@ -86,6 +99,41 @@ export class Renderer {
     } as unknown as NodeJS.WriteStream;
     this.isTTY = options.isTTY ?? (stdout ? stdout.isTTY === true : isRealTTY());
     this.columns = options.columns ?? createColumnsProbe();
+    // Markdown rendering is a TTY-only display enhancement. Redirected
+    // output (pipes, files) keeps raw Markdown with no ANSI sequences.
+    if (this.isTTY) {
+      try {
+        const factory = options.createMarkdownStreamer ?? createMarkdownStreamer;
+        // The render callback reads the width lazily so terminal resizes
+        // apply to newly rendered blocks. Already emitted scrollback is
+        // never redrawn (append-only). `color: true` forces ANSI styling
+        // even when markdansi's own TTY detection cannot see the real
+        // stdout (e.g. inside Pi's extension sandbox). `hyperlinks: false`
+        // keeps links as styled text plus a dimmed URL: OSC-8 sequences
+        // would otherwise bypass stripAnsi() and corrupt blank-line
+        // tracking. A throwing fragment falls back to its raw Markdown so
+        // buffered content is never lost and the stream continues.
+        this.markdownStreamer = factory({
+          render: (markdown: string) => {
+            try {
+              return renderMarkdown(markdown, {
+                width: this.currentColumns(),
+                color: true,
+                hyperlinks: false,
+                tableDense: true,
+              });
+            } catch {
+              return markdown;
+            }
+          },
+          spacing: "single",
+        });
+      } catch {
+        // Markdown setup must never break the run; writeText() falls back
+        // to raw output when the streamer is missing.
+        this.markdownStreamer = undefined;
+      }
+    }
   }
 
   isThinkingActive(): boolean {
@@ -197,6 +245,10 @@ export class Renderer {
     // Errors are persistent output and always end the thinking session,
     // matching the failure path which clears the transient view first.
     this.endThinkingForPersistent();
+    // Flush buffered Markdown first so answer content is not lost; the
+    // streamer renders partial blocks (e.g. an unclosed fence) as-is
+    // instead of throwing.
+    this.finishMarkdown();
     if (this.lastWasToolEvent) {
       this.ensureBlankLineBefore();
       this.lastWasToolEvent = false;
@@ -234,6 +286,28 @@ export class Renderer {
     }
   }
 
+  /**
+   * Flush markdansi's pending buffer (unfinished line, fence, or table).
+   * No-op without a streamer. Safe to call repeatedly: an empty buffer
+   * flushes to "" and later deltas keep streaming, so error paths that
+   * flush mid-answer do not lose content that arrives afterwards.
+   */
+  private finishMarkdown(): void {
+    if (!this.isTTY || !this.markdownStreamer) {
+      return;
+    }
+    let rendered = "";
+    try {
+      rendered = this.markdownStreamer.finish();
+    } catch {
+      // Same fallback as writeText(): drop Markdown rendering entirely.
+      this.markdownStreamer = undefined;
+      return;
+    }
+    this.write(rendered);
+    this.trackPersistent(rendered);
+  }
+
   writeText(delta: string): void {
     if (!delta) {
       return;
@@ -244,6 +318,26 @@ export class Renderer {
     if (this.lastWasToolEvent) {
       this.ensureBlankLineBefore();
       this.lastWasToolEvent = false;
+    }
+    // TTY answers stream through markdansi line by line (fenced code
+    // blocks and tables stay buffered until complete). Deltas without a
+    // trailing newline legitimately produce no output yet; the remainder
+    // is flushed by finishMarkdown() at response completion.
+    if (this.isTTY && this.markdownStreamer) {
+      let rendered: string;
+      try {
+        rendered = this.markdownStreamer.push(delta);
+      } catch {
+        // Rendering is best-effort: keep the raw delta and disable the
+        // streamer so later deltas pass through untouched.
+        this.markdownStreamer = undefined;
+        this.write(delta);
+        this.trackPersistent(delta);
+        return;
+      }
+      this.write(rendered);
+      this.trackPersistent(rendered);
+      return;
     }
     this.write(delta);
     this.trackPersistent(delta);
@@ -311,10 +405,14 @@ export class Renderer {
   }
 
   finish(stats: StatsSnapshot): void {
+    this.endThinkingForPersistent();
+    this.finishMarkdown();
     this.writeSummaryBlock(true, stats);
   }
 
   fail(stats: StatsSnapshot): void {
+    this.endThinkingForPersistent();
+    this.finishMarkdown();
     this.writeSummaryBlock(false, stats);
   }
 }

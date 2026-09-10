@@ -45,6 +45,14 @@ pi -e ./extensions/index.ts -p "your prompt" --stream
 ### Answer text
 
 `text_delta` events are written to stdout immediately, in arrival order.
+On a TTY the answer Markdown is rendered for the terminal with
+[`markdansi`](https://www.npmjs.com/package/markdansi) (headings, bold,
+lists, code blocks, tables, and more) as an append-only stream: completed
+lines are emitted as they arrive, while fenced code blocks and tables stay
+buffered until complete. Tool calls never reset the Markdown state. When
+stdout is not a TTY (redirect, pipe, `tee`, scripts), the raw Markdown is
+written unchanged with no ANSI sequences, keeping logs and pipes
+machine-readable.
 
 ### Tool calls
 
@@ -140,7 +148,7 @@ When generation time is zero, TPS is shown as `-`.
   stderr), so writing through `process.stdout` would lose redirected output.
   TTY detection and terminal width are likewise probed from fd 1, never from
   the replaced `process.stdout` object.
-- No TUI framework, markdown rendering, syntax highlighting, tool-result
+- No TUI framework, syntax highlighting, tool-result
   dumps, or session restore is included. Output stays on stdout/ANSI by
   design.
 
