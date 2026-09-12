@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 import {
 	APPROVAL_CHOICES,
 	ApprovalQueue,
 	buildApprovalPrompt,
+	fencedCode,
 	ringTerminalBell,
+	sanitizePromptField,
 	showApprovalPrompt,
 } from "../src/approval-prompt.ts";
-import type { ReviewAction } from "../src/review.ts";
+import { ApprovalDialog } from "../src/approval-dialog.ts";
+import type { ReviewAction, RiskAssessment, RiskLevel } from "../src/review.ts";
+
+initTheme("dark");
 
 const action: ReviewAction = {
 	tool: "bash",
@@ -16,24 +23,85 @@ const action: ReviewAction = {
 	payload: { command: "git reset --hard HEAD~1" },
 };
 
-const assessment = {
-	risk_level: "medium" as const,
-	instruction_alignment: "direct" as const,
-	action_summary: "Force-resets the current branch one commit back and discards uncommitted changes.",
-	rationale: "Uncommitted changes may be lost, so recovery costs more than a normal file edit.",
+const assessment: RiskAssessment = {
+	risk_level: "medium",
+	instruction_alignment: "direct",
+	action_summary:
+		"Force-resets the current branch one commit back and discards uncommitted changes.",
+	rationale:
+		"Uncommitted changes may be lost, so recovery costs more than a normal file edit.",
 };
+
+const assessor = "openai-codex/gpt-5.6-luna (Primary)";
 
 function ctxWithSelect(
 	select: (title: string, options: string[]) => Promise<string | undefined>,
 	signal?: AbortSignal,
 ): ExtensionContext {
 	return {
+		mode: "rpc",
 		ui: {
 			select: async (title: string, options: string[]) =>
 				select(title, options),
 		},
 		signal,
 	} as unknown as ExtensionContext;
+}
+
+interface TuiHarness {
+	ctx: ExtensionContext;
+	dialog: () => ApprovalDialog;
+	decide: (choice: string | undefined) => void;
+	opened: () => number;
+}
+
+function ctxWithCustom(
+	options: { rows?: number; signal?: AbortSignal; fail?: Error } = {},
+): TuiHarness {
+	let dialog: ApprovalDialog | undefined;
+	let decide: ((choice: string | undefined) => void) | undefined;
+	let opened = 0;
+	const ctx = {
+		mode: "tui",
+		ui: {
+			select: async () => {
+				throw new Error("TUI mode must use the custom dialog");
+			},
+			custom: async (
+				factory: (
+					tui: TUI,
+					theme: unknown,
+					keybindings: unknown,
+					done: (choice: string | undefined) => void,
+				) => ApprovalDialog,
+			) => {
+				opened++;
+				if (options.fail) throw options.fail;
+				return new Promise<string | undefined>((resolve) => {
+					decide = resolve;
+					dialog = factory(
+						{
+							terminal: { rows: options.rows ?? 24 },
+							requestRender: () => {},
+						} as unknown as TUI,
+						{
+							fg: (_color: string, text: string) => text,
+							bold: (text: string) => text,
+						},
+						{},
+						resolve,
+					);
+				});
+			},
+		},
+		signal: options.signal,
+	} as unknown as ExtensionContext;
+	return {
+		ctx,
+		dialog: () => dialog as ApprovalDialog,
+		decide: (choice) => decide?.(choice),
+		opened: () => opened,
+	};
 }
 
 test("keeps the fixed No/Yes choice order with No first", async () => {
@@ -43,59 +111,215 @@ test("keeps the fixed No/Yes choice order with No first", async () => {
 		seenOptions = options;
 		return Promise.resolve(undefined);
 	});
-	await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", ctx);
+	await showApprovalPrompt(action, assessment, assessor, ctx);
 	assert.deepEqual(seenOptions, ["No", "Yes"]);
 });
 
-test("builds the approval prompt with risk, operation, and AI explanation", () => {
-	const prompt = buildApprovalPrompt(
-		action,
-		assessment,
-		"openai-codex/gpt-5.6-luna (Primary)",
+test("builds the approval prompt as one Markdown document", () => {
+	const { markdown } = buildApprovalPrompt(action, assessment, assessor);
+	assert.equal(
+		markdown,
+		[
+			"Approval Required",
+			"",
+			"**Risk: Medium**",
+			"",
+			"Review Information:",
+			`- Risk Assessor: ${assessor}`,
+			"- Instruction Alignment: direct",
+			"",
+			"Operation:",
+			"",
+			"```bash",
+			"$ git reset --hard HEAD~1",
+			"```",
+			"",
+			"Action Summary:",
+			"Force-resets the current branch one commit back and discards uncommitted changes.",
+			"",
+			"Reason:",
+			"Uncommitted changes may be lost, so recovery costs more than a normal file edit.",
+		].join("\n"),
 	);
-	const lines = prompt.split("\n");
-	assert.equal(lines[0], "Approval Required");
-	assert.match(prompt, /^Risk Assessor: openai-codex\/gpt-5\.6-luna \(Primary\)$/m);
-	assert.match(prompt, /^Risk: Medium$/m);
-	assert.match(prompt, /^Instruction alignment: direct$/m);
-	assert.match(prompt, /^Operation:$/m);
-	assert.match(prompt, /^\$ git reset --hard HEAD~1$/m);
-	assert.match(prompt, /^Action Summary:$/m);
-	assert.match(prompt, /Force-resets the current branch one commit back/m);
-	assert.match(prompt, /^Reason:$/m);
-	assert.match(prompt, /Uncommitted changes may be lost/m);
-	assert.match(prompt, /^Proceed\?$/m);
+	assert.doesNotMatch(markdown, /Proceed\?/);
 
-	const unattributed = buildApprovalPrompt(action, assessment);
+	const unattributed = buildApprovalPrompt(action, assessment).markdown;
 	assert.doesNotMatch(unattributed, /Risk Assessor:/);
-	assert.match(unattributed, /^Risk: Medium$/m);
+	assert.match(unattributed, /- Instruction Alignment: direct/);
+});
+
+test("labels the operation code block for shell tools only", () => {
+	assert.match(buildApprovalPrompt(action, assessment, assessor).markdown, /```bash/);
+
+	const powershell: ReviewAction = {
+		tool: "powershell",
+		cwd: "C:\\repo",
+		payload: { command: "Get-ChildItem -Force" },
+	};
+	const ps = buildApprovalPrompt(powershell, assessment, assessor).markdown;
+	assert.match(ps, /```powershell\nPS> Get-ChildItem -Force\n```/);
+
+	const write: ReviewAction = {
+		tool: "write",
+		cwd: "/repo",
+		payload: { path: "/repo/out.txt" },
+	};
+	const writePrompt = buildApprovalPrompt(write, assessment, assessor).markdown;
+	assert.match(writePrompt, /```\nwrite \/repo\/out\.txt\n```/);
+});
+
+test("keeps a value containing backticks from closing the fence early", () => {
+	assert.equal(
+		fencedCode("echo ```tick```", "bash"),
+		"````bash\necho ```tick```\n````",
+	);
+	assert.equal(fencedCode("plain", "bash"), "```bash\nplain\n```");
+	assert.equal(fencedCode("plain"), "```\nplain\n```");
+});
+
+test("routes the same document to the TUI dialog and to ui.select", async () => {
+	const expected = buildApprovalPrompt(action, assessment, assessor);
+
+	let selectTitle: string | undefined;
+	const selectCtx = ctxWithSelect((title) => {
+		selectTitle = title;
+		return Promise.resolve("No");
+	});
+	await showApprovalPrompt(action, assessment, assessor, selectCtx);
+	assert.equal(selectTitle, expected.markdown);
+
+	const tui = ctxWithCustom({ rows: 40 });
+	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx);
+	assert.match(tui.dialog().render(70).join("\n"), /Action Summary:/);
+	tui.decide("No");
+	assert.deepEqual(await pending, { kind: "declined" });
+});
+
+test("emphasizes elevated risk with a theme color", () => {
+	const emphasis = (level: RiskLevel) =>
+		buildApprovalPrompt(action, { ...assessment, risk_level: level }, assessor)
+			.emphasis;
+
+	assert.equal(emphasis("medium")?.text, "Risk: Medium");
+	assert.equal(emphasis("medium")?.color, "warning");
+	assert.equal(emphasis("high")?.color, "warning");
+	assert.equal(emphasis("very_high")?.color, "error");
+	assert.equal(emphasis("critical")?.color, "error");
+	assert.equal(emphasis("low"), undefined);
+	assert.equal(emphasis("very_low"), undefined);
+});
+
+test("strips control characters and ANSI escapes from interpolated values", () => {
+	const hostile = {
+		...assessment,
+		action_summary: "a\u001b[31mb\u0007c\u001b]8;;https://evil.example\u0007d",
+		rationale: "line one\nline two",
+	};
+	const { markdown } = buildApprovalPrompt(action, hostile);
+	assert.doesNotMatch(markdown, /\u001b/);
+	assert.match(markdown, /a \[31mb c ]8;;https:\/\/evil\.example d/);
+	// Newlines in a value are folded so they cannot invent new Markdown blocks.
+	assert.match(markdown, /Reason:\nline one line two/);
+	assert.equal(sanitizePromptField("\u0000\u009b"), "");
+});
+
+test("bounds interpolated values with an explicit truncation marker", () => {
+	const bounded = buildApprovalPrompt(action, {
+		risk_level: "high",
+		instruction_alignment: "unrelated",
+		action_summary: "x".repeat(1_000),
+		rationale: "y".repeat(1_000),
+	}).markdown;
+	assert.match(bounded, /… \[truncated\]/);
+	assert.ok(bounded.length < 1_400);
+
+	assert.equal(sanitizePromptField("x".repeat(500)), `${"x".repeat(400)}… [truncated]`);
+	assert.equal(sanitizePromptField("y".repeat(400)).endsWith("[truncated]"), false);
 });
 
 test("Yes approves only after an explicit user selection", async () => {
 	const ctx = ctxWithSelect(() => Promise.resolve("Yes"));
-	assert.deepEqual(await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", ctx), {
-		kind: "approved",
-	});
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx),
+		{ kind: "approved" },
+	);
 });
 
 test("No and Esc (undefined) fail closed", async () => {
 	const noCtx = ctxWithSelect(() => Promise.resolve("No"));
-	assert.deepEqual(await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", noCtx), {
+	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, noCtx), {
 		kind: "declined",
 	});
 
 	const escCtx = ctxWithSelect(() => Promise.resolve(undefined));
-	assert.deepEqual(await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", escCtx), {
-		kind: "declined",
-	});
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, escCtx),
+		{ kind: "declined" },
+	);
 });
 
 test("an unavailable UI fails closed with a diagnostic detail", async () => {
 	const ctx = ctxWithSelect(() => Promise.reject(new Error("no TTY")));
-	assert.deepEqual(await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", ctx), {
+	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, ctx), {
 		kind: "declined",
 		detail: "Approval UI unavailable: no TTY",
 	});
+});
+
+test("TUI mode opens the scrollable dialog and maps its choice", async () => {
+	const accepted = ctxWithCustom({ rows: 40 });
+	const pending = showApprovalPrompt(action, assessment, assessor, accepted.ctx);
+	assert.ok(accepted.dialog() instanceof ApprovalDialog);
+	assert.equal(accepted.opened(), 1);
+	const text = accepted.dialog().render(70).join("\n");
+	assert.match(text, /Approval Required/);
+	assert.match(text, /Risk: Medium/);
+	assert.match(text, /Risk Assessor: openai-codex\/gpt-5\.6-luna \(Primary\)/);
+	assert.match(text, /Action Summary:/);
+	assert.match(text, /git reset --hard HEAD~1/);
+	accepted.decide("Yes");
+	assert.deepEqual(await pending, { kind: "approved" });
+
+	const cancelled = ctxWithCustom({ rows: 24 });
+	const declined = showApprovalPrompt(action, assessment, assessor, cancelled.ctx);
+	cancelled.dialog().handleInput("\x1b");
+	assert.deepEqual(await declined, { kind: "declined" });
+});
+
+test("the TUI dialog fails closed on abort, missing UI, and errors", async () => {
+	const controller = new AbortController();
+	const aborting = ctxWithCustom({ rows: 24, signal: controller.signal });
+	const aborted = showApprovalPrompt(action, assessment, assessor, aborting.ctx);
+	controller.abort();
+	assert.deepEqual(await aborted, { kind: "declined" });
+
+	const preAborted = ctxWithCustom({
+		rows: 24,
+		signal: AbortSignal.abort(),
+	});
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, preAborted.ctx),
+		{
+			kind: "declined",
+			detail: "Approval prompt was cancelled before it could be shown.",
+		},
+	);
+	assert.equal(preAborted.opened(), 0);
+
+	const failing = ctxWithCustom({ rows: 24, fail: new Error("no TTY") });
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, failing.ctx),
+		{ kind: "declined", detail: "Approval UI unavailable: no TTY" },
+	);
+
+	const unavailable = {
+		mode: "tui",
+		ui: { custom: async () => undefined },
+	} as unknown as ExtensionContext;
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, unavailable),
+		{ kind: "declined" },
+	);
 });
 
 test("a signal aborted while queued declines without opening the prompt", async () => {
@@ -106,22 +330,11 @@ test("a signal aborted while queued declines without opening the prompt", async 
 		selectCalls++;
 		return Promise.resolve("Yes");
 	}, controller.signal);
-	assert.deepEqual(await showApprovalPrompt(action, assessment, "openai-codex/gpt-5.6-luna (Primary)", ctx), {
+	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, ctx), {
 		kind: "declined",
 		detail: "Approval prompt was cancelled before it could be shown.",
 	});
 	assert.equal(selectCalls, 0);
-});
-
-test("long AI text is bounded in the prompt with an explicit truncation marker", () => {
-	const bounded = buildApprovalPrompt(action, {
-		risk_level: "high",
-		instruction_alignment: "unrelated",
-		action_summary: "x".repeat(1_000),
-		rationale: "y".repeat(1_000),
-	});
-	assert.match(bounded, /… \[truncated\]/);
-	assert.ok(bounded.length < 1_200);
 });
 
 test("approval queue serializes overlapping prompts", async () => {
@@ -194,7 +407,7 @@ test("ringTerminalBell stays silent outside TUI mode or without a TTY", () => {
 			isTTY,
 			write: () => {
 				calls++;
-		},
+			},
 		});
 		assert.equal(calls, 0, `mode=${mode} isTTY=${isTTY}`);
 	}

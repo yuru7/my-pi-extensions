@@ -99,12 +99,18 @@ function assessmentSummary(
 /** One-line, size-bounded description of the planned action for UI display. */
 export function formatActionPreview(action: ReviewAction): string {
 	const path = () => singleLine(String(action.payload.path ?? ""));
+	const command = () =>
+		truncatePreview(
+			singleLine(String(action.payload.command ?? "")),
+			COMMAND_PREVIEW_CHARS,
+		);
 	switch (action.tool) {
 		case "bash":
-			return `$ ${truncatePreview(
-				singleLine(String(action.payload.command ?? "")),
-				COMMAND_PREVIEW_CHARS,
-			)}`;
+			return `$ ${command()}`;
+		// Mirrors pi's own PowerShell prompt so the preview reads like a
+		// PowerShell transcript instead of a bash one.
+		case "powershell":
+			return `PS> ${command()}`;
 		case "write":
 			return truncatePreview(`write ${path()}`, PREVIEW_CHARS);
 		case "edit": {

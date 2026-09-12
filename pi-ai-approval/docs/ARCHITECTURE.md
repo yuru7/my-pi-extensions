@@ -93,7 +93,8 @@ tool_call イベント
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
 | `src/risk-policy.ts` | 純粋な `assessment → allow/ask/deny` 変換（`resolveRiskAction` / `applyRiskPolicy`）。手作り設定で迂回されても `very_high` / `critical` の `allow` を拒否。I/O・UI なし。 |
-| `src/approval-prompt.ts` | `ask` の UX: `No/Yes` 選択肢で `No` が初期選択（Enter = ブロック）、対話 TUI + TTY では表示時に BEL でベルを鳴らす（失敗してもプロンプト継続、RPC/JSON/print では鳴らさない）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。 |
+| `src/approval-prompt.ts` | `ask` の UX と文面: プロンプト全体を1つの Markdown 文書（`Approval Required` / `**Risk: …**` / `Review Information:` / `Operation:` + 言語ラベル付きコードブロック / `Action Summary:` / `Reason:`。見出しは使わず、すべてプレーンな行 + コードブロック）として単一定義し、TUI と非 TUI の双方に同じ文書を渡す。操作プレビューのシェル別プレフィックス（`$ ` / `PS> `）と言語ラベル（`bash` / `powershell`）、動的値の制御文字/ANSI 除去・単一行化・400 文字上限、リスク行は太字に加えてレベル別の強調色（medium/high = `warning`、very_high/critical = `error`。太字を描画しない端末向け）、`No/Yes` 選択肢で `No` が初期選択（Enter = ブロック）、対話 TUI + TTY では表示時に BEL でベルを鳴らす（失敗してもプロンプト継続、RPC/JSON/print では鳴らさない）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。TUI では `approval-dialog`、それ以外は `ui.select` に振り分ける。 |
+| `src/approval-dialog.ts` | TUI 承認ダイアログ: 渡された Markdown 文書を標準の `Markdown` コンポーネントで描画し（コードブロックの言語ラベルとシンタックスハイライトを含む）、リスク行だけをテーマ色で組み直して強調する。端末行数から本文ビューポートを算出してスクロール（`shift+↑↓`・ホイール・一時表示スクロールバー）し、選択肢は本文の外側に固定する。`ui.custom()` が `signal` を受け付けないため abort を自前で購読する。 |
 | `src/review-presentation.ts` | 人・ agent 向け文面: `riskLabel`、操作プレビュー、`formatReviewResult`（UI 通知用）、`rejectionReason`（agent 向けブロック理由。回避策禁止の指示付き）。 |
 | `src/reviewer-status.ts` | `/ai-approval` の status・`rules` 出力、起動時ヘルス同期、フォールバック通知。両方の設定ファイルが存在しない場合の起動時 `/ai-approval init` 案内を含む。 |
 | `src/authorization-provenance.ts` | `DirectUserInputTracker` + `collectReviewMessages`: 展開前入力と保存済みユーザーメッセージを突合し、完全一致した対話・RPC のみを `direct_user` とする。 |
@@ -124,6 +125,8 @@ tool_call イベント
 
 1. **フェイルクローズド**: すべてのエラーパスはブロックする。`decideAction` が許可するのは、
    明示的な `allow` ポリシーヒットか明示的なユーザーの `Yes` のみ。
+   **既知のギャップ（別タスク）**: Pi の `powershell` ツール呼び出しは現状レビュー対象外で
+   素通りする。詳細と対応案は [`POWERSHELL-FOLLOWUP.md`](POWERSHELL-FOLLOWUP.md) を参照。
 2. **レビュアーは何も決めない**: 唯一の allow/ask/deny 決定権は `risk-policy` であり、
    レビュアー出力は `parseRiskAssessment` で検証される untrusted データである。
 3. **プライベートデータの封じ込め**: `private_data_read` 付きの操作ではレビュアーは
@@ -133,7 +136,7 @@ tool_call イベント
    トランスクリプト行のみであり、content 内テキストが来歴を作ることはない。
    拡張機能・展開済みコンテンツは `untrusted` のままである。
 5. **承認の完全性**: 1 回の `Yes` = 1 回のツール呼び出しのみ。`ApprovalQueue` が
-   プロンプトを直列化し、`No` が初期選択、Esc/Ctrl-C/UI 不可 = ブロック。
+   プロンプトを直列化し、`No` が初期選択、Esc/Ctrl-C/UI 不可 = ブロック。TUI ダイアログはプロンプト文書全体を標準 Markdown として描画する（明示的なユーザー判断）。動的値は制御文字/ANSI の除去・単一行化・400 文字上限のみを行い、レビュアー出力に含まれる Markdown の見出し・箇条書き・リンクはそのまま描画されうる点を既知の残存リスクとして扱う。
 6. **TOCTOU ロック**: 承認済み入力は `tool-input-lock` で凍結され、ロック失敗は
    ブロックする。
 7. **リトライループの遮断**: `DenialCircuitBreaker`（連続 3 回または直近 50 件中 10 回の
@@ -150,7 +153,7 @@ pnpm check   # = tsc -p tsconfig.json && node --test tests/*.test.ts
 ```
 
 - `tests/*.test.ts` は `src/` の各モジュール（`gate`、`config`、`review`、
-  `risk-policy`、`reviewer-*`、`approval-prompt`、`authorization-provenance`）に対応し、
+  `risk-policy`、`reviewer-*`、`approval-prompt`、`approval-dialog`、`authorization-provenance`）に対応し、
   配線用に `extension.test.ts` がある。
 - `src/policy.ts` のルーブリック、`src/path-rules.ts` のカタログ、
   `src/shell-private-data.ts` のヒューリスティクス、または §7 の不変条件に触れたら、
