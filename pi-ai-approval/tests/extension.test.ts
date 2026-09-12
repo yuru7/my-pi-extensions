@@ -210,6 +210,53 @@ test("marks obvious shell private-data access for high authorization", () => {
 	}
 });
 
+test("keeps RTK-wrapped private-data access under review", () => {
+	for (const command of [
+		"rtk read ~/.ssh/id_rsa",
+		"rtk read $HOME/.ssh/id_rsa",
+		"rtk grep token ~/.ssh",
+		"rtk find ~/.aws -name credentials",
+		"echo hi && rtk read ~/.ssh/id_rsa",
+	]) {
+		const action = actionFromToolCall(
+			event("bash", { command }),
+			"/repo/project",
+			{ ...DEFAULT_REVIEW_RULES },
+		);
+		assert.equal(action?.payload.private_data_read, true, command);
+	}
+
+	for (const command of [
+		"rtk read $env:USERPROFILE\\.ssh\\id_rsa",
+		"rtk grep token C:\\Users\\test\\.aws\\credentials",
+	]) {
+		const action = actionFromToolCall(
+			event("powershell", { command }),
+			"/repo/project",
+			{ ...DEFAULT_REVIEW_RULES },
+		);
+		assert.equal(action?.payload.private_data_read, true, command);
+	}
+
+	const ordinary = actionFromToolCall(
+		event("bash", { command: "rtk read src/policy.ts --max-lines 5" }),
+		"/repo/project",
+		{ ...DEFAULT_REVIEW_RULES },
+	);
+	assert.equal(ordinary?.payload.private_data_read, false);
+});
+
+test("keeps the RTK command to execute unchanged", () => {
+	const input = Object.freeze({ command: "rtk git commit -m test" });
+	const action = actionFromToolCall(
+		event("bash", input),
+		"/repo/project",
+		{ ...DEFAULT_REVIEW_RULES },
+	);
+	assert.equal(action?.payload.command, "rtk git commit -m test");
+	assert.equal(input.command, "rtk git commit -m test");
+});
+
 test("shares structured private-path rules with shell literals and globs", () => {
 	for (const path of [
 		"/home/test/.config/gcloud/application_default_credentials.json",

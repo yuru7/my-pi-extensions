@@ -32,8 +32,8 @@ import {
 	syncReviewerRuntimeHealth,
 } from "../src/reviewer-status.ts";
 import {
+	buildActionReviewSystemPrompt,
 	buildReviewSystemPrompt,
-	buildPrivateDataReviewSystemPrompt,
 } from "../src/policy.ts";
 import {
 	formatReviewResult,
@@ -42,6 +42,7 @@ import {
 } from "../src/review-presentation.ts";
 import { applyRiskPolicy } from "../src/risk-policy.ts";
 import type { ReviewAction } from "../src/review.ts";
+import { shellActionContainsRtk } from "../src/rtk-detection.ts";
 import {
 	buildReviewerChannels,
 	reviewerChannelIdentity,
@@ -610,13 +611,15 @@ export default function aiApproval(
 			}
 
 			const privateDataReview = action.payload.private_data_read === true;
+			const containsRtk = shellActionContainsRtk(action);
 			const baseSystemPrompt = buildReviewSystemPrompt(
 				config.policy,
 				config.assessmentLanguage,
 			);
-			const systemPrompt = privateDataReview
-				? buildPrivateDataReviewSystemPrompt(baseSystemPrompt)
-				: baseSystemPrompt;
+			const systemPrompt = buildActionReviewSystemPrompt(baseSystemPrompt, {
+				privateDataReview,
+				containsRtk,
+			});
 			const reviewerTools = reviewerToolsForAction(action);
 			// The context key tracks configuration only, not the live session
 			// thinking level: fixed-thinking controllers stay reusable across
@@ -643,6 +646,7 @@ export default function aiApproval(
 				model: `${model.provider}/${model.id}`,
 				thinkingLevel: channel.thinkingLevel,
 				privateDataReview,
+				containsRtk,
 			});
 			let controller = controllers.get(key);
 			if (!controller) {

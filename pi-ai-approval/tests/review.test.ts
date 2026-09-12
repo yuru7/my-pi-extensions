@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	buildActionReviewSystemPrompt,
 	buildReviewSystemPrompt,
 	buildPrivateDataReviewSystemPrompt,
+	RTK_COMMAND_REVIEW_GUIDANCE,
 	UPSTREAM_GUARDIAN_COMMIT,
 } from "../src/policy.ts";
 import { rejectionReason } from "../src/review-presentation.ts";
@@ -94,6 +96,21 @@ test("separates untrusted transcript from the exact planned action", () => {
 	assert.match(prompt, /APPROVAL REQUEST START/);
 	assert.match(prompt, /"command":"rm -rf .cache"/);
 	assert.match(prompt, /"cwd":"\/repo"/);
+});
+
+test("shows each shell command once whether or not RTK wraps it", () => {
+	for (const command of ["git status", "rtk git status", "rtk foo bar"]) {
+		const prompt = buildReviewPrompt({
+			action: {
+				tool: "bash",
+				payload: { command },
+				cwd: "/repo",
+			},
+			transcript: "",
+		});
+		assert.equal(prompt.split(command).length - 1, 1, command);
+		assert.doesNotMatch(prompt, /Command for risk analysis/);
+	}
 });
 
 test("does not treat unmarked user-role content as direct authorization", () => {
@@ -361,6 +378,32 @@ test("lets configuration pin the assessment comment language", () => {
 		/Write `action_summary` and `rationale` in \*\*Japanese\*\*\./,
 	);
 	assert.doesNotMatch(japanese, /fall back to English when unclear/);
+});
+
+test("adds RTK guidance whenever a reviewed command contains RTK", () => {
+	assert.doesNotMatch(REVIEW_POLICY, /not inherently safe or read-only/);
+	assert.equal(
+		buildActionReviewSystemPrompt(REVIEW_POLICY, { containsRtk: false }),
+		REVIEW_POLICY,
+	);
+
+	const rtk = buildActionReviewSystemPrompt(REVIEW_POLICY, {
+		containsRtk: true,
+	});
+	assert.match(rtk, /filters and compresses command output/);
+	assert.match(rtk, /not inherently safe or read-only/);
+	assert.match(rtk, /do not assume low risk\./);
+	assert.ok(
+		RTK_COMMAND_REVIEW_GUIDANCE.length < 300,
+		"RTK guidance must stay minimal",
+	);
+
+	const privateData = buildActionReviewSystemPrompt(REVIEW_POLICY, {
+		privateDataReview: true,
+		containsRtk: true,
+	});
+	assert.match(privateData, /filters and compresses command output/);
+	assert.match(privateData, /No investigation tools are available/);
 });
 
 test("keeps delegated content from justifying private-data reviews", () => {

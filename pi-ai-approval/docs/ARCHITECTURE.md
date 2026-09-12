@@ -56,6 +56,8 @@ pi-ai-approval/
 tool_call イベント
   ↓ actionFromToolCall(event, cwd, review rules, cache)   [src/tool-actions.ts]
   │  undefined = 審査対象外 → そのまま返す（審査なし）
+  │  bash/powershell: RTK 呼び出しを検出し、レビュアーガイダンスの
+  │  付与条件に使用 [src/rtk-detection.ts]
   ↓ ReviewAction { tool, payload, cwd }
   ↓ DenialCircuitBreaker.isOpen()? → { block, "circuit-open" }
   ↓ reviewAction: buildReviewerChannels → runReviewWithFallbackChain
@@ -87,8 +89,9 @@ tool_call イベント
 | `src/gate.ts` | ゲート共通基盤: `ReviewResult`・決定型、`DenialCircuitBreaker`、`ReviewBatchTracker`、パス分類（`classifyMutationPath`、`classifyReadPath`、`shouldReviewPath`）、ディレクトリのプライベートデータ走査。 |
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
 | `src/shell-private-data.ts` | `bash.command` / `powershell.command` 用ヒューリスティクス: シェルをトークン化し `~`・`$HOME`・`$env:NAME`（`USERPROFILE` / `HOME` / `APPDATA` / `LOCALAPPDATA`）を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
+| `src/rtk-detection.ts` | `pi-rtk-optimizer` が rewrite した `rtk ...` 呼び出しを検出する純粋関数。引用符・エスケープ・heredoc 本文を区別し、`&&`・`||`・`;`・`|`・`&`・改行で区切った各コマンド位置の `rtk` のみを検出する。実行コマンドの変更や正規化は行わない。 |
 | `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`、文字数制限付きのプロンプト・トランスクリプト構築、`parseRiskAssessment`（未知レベル・要約/根拠欠落を拒否する厳密検証）。 |
-| `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。明示依頼の通常ローカル commit は `low`、履歴書き換え系は `medium` 以上に据え置く。`/tmp` 配下は依頼済みなら `low` 以下・未依頼でも `medium` 上限、`/tmp` 自体の削除は `high`。 |
+| `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。明示依頼の通常ローカル commit は `low`、履歴書き換え系は `medium` 以上に据え置く。`/tmp` 配下は依頼済みなら `low` 以下・未依頼でも `medium` 上限、`/tmp` 自体の削除は `high`。`buildActionReviewSystemPrompt` は RTK を含むときだけ、RTK の用途と `do not assume low risk` を含む短い注意書き（`RTK_COMMAND_REVIEW_GUIDANCE`）を、private 判定時だけ封じ込め指示を追加する。 |
 | `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
@@ -146,6 +149,12 @@ tool_call イベント
    またぐため、分割リトライも集計される。
 8. **bypass は TUI 専用・可視・一時的**: `bypass` は対話 TUI のみ、永続警告を表示し、
    モデルコンテキストには一切入らず、セッション再読み込みでリセットされる。
+9. **RTK は検出のみ**: `commandContainsRtk` は `event.input.command` に副作用を
+   与えず、実行されるコマンド文字列を一切変更しない。プロンプトには実コマンドを
+   1回だけ載せ、private 判定は実コマンド中の引数・パスに対して従来どおり行う。
+   `rtk` は一律 safe でも read-only でもないため、レビュアーには RTK を含む
+   ときだけ `Assess the operation it wraps` と `do not assume low risk` の
+   注意書きを付ける。
 
 ## 8. 検証
 
@@ -155,8 +164,8 @@ pnpm check   # = tsc -p tsconfig.json && node --test tests/*.test.ts
 ```
 
 - `tests/*.test.ts` は `src/` の各モジュール（`gate`、`config`、`review`、
-  `risk-policy`、`reviewer-*`、`approval-prompt`、`approval-dialog`、`review-presentation`、`authorization-provenance`）に対応し、
+  `risk-policy`、`reviewer-*`、`approval-prompt`、`approval-dialog`、`review-presentation`、`authorization-provenance`、`rtk-detection`）に対応し、
   配線用に `extension.test.ts` がある。
 - `src/policy.ts` のルーブリック、`src/path-rules.ts` のカタログ、
-  `src/shell-private-data.ts` のヒューリスティクス、または §7 の不変条件に触れたら、
-  対応するテストとこのファイルを更新すること。
+  `src/shell-private-data.ts` のヒューリスティクス、`src/rtk-detection.ts` の
+  検出ルール、または §7 の不変条件に触れたら、対応するテストとこのファイルを更新すること。
