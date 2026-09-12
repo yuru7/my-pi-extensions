@@ -1958,10 +1958,10 @@ const mediumAssessment = () => ({
 	rationale: "Uncommitted changes may be lost.",
 });
 
-test("asks for medium-risk actions and executes only after Yes", async () => {
+test("asks for medium-risk actions and executes only after Approve", async () => {
 	const harness = approvalHarness({
 		assessment: mediumAssessment,
-		select: () => Promise.resolve("Yes"),
+		select: () => Promise.resolve("Approve"),
 	});
 	try {
 		await harness.handlers.get("session_start")?.({}, harness.ctx);
@@ -1969,11 +1969,11 @@ test("asks for medium-risk actions and executes only after Yes", async () => {
 		assert.equal(
 			await (handlersToolCall(harness) as ToolCallHandler)(call, harness.ctx),
 			undefined,
-			"Yes must let the tool call execute",
+			"Approve must let the tool call execute",
 		);
 		assert.equal(Object.isFrozen(call.input), true);
 		assert.equal(harness.selects.length, 1);
-		assert.deepEqual(harness.selects[0].choices, ["No", "Yes"]);
+		assert.deepEqual(harness.selects[0].choices, ["Deny", "Approve"]);
 		assert.match(harness.notices.join("\n"), /approved by user · Medium risk/);
 		assert.match(harness.selects[0].title, /Approval Required/);
 		assert.match(
@@ -1992,7 +1992,7 @@ test("asks for medium-risk actions and executes only after Yes", async () => {
 test("asks for PowerShell commands and shows the PowerShell preview", async () => {
 	const harness = approvalHarness({
 		assessment: mediumAssessment,
-		select: () => Promise.resolve("Yes"),
+		select: () => Promise.resolve("Approve"),
 	});
 	try {
 		await harness.handlers.get("session_start")?.({}, harness.ctx);
@@ -2003,7 +2003,7 @@ test("asks for PowerShell commands and shows the PowerShell preview", async () =
 		assert.equal(
 			await (handlersToolCall(harness) as ToolCallHandler)(call, harness.ctx),
 			undefined,
-			"Yes must let the PowerShell call execute",
+			"Approve must let the PowerShell call execute",
 		);
 		assert.equal(harness.reviewCalls, 1);
 		assert.equal(Object.isFrozen(call.input), true);
@@ -2026,7 +2026,7 @@ test("denies high-risk PowerShell commands without any prompt", async () => {
 		}),
 		select: () => {
 			selectCalls++;
-			return Promise.resolve("Yes");
+			return Promise.resolve("Approve");
 		},
 	});
 	try {
@@ -2051,7 +2051,7 @@ test("denies high-risk PowerShell commands without any prompt", async () => {
 
 test("blocks medium-risk actions when the user declines or cancels", async () => {
 	for (const [label, respond] of [
-		["No", (): Promise<string | undefined> => Promise.resolve("No")],
+		["Deny", (): Promise<string | undefined> => Promise.resolve("Deny")],
 		["Esc", (): Promise<string | undefined> => Promise.resolve(undefined)],
 		[
 			"UI failure",
@@ -2090,7 +2090,7 @@ test("denies high-risk actions from configuration without any prompt", async () 
 		}),
 		select: () => {
 			selectCalls++;
-			return Promise.resolve("Yes");
+			return Promise.resolve("Approve");
 		},
 	});
 	try {
@@ -2110,10 +2110,10 @@ test("denies high-risk actions from configuration without any prompt", async () 
 });
 
 test("approval scope covers exactly one tool call", async () => {
-	let choices = ["Yes", "No"];
+	let choices = ["Approve", "Deny"];
 	const harness = approvalHarness({
 		assessment: mediumAssessment,
-		select: () => Promise.resolve(choices.shift() ?? "No"),
+		select: () => Promise.resolve(choices.shift() ?? "Deny"),
 	});
 	try {
 		await harness.handlers.get("session_start")?.({}, harness.ctx);
@@ -2123,7 +2123,7 @@ test("approval scope covers exactly one tool call", async () => {
 		const reviewCallsAfterFirst = harness.reviewCalls;
 
 		// A second identical tool call is re-reviewed and re-approved; the first
-		// Yes never carries over.
+		// Approve never carries over.
 		const second = harness.queueToolCall("scope-call-2", "scope-batch-2");
 		const result = (await (
 			handlersToolCall(harness) as ToolCallHandler
@@ -2140,12 +2140,12 @@ test("approval scope covers exactly one tool call", async () => {
 test("concurrent asks show exactly one approval prompt at a time", async () => {
 	let releaseFirst!: () => void;
 	const firstGate = new Promise<string>((resolve) => {
-		releaseFirst = () => resolve("No");
+		releaseFirst = () => resolve("Deny");
 	});
 	const harness = approvalHarness({
 		assessment: mediumAssessment,
 		select: (_title, _choices) =>
-			harness.selects.length === 1 ? firstGate : Promise.resolve("Yes"),
+			harness.selects.length === 1 ? firstGate : Promise.resolve("Approve"),
 	});
 	try {
 		await harness.handlers.get("session_start")?.({}, harness.ctx);

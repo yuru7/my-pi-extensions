@@ -6,6 +6,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+	stripTerminalSequences,
 	visibleWidth,
 	type MarkdownTheme,
 	type TuiMouseEvent,
@@ -83,8 +84,9 @@ function harness(
 	);
 	const dialog = new ApprovalDialog({
 		markdown: prompt.markdown,
+		title: prompt.title,
 		emphasis: prompt.emphasis,
-		choices: ["No", "Yes"],
+		choices: ["Deny", "Approve"],
 		theme: options.theme ?? theme,
 		markdownTheme: options.markdownTheme ?? getMarkdownTheme(),
 		rows: () => options.rows ?? 40,
@@ -112,22 +114,55 @@ test("renders the prompt document and pinned choices when it fits", () => {
 	assert.match(text, /Review Information:/);
 	assert.match(text, /Risk Assessor: openai-codex\/gpt-5\.6-luna \(Primary\)/);
 	assert.match(text, /Instruction Alignment: implied/);
-	assert.match(text, /Operation:/);
+	assert.match(text, /Operation \(tool: bash\):/);
 	assert.match(text, /```bash/);
 	assert.match(text, /\$ pnpm install --offline/);
-	assert.match(text, /Action Summary:/);
+	assert.match(text, /Operation Summary:/);
 	assert.match(text, /Reason:/);
 	assert.doesNotMatch(text, /Proceed\?/);
 
-	// "No" stays preselected and the controls are pinned to the bottom.
-	assert.equal(dialog.selectedChoice, "No");
-	assert.match(lines[lines.length - 3] ?? "", /→ No/);
-	assert.match(lines[lines.length - 2] ?? "", /Yes$/);
+	// "Deny" stays preselected and the controls are pinned to the bottom.
+	assert.equal(dialog.selectedChoice, "Deny");
+	assert.match(lines[lines.length - 3] ?? "", /→ Deny/);
+	assert.match(lines[lines.length - 2] ?? "", /Approve$/);
 	assert.match(lines[lines.length - 1] ?? "", /enter confirm/);
 
 	// Nothing overflows: no hint and no scrollbar.
 	assert.doesNotMatch(text, /more lines/);
 	assert.doesNotMatch(text, /[┃│]/);
+});
+
+test("draws a full-width rule carrying the prompt title above the body", () => {
+	const { render } = harness({ rows: 40 });
+	for (const width of [40, 70, 120]) {
+		const rule = stripTerminalSequences(render(width)[0] ?? "");
+		assert.equal(visibleWidth(rule), width);
+		assert.match(rule, /^─── Approval Required ─+$/);
+	}
+
+	// The rule stays fixed on top even when the body is capped and scrolling.
+	const short = harness({ rows: 16 });
+	const lines = short.render();
+	const rule = stripTerminalSequences(lines[0] ?? "");
+	assert.equal(visibleWidth(rule), 70);
+	assert.match(rule, /^─── Approval Required ─+$/);
+	assert.ok(lines.length <= 10, `expected a capped height, got ${lines.length}`);
+});
+
+test("draws a plain full-width rule when the dialog has no title", () => {
+	const dialog = new ApprovalDialog({
+		markdown: "**Risk: Medium**",
+		choices: ["Deny", "Approve"],
+		theme,
+		markdownTheme: getMarkdownTheme(),
+		rows: () => 40,
+		requestRender: () => {},
+		onDecision: () => {},
+	});
+	for (const width of [40, 70]) {
+		const rule = stripTerminalSequences(dialog.render(width)[0] ?? "");
+		assert.equal(rule, "─".repeat(width));
+	}
 });
 
 test("caps the height and scrolls the body when the terminal is short", () => {
@@ -148,8 +183,8 @@ test("caps the height and scrolls the body when the terminal is short", () => {
 		"the transient scrollbar is painted while scrolling",
 	);
 	// The controls stay pinned and visible while the body moves.
-	assert.match(scrolled[scrolled.length - 3] ?? "", /→ No/);
-	assert.match(scrolled[scrolled.length - 2] ?? "", /Yes$/);
+	assert.match(scrolled[scrolled.length - 3] ?? "", /→ Deny/);
+	assert.match(scrolled[scrolled.length - 2] ?? "", /Approve$/);
 	assert.match(scrolled[scrolled.length - 1] ?? "", /enter confirm/);
 });
 
@@ -205,11 +240,11 @@ test("scrolls with the mouse wheel and ignores other mouse events", () => {
 test("enter selects the highlighted choice, escape and abort cancel", () => {
 	const accepted = harness({ rows: 40 });
 	accepted.dialog.handleInput("\x1b[B");
-	assert.equal(accepted.dialog.selectedChoice, "Yes");
+	assert.equal(accepted.dialog.selectedChoice, "Approve");
 	accepted.dialog.handleInput("\r");
-	assert.deepEqual(accepted.choices, ["Yes"]);
+	assert.deepEqual(accepted.choices, ["Approve"]);
 	accepted.dialog.handleInput("\r");
-	assert.deepEqual(accepted.choices, ["Yes"], "a decision is delivered once");
+	assert.deepEqual(accepted.choices, ["Approve"], "a decision is delivered once");
 
 	const cancelled = harness({ rows: 40 });
 	cancelled.dialog.handleInput("\x1b");
@@ -278,7 +313,8 @@ test("renders the operation as a fenced code block with its language label", () 
 			assessment,
 			undefined,
 		).markdown,
-		choices: ["No", "Yes"],
+		title: "Approval Required",
+		choices: ["Deny", "Approve"],
 		theme,
 		markdownTheme,
 		rows: () => 40,

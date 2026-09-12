@@ -104,37 +104,41 @@ function ctxWithCustom(
 	};
 }
 
-test("keeps the fixed No/Yes choice order with No first", async () => {
-	assert.deepEqual([...APPROVAL_CHOICES], ["No", "Yes"]);
+test("keeps the fixed Deny/Approve choice order with Deny first", async () => {
+	assert.deepEqual([...APPROVAL_CHOICES], ["Deny", "Approve"]);
 	let seenOptions: string[] | undefined;
 	const ctx = ctxWithSelect((_title, options) => {
 		seenOptions = options;
 		return Promise.resolve(undefined);
 	});
 	await showApprovalPrompt(action, assessment, assessor, ctx);
-	assert.deepEqual(seenOptions, ["No", "Yes"]);
+	assert.deepEqual(seenOptions, ["Deny", "Approve"]);
 });
 
-test("builds the approval prompt as one Markdown document", () => {
-	const { markdown } = buildApprovalPrompt(action, assessment, assessor);
+test("builds the approval prompt title and body document", () => {
+	const { title, markdown } = buildApprovalPrompt(
+		action,
+		assessment,
+		assessor,
+	);
+	assert.equal(title, "Approval Required");
+	assert.doesNotMatch(markdown, /Approval Required/);
 	assert.equal(
 		markdown,
 		[
-			"Approval Required",
-			"",
 			"**Risk: Medium**",
 			"",
 			"Review Information:",
 			`- Risk Assessor: ${assessor}`,
 			"- Instruction Alignment: direct",
 			"",
-			"Operation:",
+			"Operation (tool: bash):",
 			"",
 			"```bash",
 			"$ git reset --hard HEAD~1",
 			"```",
 			"",
-			"Action Summary:",
+			"Operation Summary:",
 			"Force-resets the current branch one commit back and discards uncommitted changes.",
 			"",
 			"Reason:",
@@ -149,7 +153,9 @@ test("builds the approval prompt as one Markdown document", () => {
 });
 
 test("labels the operation code block for shell tools only", () => {
-	assert.match(buildApprovalPrompt(action, assessment, assessor).markdown, /```bash/);
+	const bash = buildApprovalPrompt(action, assessment, assessor).markdown;
+	assert.match(bash, /```bash/);
+	assert.match(bash, /Operation \(tool: bash\):/);
 
 	const powershell: ReviewAction = {
 		tool: "powershell",
@@ -158,6 +164,7 @@ test("labels the operation code block for shell tools only", () => {
 	};
 	const ps = buildApprovalPrompt(powershell, assessment, assessor).markdown;
 	assert.match(ps, /```powershell\nPS> Get-ChildItem -Force\n```/);
+	assert.match(ps, /Operation \(tool: powershell\):/);
 
 	const write: ReviewAction = {
 		tool: "write",
@@ -166,6 +173,7 @@ test("labels the operation code block for shell tools only", () => {
 	};
 	const writePrompt = buildApprovalPrompt(write, assessment, assessor).markdown;
 	assert.match(writePrompt, /```\nwrite \/repo\/out\.txt\n```/);
+	assert.match(writePrompt, /Operation \(tool: write\):/);
 });
 
 test("keeps a value containing backticks from closing the fence early", () => {
@@ -177,21 +185,34 @@ test("keeps a value containing backticks from closing the fence early", () => {
 	assert.equal(fencedCode("plain"), "```\nplain\n```");
 });
 
+test("sanitizes the tool name in the operation label", () => {
+	const hostile: ReviewAction = {
+		tool: "evil\n\ttool\u001b[31m",
+		cwd: "/repo",
+		payload: { path: "/repo/out.txt" },
+	};
+	const { markdown } = buildApprovalPrompt(hostile, assessment);
+	assert.match(markdown, /Operation \(tool: evil tool \[31m\):/);
+	assert.doesNotMatch(markdown, /\u001b/);
+});
+
 test("routes the same document to the TUI dialog and to ui.select", async () => {
 	const expected = buildApprovalPrompt(action, assessment, assessor);
 
 	let selectTitle: string | undefined;
 	const selectCtx = ctxWithSelect((title) => {
 		selectTitle = title;
-		return Promise.resolve("No");
+		return Promise.resolve("Deny");
 	});
 	await showApprovalPrompt(action, assessment, assessor, selectCtx);
-	assert.equal(selectTitle, expected.markdown);
+	assert.equal(selectTitle, `${expected.title}\n\n${expected.markdown}`);
 
 	const tui = ctxWithCustom({ rows: 40 });
 	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx);
-	assert.match(tui.dialog().render(70).join("\n"), /Action Summary:/);
-	tui.decide("No");
+	const tuiText = tui.dialog().render(70).join("\n");
+	assert.match(tuiText, /Operation Summary:/);
+	assert.match(tuiText, /─── Approval Required ─/);
+	tui.decide("Deny");
 	assert.deepEqual(await pending, { kind: "declined" });
 });
 
@@ -237,16 +258,16 @@ test("bounds interpolated values with an explicit truncation marker", () => {
 	assert.equal(sanitizePromptField("y".repeat(400)).endsWith("[truncated]"), false);
 });
 
-test("Yes approves only after an explicit user selection", async () => {
-	const ctx = ctxWithSelect(() => Promise.resolve("Yes"));
+test("Approve approves only after an explicit user selection", async () => {
+	const ctx = ctxWithSelect(() => Promise.resolve("Approve"));
 	assert.deepEqual(
 		await showApprovalPrompt(action, assessment, assessor, ctx),
 		{ kind: "approved" },
 	);
 });
 
-test("No and Esc (undefined) fail closed", async () => {
-	const noCtx = ctxWithSelect(() => Promise.resolve("No"));
+test("Deny and Esc (undefined) fail closed", async () => {
+	const noCtx = ctxWithSelect(() => Promise.resolve("Deny"));
 	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, noCtx), {
 		kind: "declined",
 	});
@@ -256,6 +277,17 @@ test("No and Esc (undefined) fail closed", async () => {
 		await showApprovalPrompt(action, assessment, assessor, escCtx),
 		{ kind: "declined" },
 	);
+});
+
+test("an unrecognized choice fails closed instead of approving", async () => {
+	for (const choice of ["Yes", "No", "approve", ""]) {
+		const ctx = ctxWithSelect(() => Promise.resolve(choice));
+		assert.deepEqual(
+			await showApprovalPrompt(action, assessment, assessor, ctx),
+			{ kind: "declined" },
+			`choice ${JSON.stringify(choice)} must not approve`,
+		);
+	}
 });
 
 test("an unavailable UI fails closed with a diagnostic detail", async () => {
@@ -275,9 +307,9 @@ test("TUI mode opens the scrollable dialog and maps its choice", async () => {
 	assert.match(text, /Approval Required/);
 	assert.match(text, /Risk: Medium/);
 	assert.match(text, /Risk Assessor: openai-codex\/gpt-5\.6-luna \(Primary\)/);
-	assert.match(text, /Action Summary:/);
+	assert.match(text, /Operation Summary:/);
 	assert.match(text, /git reset --hard HEAD~1/);
-	accepted.decide("Yes");
+	accepted.decide("Approve");
 	assert.deepEqual(await pending, { kind: "approved" });
 
 	const cancelled = ctxWithCustom({ rows: 24 });
@@ -328,7 +360,7 @@ test("a signal aborted while queued declines without opening the prompt", async 
 	let selectCalls = 0;
 	const ctx = ctxWithSelect(() => {
 		selectCalls++;
-		return Promise.resolve("Yes");
+		return Promise.resolve("Approve");
 	}, controller.signal);
 	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, ctx), {
 		kind: "declined",

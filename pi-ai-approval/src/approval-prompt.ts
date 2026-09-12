@@ -4,10 +4,10 @@ import { showApprovalDialog } from "./approval-dialog.ts";
 import { formatActionPreview, riskLabel } from "./review-presentation.ts";
 
 /**
- * Choices are fixed and ordered so the initial cursor rests on "No": pressing
- * Enter immediately keeps the action blocked (fail closed).
+ * Choices are fixed and ordered so the initial cursor rests on "Deny":
+ * pressing Enter immediately keeps the action blocked (fail closed).
  */
-export const APPROVAL_CHOICES = ["No", "Yes"] as const;
+export const APPROVAL_CHOICES = ["Deny", "Approve"] as const;
 
 const FIELD_CHARS = 400;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -34,9 +34,17 @@ export type ApprovalDecision =
 	| { kind: "approved" }
 	| { kind: "declined"; detail?: string };
 
-/** The approval prompt as one Markdown document plus its emphasis target. */
+/**
+ * Title of the approval prompt. Non-TUI selectors get it as the first line of
+ * the document; the TUI dialog embeds it in the rule above the body.
+ */
+export const APPROVAL_PROMPT_TITLE = "Approval Required";
+
+/** The approval prompt: title, Markdown body, and its emphasis target. */
 export interface ApprovalPrompt {
-	/** The whole prompt. Every renderer uses this same document. */
+	/** Prompt title. Where it is rendered is up to the renderer. */
+	title: string;
+	/** The prompt body. Every renderer uses this same document. */
 	markdown: string;
 	/**
 	 * Line that carries risk-level emphasis. The dialog colors it so the level
@@ -93,10 +101,11 @@ export function fencedCode(value: string, language?: string): string {
 }
 
 /**
- * The single definition of the approval prompt: one Markdown document that every
- * renderer receives as-is (the TUI renders it, other modes hand it to their own
- * selector). Reviewer output and the operation preview go through the same
- * Markdown path; control characters are stripped and values are bounded first.
+ * The single definition of the approval prompt: a title plus one Markdown
+ * document that every renderer receives as-is (the TUI renders it under a rule
+ * carrying the title, other modes hand the document to their own selector).
+ * Reviewer output and the operation preview go through the same Markdown path;
+ * control characters are stripped and values are bounded first.
  */
 export function buildApprovalPrompt(
 	action: ReviewAction,
@@ -113,21 +122,21 @@ export function buildApprovalPrompt(
 				`- Instruction Alignment: ${sanitizePromptField(assessment.instruction_alignment)}`,
 			];
 	const blocks = [
-		"Approval Required",
 		`**${riskText}**`,
 		["Review Information:", ...bullets].join("\n"),
 		[
-			"Operation:",
+			`Operation (tool: ${sanitizePromptField(action.tool)}):`,
 			fencedCode(
 				sanitizePromptField(formatActionPreview(action)),
 				SHELL_LANGUAGES[action.tool],
 			),
 		].join("\n\n"),
-		`Action Summary:\n${sanitizePromptField(assessment.action_summary)}`,
+		`Operation Summary:\n${sanitizePromptField(assessment.action_summary)}`,
 		`Reason:\n${sanitizePromptField(assessment.rationale)}`,
 	];
 	const color = RISK_EMPHASIS[assessment.risk_level];
 	return {
+		title: APPROVAL_PROMPT_TITLE,
 		markdown: blocks.join("\n\n"),
 		...(color === undefined ? {} : { emphasis: { text: riskText, color } }),
 	};
@@ -148,13 +157,14 @@ export async function showApprovalPrompt(
 	try {
 		ringTerminalBell(ctx.mode);
 		const prompt = buildApprovalPrompt(action, assessment, assessor);
-		// TUI gets the scrollable dialog; every other mode hands the same
-		// document to its own selector (custom components are unsupported
-		// outside the TUI).
+		// The TUI gets the scrollable dialog with the title in its rule; every
+		// other mode hands the same document (title first) to its own selector
+		// (custom components are unsupported outside the TUI).
 		const choice =
 			ctx.mode === "tui"
 				? await showApprovalDialog(
 						{
+							title: prompt.title,
 							markdown: prompt.markdown,
 							emphasis: prompt.emphasis,
 							choices: APPROVAL_CHOICES,
@@ -162,11 +172,11 @@ export async function showApprovalPrompt(
 						ctx,
 					)
 				: await ctx.ui.select(
-						prompt.markdown,
+						`${prompt.title}\n\n${prompt.markdown}`,
 						[...APPROVAL_CHOICES],
 						ctx.signal ? { signal: ctx.signal } : undefined,
 					);
-		return choice === "Yes"
+		return choice === "Approve"
 			? { kind: "approved" }
 			: { kind: "declined" };
 	} catch (error) {

@@ -2,7 +2,7 @@
 
 English | [日本語](./README_ja.md)
 
-A fail-closed approval gate for [Pi](https://pi.dev), the coding agent. An isolated AI reviewer classifies every covered tool call into one of six risk levels, and a local `riskActions` policy decides whether it runs: `allow`, `ask` (a No/Yes prompt), or `deny`.
+A fail-closed approval gate for [Pi](https://pi.dev), the coding agent. An isolated AI reviewer classifies every covered tool call into one of six risk levels, and a local `riskActions` policy decides whether it runs: `allow`, `ask` (a Deny/Approve prompt), or `deny`.
 
 The AI never decides the final outcome. It only assesses risk and explains what the operation does; the decision always comes from your local configuration, and anything the reviewer cannot classify is blocked.
 
@@ -18,15 +18,15 @@ Risk level + instruction alignment + operation summary + rationale
 riskActions configuration
    ↓
 allow ─────────→ execute
-ask  → No/Yes  → Yes: execute this call / No: block
+ask  → Deny/Approve → Approve: execute this call / Deny: block
 deny ─────────→ block
 ```
 
 - **`allow`** runs the tool call without confirmation.
-- **`ask`** shows an approval prompt and rings the terminal bell in interactive TUI mode. The prompt is a single Markdown document: `Approval Required`, `**Risk: <level>**` (bold, plus a level color in the TUI — `warning` for medium/high, `error` for very high/critical — so it stays readable on terminals that do not render bold), `Review Information:` with the `Risk Assessor:` model and channel rank plus `Instruction Alignment`, `Operation:` with the command in a syntax-labelled code block (`bash` or `powershell`, matching the tool that will run), `Action Summary:`, and `Reason:` (all labels are plain lines; the document has no headings). In the TUI the whole document is rendered by the standard Markdown component; when the prompt is taller than the screen the body scrolls (mouse wheel or `shift+↑`/`shift+↓`) with a transient scrollbar and a remaining-lines hint, while the choices stay pinned. The choice list is fixed to **No / Yes with No preselected**, so pressing Enter keeps the action blocked. Esc, Ctrl-C, and an unavailable UI also block (fail closed). Outside the TUI (RPC, print, JSON) the same text is passed to the client's own selector.
+- **`ask`** shows an approval prompt and rings the terminal bell in interactive TUI mode. The prompt is a title plus one Markdown document: `Approval Required`, `**Risk: <level>**` (bold, plus a level color in the TUI — `warning` for medium/high, `error` for very high/critical — so it stays readable on terminals that do not render bold), `Review Information:` with the `Risk Assessor:` model and channel rank plus `Instruction Alignment`, `Operation (tool: <tool name>):` with the command in a syntax-labelled code block (`bash` or `powershell`, matching the tool that will run), `Operation Summary:`, and `Reason:` (all labels are plain lines; the document has no headings). In the TUI the document is rendered by the standard Markdown component under a full-width rule that carries the title (`─── Approval Required ─────`), so the prompt reads as its own area and not as another line of the session transcript; when the prompt is taller than the screen the body scrolls (mouse wheel or `shift+↑`/`shift+↓`) with a transient scrollbar and a remaining-lines hint, while the choices stay pinned. The choice list is fixed to **Deny / Approve with Deny preselected**, so pressing Enter keeps the action blocked. Esc, Ctrl-C, and an unavailable UI also block (fail closed). Outside the TUI (RPC, print, JSON) the title is prepended to the same document and passed to the client's own selector.
 - **`deny`** blocks the tool call and returns the AI's rationale to the agent, together with instructions not to retry the same action through a workaround.
 
-A Yes applies to exactly that one tool call. The next call is reviewed and approved on its own. Concurrent `ask` outcomes are serialized so only one prompt is ever visible.
+An Approve applies to exactly that one tool call. The next call is reviewed and approved on its own. Concurrent `ask` outcomes are serialized so only one prompt is ever visible.
 
 ## Risk levels
 

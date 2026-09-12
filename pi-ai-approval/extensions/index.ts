@@ -11,7 +11,6 @@ import {
 	DirectUserInputTracker,
 } from "../src/authorization-provenance.ts";
 import {
-	APPROVAL_CHOICES,
 	ApprovalQueue,
 	showApprovalPrompt,
 } from "../src/approval-prompt.ts";
@@ -84,6 +83,12 @@ export {
 export interface AiApprovalOptions {
 	directoryScanCache?: DirectoryScanCache;
 }
+
+/**
+ * `/ai-approval init` asks a plain file-overwrite question, so it keeps its own
+ * No/Yes wording instead of the approval prompt's Deny/Approve choices.
+ */
+const OVERWRITE_CONFIRMATION_CHOICES = ["No", "Yes"] as const;
 
 // Extension wiring intentionally coordinates lifecycle, UI, policy, and reviewer state.
 // pi-lens-ignore: high-complexity, high-fan-out
@@ -313,7 +318,7 @@ export default function aiApproval(
 			try {
 				overwrite = await ctx.ui.select(
 					`${destination.path} already exists. Overwrite?`,
-					[...APPROVAL_CHOICES],
+					[...OVERWRITE_CONFIRMATION_CHOICES],
 				);
 			} catch (error) {
 				ctx.ui.notify(

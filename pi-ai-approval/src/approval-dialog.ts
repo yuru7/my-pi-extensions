@@ -28,6 +28,8 @@ import {
  */
 const DOCK_RESERVE_ROWS = 6;
 const MIN_BODY_ROWS = 1;
+/** Rows taken by the rule that marks the prompt as separate from the session view. */
+const RULE_ROWS = 1;
 /** Fallback width used only when a key reaches the dialog before its first render. */
 const FALLBACK_WIDTH = 80;
 const SCROLLBAR_HIDE_DELAY_MS = 1_200;
@@ -35,8 +37,10 @@ const CHOICE_CHARS = 40;
 const HELP_TEXT = "\u2191\u2193 select \u00b7 enter confirm \u00b7 esc cancel";
 
 export interface ApprovalDialogRequest {
-	/** The whole prompt as one Markdown document. */
+	/** The prompt as a Markdown document without its title. */
 	markdown: string;
+	/** Title embedded in the rule above the body, for example `── Title ──`. */
+	title?: string;
 	/**
 	 * Line to color with a theme color, matched by its plain text. Used for the
 	 * risk line so the level stays visible without relying on bold.
@@ -58,13 +62,15 @@ export interface ApprovalDialogOptions extends ApprovalDialogRequest {
 }
 
 /**
- * TUI approval dialog: a scrollable body of prompt text with the choice rows
- * pinned below it. The body viewport is sized from the terminal height and
- * scrolls with shift+arrow keys and the mouse wheel; a transient scrollbar shows
- * only while the body does not fit.
+ * TUI approval dialog: a rule carrying the prompt title, then a scrollable body
+ * of prompt text with the choice rows pinned below it. The rule keeps the prompt
+ * visibly separate from the session transcript above. The body viewport is sized
+ * from the terminal height and scrolls with shift+arrow keys and the mouse
+ * wheel; a transient scrollbar shows only while the body does not fit.
  */
 export class ApprovalDialog implements Component {
 	private readonly markdown: string;
+	private readonly title?: string;
 	private readonly emphasis?: { text: string; color: ThemeColor };
 	private readonly markdownTheme: MarkdownTheme;
 	private readonly theme: Theme;
@@ -89,6 +95,7 @@ export class ApprovalDialog implements Component {
 
 	constructor(options: ApprovalDialogOptions) {
 		this.markdown = options.markdown;
+		this.title = options.title;
 		this.emphasis = options.emphasis;
 		this.markdownTheme = options.markdownTheme;
 		this.theme = options.theme;
@@ -161,7 +168,11 @@ export class ApprovalDialog implements Component {
 		if (event.type !== "move" && event.type !== "drag") return undefined;
 		// Hovering the track keeps the transient scrollbar alive; leaving it lets
 		// the timer hide the scrollbar again, so no state can stay stuck.
-		if (event.x !== event.width - 1 || event.y >= this.viewportRows) {
+		if (
+			event.x !== event.width - 1 ||
+			event.y < RULE_ROWS ||
+			event.y >= RULE_ROWS + this.viewportRows
+		) {
 			return undefined;
 		}
 		this.markBarActivity();
@@ -186,6 +197,7 @@ export class ApprovalDialog implements Component {
 			? [this.hintLine(body.length - (this.offset + viewport))]
 			: [];
 		return [
+			this.ruleLine(safeWidth),
 			...lines,
 			...hint.map((line) => truncateToWidth(line, safeWidth, "")),
 			...pinned.map((line) => truncateToWidth(line, safeWidth, "")),
@@ -206,6 +218,35 @@ export class ApprovalDialog implements Component {
 	private createBody(): Markdown {
 		this.bodyCache = undefined;
 		return new Markdown(this.markdown, 0, 0, this.markdownTheme);
+	}
+
+	/**
+	 * Full-width rule above the body, with the prompt title embedded:
+	 * `─── Title ─────`. The rule makes the prompt read as its own area and not
+	 * as another line of the session transcript.
+	 */
+	private ruleLine(width: number): string {
+		const title = this.title;
+		if (!title) return this.theme.fg("border", "\u2500".repeat(width));
+		const lead = "\u2500\u2500\u2500 ";
+		// The label keeps one space on each side (lead ends with one already).
+		const label = truncateToWidth(
+			title,
+			Math.max(1, width - visibleWidth(lead) - 1),
+			"\u2026",
+		);
+		const tail = "\u2500".repeat(
+			Math.max(0, width - visibleWidth(lead) - visibleWidth(label) - 1),
+		);
+		return truncateToWidth(
+			[
+				this.theme.fg("border", lead),
+				this.theme.fg("accent", label),
+				this.theme.fg("border", ` ${tail}`),
+			].join(""),
+			width,
+			"",
+		);
 	}
 
 	private cancel(): void {
@@ -238,14 +279,15 @@ export class ApprovalDialog implements Component {
 	} {
 		const body = this.bodyLines(width);
 		const pinned = this.choiceLines();
+		const fixed = RULE_ROWS + pinned.length;
 		const maxTotal = Math.max(
-			pinned.length + MIN_BODY_ROWS,
+			fixed + MIN_BODY_ROWS,
 			this.rows() - DOCK_RESERVE_ROWS,
 		);
-		const overflow = body.length > maxTotal - pinned.length;
+		const overflow = body.length > maxTotal - fixed;
 		const viewport = Math.max(
 			MIN_BODY_ROWS,
-			maxTotal - pinned.length - (overflow ? 1 : 0),
+			maxTotal - fixed - (overflow ? 1 : 0),
 		);
 		this.bodyRows = body.length;
 		this.viewportRows = viewport;

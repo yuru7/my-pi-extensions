@@ -234,7 +234,7 @@ export async function showApprovalConfiguration(
 					"Risk actions (risk level → local decision):",
 					...riskActionLines,
 					"very_high and critical cannot be configured to allow.",
-					"allow runs without confirmation; ask shows a No/Yes prompt (No is preselected); deny blocks.",
+					"allow runs without confirmation; ask shows a Deny/Approve prompt (Deny is preselected); deny blocks.",
 				]
 			: [
 					"Reviews configured shell, private-read/search, and sensitive/out-of-project mutation actions before execution.",
