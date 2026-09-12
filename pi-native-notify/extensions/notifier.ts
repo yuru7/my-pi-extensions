@@ -37,16 +37,13 @@ function warnOnce(key: string, message: string): void {
 }
 
 export const NOTIFICATION_TITLE = "Done - Pi";
+export const PROMPT_NOTIFICATION_TITLE = "Waiting - Pi";
 export const NOTIFICATION_MESSAGE_MAX_LENGTH = 50;
 const MESSAGE_ELLIPSIS = "…";
 const FALLBACK_MESSAGE = "Task completed";
+const PROMPT_FALLBACK_MESSAGE = "Waiting for your input";
 
-export function formatNotificationMessage(prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  if (normalized === "") {
-    return FALLBACK_MESSAGE;
-  }
-
+function truncateMessage(normalized: string): string {
   const chars = [...normalized];
   if (chars.length <= NOTIFICATION_MESSAGE_MAX_LENGTH) {
     return normalized;
@@ -54,6 +51,25 @@ export function formatNotificationMessage(prompt: string): string {
 
   const keep = NOTIFICATION_MESSAGE_MAX_LENGTH - MESSAGE_ELLIPSIS.length;
   return `${chars.slice(0, keep).join("")}${MESSAGE_ELLIPSIS}`;
+}
+
+export function formatNotificationMessage(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  return normalized === "" ? FALLBACK_MESSAGE : truncateMessage(normalized);
+}
+
+/**
+ * Prompt titles are often multi-line (the approval prompt contains the
+ * operation and the rationale), so only the first non-empty line is used.
+ */
+export function formatPromptNotificationMessage(title?: string): string {
+  const firstLine = (title ?? "")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .find((line) => line !== "");
+  return firstLine === undefined
+    ? PROMPT_FALLBACK_MESSAGE
+    : truncateMessage(firstLine);
 }
 
 export function shouldNotify(

@@ -9,8 +9,10 @@ import {
 import { createFocusTracker, type FocusTracker } from "./focus.ts";
 import {
   formatNotificationMessage,
+  formatPromptNotificationMessage,
   NOTIFICATION_TITLE,
   notify,
+  PROMPT_NOTIFICATION_TITLE,
   shouldNotify,
 } from "./notifier.ts";
 import {
@@ -28,6 +30,7 @@ export interface NotifyRuntime {
   capturePrompt: (prompt: string) => void;
   markStart: () => void;
   onSettled: () => Promise<boolean>;
+  onPromptStart: (title?: string) => Promise<boolean>;
 }
 
 export interface NotifyRuntimeDeps {
@@ -120,6 +123,22 @@ export function createNotifyRuntime(deps: NotifyRuntimeDeps): NotifyRuntime {
       }
       return true;
     },
+    async onPromptStart(title) {
+      if (!isUnfocused()) {
+        return false;
+      }
+
+      try {
+        await send(
+          PROMPT_NOTIFICATION_TITLE,
+          formatPromptNotificationMessage(title),
+          deps.getConfig(),
+        );
+      } catch {
+        // 通知失敗で Agent 処理を失敗させない
+      }
+      return true;
+    },
   };
 }
 
@@ -155,6 +174,14 @@ export default function (pi: ExtensionAPI, deps: NotifyExtensionDeps = {}) {
   pi.on("agent_settled", async () => {
     try {
       await runtime.onSettled();
+    } catch {
+      // 通知処理の例外を Pi のイベントループへ漏らさない
+    }
+  });
+
+  pi.on("ui_prompt_start", async (event) => {
+    try {
+      await runtime.onPromptStart(event.title);
     } catch {
       // 通知処理の例外を Pi のイベントループへ漏らさない
     }

@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import { createNotifyRuntime } from "../extensions/index.ts";
 import {
   formatNotificationMessage,
+  formatPromptNotificationMessage,
   shouldNotify,
 } from "../extensions/notifier.ts";
 
@@ -62,6 +63,96 @@ describe("formatNotificationMessage", () => {
     const message = formatNotificationMessage(prompt);
     assert.equal(message, `${"あ".repeat(49)}…`);
     assert.equal([...message].length, 50);
+  });
+});
+
+describe("formatPromptNotificationMessage", () => {
+  test("複数行のタイトルは先頭行を使う", () => {
+    assert.equal(
+      formatPromptNotificationMessage(
+        "Approval Required\n\nRisk: high\n\nOperation:\n  bash ls",
+      ),
+      "Approval Required",
+    );
+  });
+
+  test("空のタイトルは入力待ちメッセージにフォールバックする", () => {
+    assert.equal(
+      formatPromptNotificationMessage(),
+      "Waiting for your input",
+    );
+    assert.equal(
+      formatPromptNotificationMessage("   \n\t "),
+      "Waiting for your input",
+    );
+  });
+
+  test("50文字を超えたら省略する", () => {
+    const title = "あ".repeat(51);
+    const message = formatPromptNotificationMessage(title);
+    assert.equal(message, `${"あ".repeat(49)}…`);
+    assert.equal([...message].length, 50);
+  });
+});
+
+describe("createNotifyRuntime onPromptStart", () => {
+  test("フォーカスアウトならプロンプト先頭行で通知する", async () => {
+    const sent: Array<{ title: string; message: string }> = [];
+    const runtime = createNotifyRuntime({
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => true,
+      notify: async (title, message) => {
+        sent.push({ title, message });
+      },
+    });
+
+    assert.equal(
+      await runtime.onPromptStart("Approval Required\n\nRisk: high"),
+      true,
+    );
+    assert.deepEqual(sent, [
+      { title: "Waiting - Pi", message: "Approval Required" },
+    ]);
+  });
+
+  test("タイトルなしでも入力待ちとして通知する", async () => {
+    const sent: string[] = [];
+    const runtime = createNotifyRuntime({
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => true,
+      notify: async (_title, message) => {
+        sent.push(message);
+      },
+    });
+
+    assert.equal(await runtime.onPromptStart(undefined), true);
+    assert.deepEqual(sent, ["Waiting for your input"]);
+  });
+
+  test("フォーカス中は通知しない", async () => {
+    const sent: string[] = [];
+    const runtime = createNotifyRuntime({
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => false,
+      notify: async (_title, message) => {
+        sent.push(message);
+      },
+    });
+
+    assert.equal(await runtime.onPromptStart("Approval Required"), false);
+    assert.deepEqual(sent, []);
+  });
+
+  test("通知関数が失敗しても例外を外へ出さない", async () => {
+    const runtime = createNotifyRuntime({
+      getConfig: () => ({ thresholdSeconds: 30 }),
+      isUnfocused: () => true,
+      notify: async () => {
+        throw new Error("powershell missing");
+      },
+    });
+
+    await assert.doesNotReject(() => runtime.onPromptStart("Approval Required"));
   });
 });
 

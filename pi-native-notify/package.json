@@ -1,7 +1,7 @@
 {
   "name": "@yuru7/pi-native-notify",
   "version": "0.3.3",
-  "description": "A Pi extension that sends a native OS notification when a long-running task completes",
+  "description": "A Pi extension that sends a native OS notification when a long-running task completes or when Pi waits for your input",
   "keywords": [
     "pi-package",
     "pi-coding-agent",
@@ -39,8 +39,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.2",
-    "@earendil-works/pi-tui": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.85.0",
+    "@earendil-works/pi-tui": "^0.85.0",
     "@types/node": "^24.5.2"
   }
 }

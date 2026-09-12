@@ -1,6 +1,6 @@
 # pi-native-notify
 
-A Pi extension that sends a native OS notification when a long-running task completes.
+A Pi extension that sends a native OS notification when a long-running task completes or when Pi waits for your input.
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
@@ -10,6 +10,12 @@ Completion is detected with `agent_settled`, not `agent_end`. Notifications are 
 
 - The terminal is unfocused (regardless of elapsed time)
 - Elapsed time is at or above the threshold (default **30 seconds**; notifies even while focused)
+
+Waiting for input is detected with `ui_prompt_start`, which Pi fires around blocking `ctx.ui` prompts (`select`, `confirm`, `input`, `editor`, and `custom`). A notification is sent when the terminal is unfocused, and nothing is sent while it is focused:
+
+- The approval dialog from [pi-ai-approval](https://github.com/yuru7/my-pi-extensions/tree/main/pi-ai-approval) is covered automatically, because it uses the same `ctx.ui` API. No extension depends on the other
+- Other extensions' prompts, such as a question tool, notify in the same way
+- The time threshold does not apply. A request for a decision notifies as soon as it appears
 
 ## Supported platforms
 
@@ -23,6 +29,8 @@ Completion is detected with `agent_settled`, not `agent_end`. Notifications are 
 The OS is detected automatically. WSL is treated separately from regular Linux and prefers Windows notifications. Notification sound follows each OS's standard notification settings.
 
 ## Requirements
+
+Pi 0.84.4 or later is required for waiting-for-input notifications. On older versions only completion notifications are sent.
 
 ### Windows / WSL
 
@@ -50,7 +58,7 @@ After installing, restart Pi or run `/reload`. Because the package includes the 
 
 ## Quick Start
 
-After `/reload`, keep using Pi as usual. Notifications are sent automatically when a run settles — no extra command is required.
+After `/reload`, keep using Pi as usual. Notifications are sent automatically when a run settles, and when Pi waits for your input while the terminal is unfocused — no extra command is required.
 
 Confirm that your environment can deliver a native notification:
 
@@ -99,8 +107,8 @@ Changes take effect immediately after save. The value is kept across Pi restarts
 
 ## Notification message
 
-- Title: `Done - Pi`
-- Body: the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `Task completed`)
+- Completion: title `Done - Pi`, body is the target prompt (newlines are collapsed to spaces; truncated if longer than 50 characters. If unavailable, `Task completed`)
+- Waiting for input: title `Waiting - Pi`, and the body is the first line of the prompt title (50 characters max; `Waiting for your input` when the prompt has no title)
 - Windows / WSL toast identity: app name `Pi`, with a small π icon. This is registered per-user in the Windows registry (`HKCU`) so the toast does not appear as PowerShell
 
 ## Troubleshooting
@@ -155,6 +163,10 @@ This extension does not play its own sound. It respects the OS notification soun
 While you are looking at the terminal, runs shorter than 30 seconds are not notified by default. If you have switched to another window, short tasks are still notified. Use `/notify-settings` to change the threshold.
 
 If unfocus is not detected in tmux, check `set -g focus-events on`.
+
+### No notification when Pi waits for input
+
+Waiting-for-input notifications are sent only while the terminal is unfocused. If unfocus is never detected — a terminal without DECSET 1004 support, or tmux without `set -g focus-events on` — no notification is sent.
 
 ## Development
 

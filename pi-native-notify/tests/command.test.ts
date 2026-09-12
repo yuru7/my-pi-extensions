@@ -46,6 +46,7 @@ describe("/notify-settings", () => {
     assert.equal(pi.events.has("agent_start"), true);
     assert.equal(pi.events.has("agent_end"), false);
     assert.equal(pi.events.has("agent_settled"), true);
+    assert.equal(pi.events.has("ui_prompt_start"), true);
     assert.equal(pi.commands.has("notify-settings"), true);
     assert.equal(pi.commands.has("notify-test"), true);
     assert.equal(pi.entryRenderers.has(NOTIFY_TEST_ENTRY_TYPE), true);
