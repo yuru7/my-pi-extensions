@@ -672,3 +672,22 @@ test("keeps history rewrites at medium or above", () => {
 		/An unrequested `git reset --hard` is at least `high`/,
 	);
 });
+
+test("caps /tmp operations at medium and keeps the temporary root destructive", () => {
+	assert.match(
+		REVIEW_POLICY,
+		/Deleting `\/tmp` itself \(`rm -rf \/tmp`\) is `high` risk even when requested; paths under it, including `rm -rf \/tmp\/\*`, are at most `medium`/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/Requested reads there are normally `very_low` and requested writes or deletions `low`; unrequested ones stay at `medium` or below/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/Paths resolving outside `\/tmp`, credential sources, and egress still follow the rules above/,
+	);
+	assert.match(
+		REVIEW_POLICY,
+		/`rm -rf \/tmp\/\*` → `medium`; `rm -rf \/tmp` → `high`/,
+	);
+});
