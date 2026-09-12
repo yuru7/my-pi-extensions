@@ -35,6 +35,73 @@ const FALLBACK_WIDTH = 80;
 const SCROLLBAR_HIDE_DELAY_MS = 1_200;
 const CHOICE_CHARS = 40;
 const HELP_TEXT = "\u2191\u2193 select \u00b7 enter confirm \u00b7 esc cancel";
+/** Added to the help line while the expanded document is on screen. */
+const COLLAPSE_HINT = "ctrl+o collapse";
+
+/** Clickable columns of the expansion marker on one rendered body row. */
+interface ExpansionTarget {
+	row: number;
+	/** First clickable column, inclusive. */
+	startX: number;
+	/** Last clickable column, exclusive. */
+	endX: number;
+}
+
+/**
+ * Click targets for the expansion marker in the rendered body rows. The marker
+ * ends the collapsed code block, so its last occurrence is the one that counts,
+ * and a narrow dialog can wrap it: the target then covers the end of the row the
+ * marker starts on, every row it passes through, and the start of the row it
+ * ends on.
+ */
+function markerTargets(
+	marker: string,
+	rows: readonly string[],
+): ExpansionTarget[] {
+	const words = marker.split(" ").filter((word) => word.length > 0);
+	if (words.length < 2) return [];
+	const head = words[0];
+	const tail = words[words.length - 1];
+	const plain = rows.map((row) => stripTerminalSequences(row));
+
+	let tailRow = -1;
+	let tailEnd = 0;
+	for (const [index, row] of plain.entries()) {
+		const at = row.lastIndexOf(tail);
+		if (at < 0) continue;
+		tailRow = index;
+		tailEnd = visibleWidth(row.slice(0, at)) + visibleWidth(tail);
+	}
+	if (tailRow < 0) return [];
+
+	let headRow = -1;
+	let headStart = 0;
+	for (let index = 0; index <= tailRow; index++) {
+		const at = plain[index].lastIndexOf(head);
+		if (at < 0) continue;
+		headRow = index;
+		headStart = visibleWidth(plain[index].slice(0, at));
+	}
+	if (headRow < 0) return [];
+
+	const targets: ExpansionTarget[] = [];
+	for (let row = headRow; row <= tailRow; row++) {
+		targets.push({
+			row,
+			startX: row === headRow ? headStart : 0,
+			endX: row === tailRow ? tailEnd : visibleWidth(plain[row]),
+		});
+	}
+	return targets;
+}
+
+/** Alternate rendering of the prompt with the Operation block shown in full. */
+export interface ApprovalExpansion {
+	/** Document rendered while the block is expanded. */
+	markdown: string;
+	/** Text marking the collapsed block; clicking it expands. */
+	marker: string;
+}
 
 export interface ApprovalDialogRequest {
 	/** The prompt as a Markdown document without its title. */
@@ -48,6 +115,11 @@ export interface ApprovalDialogRequest {
 	emphasis?: { text: string; color: ThemeColor };
 	/** Choice labels; the first entry is selected initially (fail closed). */
 	choices: readonly string[];
+	/**
+	 * Present when the Operation block was cut short. `ctrl+o` and a click on the
+	 * marker then swap the body between the collapsed and the expanded document.
+	 */
+	expansion?: ApprovalExpansion;
 }
 
 export interface ApprovalDialogOptions extends ApprovalDialogRequest {
@@ -66,12 +138,15 @@ export interface ApprovalDialogOptions extends ApprovalDialogRequest {
  * of prompt text with the choice rows pinned below it. The rule keeps the prompt
  * visibly separate from the session transcript above. The body viewport is sized
  * from the terminal height and scrolls with shift+arrow keys and the mouse
- * wheel; a transient scrollbar shows only while the body does not fit.
+ * wheel; a transient scrollbar shows only while the body does not fit. When the
+ * prompt carries an expansion, `ctrl+o` and a click on the truncation marker
+ * swap in the document that shows the whole operation.
  */
 export class ApprovalDialog implements Component {
 	private readonly markdown: string;
 	private readonly title?: string;
 	private readonly emphasis?: { text: string; color: ThemeColor };
+	private readonly expansion?: ApprovalExpansion;
 	private readonly markdownTheme: MarkdownTheme;
 	private readonly theme: Theme;
 	private readonly choices: readonly string[];
@@ -83,8 +158,11 @@ export class ApprovalDialog implements Component {
 	private body: Markdown;
 	private selectedIndex = 0;
 	private offset = 0;
+	private expanded = false;
 	private lastWidth?: number;
 	private bodyCache?: { width: number; lines: string[] };
+	/** Marker columns of the last render, for the expansion click hit test. */
+	private markerTargets: readonly ExpansionTarget[] = [];
 	private bodyRows = 0;
 	private viewportRows = 0;
 	private barVisibleUntil = 0;
@@ -97,6 +175,7 @@ export class ApprovalDialog implements Component {
 		this.markdown = options.markdown;
 		this.title = options.title;
 		this.emphasis = options.emphasis;
+		this.expansion = options.expansion;
 		this.markdownTheme = options.markdownTheme;
 		this.theme = options.theme;
 		this.choices = options.choices;
@@ -134,7 +213,9 @@ export class ApprovalDialog implements Component {
 
 	handleInput(data: string): void {
 		this.ensureMetrics();
-		if (matchesKey(data, Key.up) || data === "k") {
+		if (this.expansion && matchesKey(data, Key.ctrl("o"))) {
+			this.toggleExpansion();
+		} else if (matchesKey(data, Key.up) || data === "k") {
 			this.moveSelection(-1);
 		} else if (matchesKey(data, Key.down) || data === "j") {
 			this.moveSelection(1);
@@ -159,6 +240,10 @@ export class ApprovalDialog implements Component {
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		this.ensureMetrics();
+		if (this.hitsExpansionMarker(event)) {
+			this.toggleExpansion();
+			return { handled: true, render: true };
+		}
 		if (event.type === "wheel") {
 			const delta = event.wheelDelta ?? 0;
 			if (delta === 0) return undefined;
@@ -193,6 +278,10 @@ export class ApprovalDialog implements Component {
 			overflow && this.isBarVisible()
 				? this.paintScrollbar(visible, safeWidth, body.length, viewport)
 				: visible;
+		this.markerTargets =
+			this.expansion && !this.expanded
+				? markerTargets(this.expansion.marker, lines)
+				: [];
 		const hint = overflow
 			? [this.hintLine(body.length - (this.offset + viewport))]
 			: [];
@@ -217,7 +306,50 @@ export class ApprovalDialog implements Component {
 
 	private createBody(): Markdown {
 		this.bodyCache = undefined;
-		return new Markdown(this.markdown, 0, 0, this.markdownTheme);
+		return new Markdown(this.document(), 0, 0, this.markdownTheme);
+	}
+
+	/** Collapsed document, or the expanded one while the user has it open. */
+	private document(): string {
+		return this.expanded && this.expansion
+			? this.expansion.markdown
+			: this.markdown;
+	}
+
+	/**
+	 * Swaps the body for the document that shows the whole operation, or back.
+	 * The selected choice and the scroll offset stay untouched: the Operation
+	 * block keeps its place and only gains or loses the lines it was hiding.
+	 */
+	private toggleExpansion(): void {
+		if (!this.expansion) return;
+		this.expanded = !this.expanded;
+		this.body = this.createBody();
+		this.requestRender();
+	}
+
+	/**
+	 * True when a left click lands on the row showing the expansion marker, which
+	 * is the only click that toggles the body. The rows are the ones the last
+	 * render produced, so the hit test uses the very text the user sees.
+	 */
+	/**
+	 * True when a left click lands inside the expansion marker, which is the only
+	 * click that toggles the body. Other rows, other columns of the same row, and
+	 * other buttons stay inert.
+	 */
+	private hitsExpansionMarker(event: TuiMouseEvent): boolean {
+		// The marker only exists in the collapsed document, so a click that lands
+		// where it used to be cannot fold the body straight back.
+		if (this.expanded) return false;
+		if (event.type !== "click" || event.button !== "left") return false;
+		const row = event.y - RULE_ROWS;
+		return this.markerTargets.some(
+			(target) =>
+				target.row === row &&
+				event.x >= target.startX &&
+				event.x < target.endX,
+		);
 	}
 
 	/**
@@ -322,7 +454,14 @@ export class ApprovalDialog implements Component {
 				? `${this.theme.fg("accent", "\u2192 ")}${this.theme.fg("accent", label)}`
 				: `  ${this.theme.fg("text", label)}`;
 		});
-		return ["", ...rows, this.theme.fg("dim", HELP_TEXT)];
+		return ["", ...rows, this.theme.fg("dim", this.helpText())];
+	}
+
+	/** Help line, which also names the way back out of the expanded body. */
+	private helpText(): string {
+		return this.expanded && this.expansion
+			? `${HELP_TEXT} \u00b7 ${COLLAPSE_HINT}`
+			: HELP_TEXT;
 	}
 
 	private hintLine(more: number): string {

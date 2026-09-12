@@ -29,6 +29,21 @@ const action: ReviewAction = {
 	payload: { command: "pnpm install --offline" },
 };
 
+/** Command whose folded form passes the 300-character preview cut. */
+const longCommand: ReviewAction = {
+	tool: "bash",
+	cwd: "/repo",
+	payload: {
+		command: [
+			"set -e",
+			"echo one",
+			"rm -rf ./build",
+			...Array.from({ length: 30 }, () => "echo padding-line"),
+			"tail-marker",
+		].join("\n"),
+	},
+};
+
 const assessment: RiskAssessment = {
 	risk_level: "medium",
 	instruction_alignment: "implied",
@@ -70,7 +85,9 @@ interface DialogHarness {
 function harness(
 	options: {
 		rows?: number;
+		action?: ReviewAction;
 		assessment?: RiskAssessment;
+		expandable?: boolean;
 		scrollbarHideDelayMs?: number;
 		theme?: Theme;
 		markdownTheme?: MarkdownTheme;
@@ -78,14 +95,16 @@ function harness(
 ): DialogHarness {
 	const choices: (string | undefined)[] = [];
 	const prompt = buildApprovalPrompt(
-		action,
+		options.action ?? action,
 		options.assessment ?? assessment,
 		"openai-codex/gpt-5.6-luna (Primary)",
+		{ expandable: options.expandable },
 	);
 	const dialog = new ApprovalDialog({
 		markdown: prompt.markdown,
 		title: prompt.title,
 		emphasis: prompt.emphasis,
+		expansion: prompt.expansion,
 		choices: ["Deny", "Approve"],
 		theme: options.theme ?? theme,
 		markdownTheme: options.markdownTheme ?? getMarkdownTheme(),
@@ -235,6 +254,217 @@ test("scrolls with the mouse wheel and ignores other mouse events", () => {
 	const line = dialog.handleMouse(mouse({ type: "wheel", wheelDelta: -1 }));
 	assert.deepEqual(line, { handled: true, render: true });
 	assert.equal(dialog.scrollTop, 1);
+});
+
+/**
+ * Harness for the expansion tests: a command long enough to be cut short, with
+ * reviewer text short enough that nothing has to be scrolled into view.
+ */
+function expansionHarness(rows = 80): DialogHarness {
+	return harness({
+		rows,
+		expandable: true,
+		action: longCommand,
+		assessment: { ...assessment, rationale: "Short reason that fits." },
+	});
+}
+
+/** Rows that show the truncation marker, which a narrow dialog can split. */
+function markerRows(lines: string[]): number[] {
+	return lines
+		.map((line, index) => ({ line: stripTerminalSequences(line), index }))
+		.filter(
+			({ line }) => line.includes("(truncated,") || line.includes("expand)"),
+		)
+		.map(({ index }) => index);
+}
+
+/** Column span a marker fragment covers on a rendered row, in plain columns. */
+function markerSpan(
+	line: string,
+	fragment: string,
+): { startX: number; endX: number } {
+	const plain = stripTerminalSequences(line);
+	const at = plain.lastIndexOf(fragment);
+	assert.ok(at >= 0, `expected ${fragment} on the rendered row`);
+	return {
+		startX: visibleWidth(plain.slice(0, at)),
+		endX: visibleWidth(plain.slice(0, at + fragment.length)),
+	};
+}
+
+test("expands a cut-short operation with ctrl+o and collapses it again", () => {
+	const { dialog, render } = expansionHarness();
+	const rows = () => render(70).map(stripTerminalSequences);
+	assert.doesNotMatch(rows().join("\n"), /more lines/);
+
+	// Collapsed: the command is folded, cut, and marked.
+	const collapsed = rows();
+	assert.ok(
+		collapsed.some((line) => line.includes("rm -rf ./build echo padding-line")),
+		"the collapsed preview folds the command onto one line",
+	);
+	assert.ok(collapsed.some((line) => line.includes("(truncated,")));
+	assert.ok(
+		!collapsed.some((line) => line.includes("tail-marker")),
+		"the collapsed preview hides the rest of the command",
+	);
+
+	dialog.handleInput("\x0f"); // ctrl+o
+	const expanded = rows();
+	assert.ok(
+		expanded.some((line) => line.trim() === "$ set -e"),
+		"the expanded command keeps its own line breaks",
+	);
+	assert.ok(expanded.some((line) => line.trim() === "rm -rf ./build"));
+	assert.ok(expanded.some((line) => line.includes("tail-marker")));
+	assert.ok(!expanded.some((line) => line.includes("(truncated,")));
+	assert.ok(
+		expanded.some((line) => line.includes("ctrl+o collapse")),
+		"the help line names the way back while expanded",
+	);
+
+	dialog.handleInput("\x0f"); // ctrl+o again
+	const recollapsed = rows();
+	assert.ok(recollapsed.some((line) => line.includes("(truncated,")));
+	assert.ok(!recollapsed.some((line) => line.includes("tail-marker")));
+	assert.ok(!recollapsed.some((line) => line.includes("ctrl+o collapse")));
+});
+
+test("keeps the selected choice and the scroll offset across expansion", () => {
+	const { dialog, render } = expansionHarness(16);
+	render();
+	dialog.handleInput("\x1b[B"); // down: Approve
+	dialog.handleInput(KEY.shiftDown);
+	const offset = dialog.scrollTop;
+	assert.ok(offset > 0, "the short dialog scrolls");
+
+	dialog.handleInput("\x0f"); // ctrl+o
+	assert.equal(dialog.selectedChoice, "Approve");
+	assert.equal(dialog.scrollTop, offset);
+	render();
+	assert.equal(dialog.selectedChoice, "Approve");
+});
+
+test("expands when the truncation marker is clicked, and only then", () => {
+	const { dialog, render } = expansionHarness();
+	const body = () => render(70).map(stripTerminalSequences).join("\n");
+	const rows = render(70);
+	const markerRow = markerRows(rows)[0];
+	assert.ok(markerRow !== undefined, "the marker is rendered");
+	const span = markerSpan(rows[markerRow], "(truncated,");
+	assert.ok(span.startX > 0, "the marker starts after the cut command text");
+
+	// Clicks that are not a left click on the marker change nothing: the command
+	// text next to the marker, another button, and unrelated rows.
+	assert.equal(
+		dialog.handleMouse(
+			mouse({ type: "click", button: "left", x: span.startX - 1, y: markerRow }),
+		),
+		undefined,
+	);
+	assert.equal(
+		dialog.handleMouse(
+			mouse({ type: "click", button: "right", x: span.startX, y: markerRow }),
+		),
+		undefined,
+	);
+	assert.equal(
+		dialog.handleMouse(mouse({ type: "click", button: "left", x: 4, y: 1 })),
+		undefined,
+	);
+	assert.ok(!body().includes("tail-marker"));
+
+	assert.deepEqual(
+		dialog.handleMouse(
+			mouse({ type: "click", button: "left", x: span.startX, y: markerRow }),
+		),
+		{ handled: true, render: true },
+	);
+	assert.ok(body().includes("tail-marker"));
+});
+
+test("finds a truncation marker that a narrow dialog wraps across rows", () => {
+	const split = expansionHarness().render(30).map(stripTerminalSequences);
+	const headRow = split.findIndex((line) => line.includes("(truncated,"));
+	const tailRow = split.findIndex((line) => line.includes("expand)"));
+	assert.ok(headRow >= 0, "the narrow dialog still shows the head of the marker");
+	assert.ok(
+		tailRow > headRow,
+		`expected the marker to wrap, got rows ${headRow} and ${tailRow}`,
+	);
+
+	// On the row that introduces the marker, the command text before it is inert
+	// and the marker itself expands.
+	const head = expansionHarness();
+	const headSpan = markerSpan(head.render(30)[headRow], "(truncated,");
+	assert.ok(headSpan.startX > 0, "the marker follows the cut command text");
+	assert.equal(
+		head.dialog.handleMouse(
+			mouse({
+				type: "click",
+				button: "left",
+				x: headSpan.startX - 1,
+				y: headRow,
+			}),
+		),
+		undefined,
+	);
+	assert.deepEqual(
+		head.dialog.handleMouse(
+			mouse(
+				{ type: "click", button: "left", x: headSpan.startX, y: headRow },
+			),
+		),
+		{ handled: true, render: true },
+	);
+
+	// The row the marker wraps onto is marker text from its first column, and one
+	// column past its end is outside the marker again.
+	const tail = expansionHarness();
+	const tailSpan = markerSpan(tail.render(30)[tailRow], "expand)");
+	assert.equal(
+		tail.dialog.handleMouse(
+			mouse({ type: "click", button: "left", x: tailSpan.endX, y: tailRow }),
+		),
+		undefined,
+	);
+	assert.deepEqual(
+		tail.dialog.handleMouse(
+			mouse({ type: "click", button: "left", x: 0, y: tailRow }),
+		),
+		{ handled: true, render: true },
+	);
+	assert.ok(
+		tail
+			.render(30)
+			.map(stripTerminalSequences)
+			.join("\n")
+			.includes("tail-marker"),
+		"clicking the wrapped marker expands the operation",
+	);
+});
+
+test("ignores ctrl+o and marker clicks when there is nothing to expand", () => {
+	const { dialog, render } = harness({ rows: 40 });
+	const before = render(70);
+	assert.ok(
+		!before.some((line) => stripTerminalSequences(line).includes("(truncated,")),
+		"a command that fits carries no marker",
+	);
+
+	dialog.handleInput("\x0f"); // ctrl+o
+	assert.deepEqual(render(70), before);
+	assert.equal(dialog.selectedChoice, "Deny");
+
+	const rows = render(70);
+	assert.equal(
+		dialog.handleMouse(
+			mouse({ type: "click", button: "left", x: 4, y: rows.length - 3 }),
+		),
+		undefined,
+	);
+	assert.deepEqual(render(70), before);
 });
 
 test("enter selects the highlighted choice, escape and abort cancel", () => {

@@ -8,6 +8,14 @@ import type { ReviewResult } from "./gate.ts";
 const REJECTION_DETAIL_CHARS = 4_000;
 const COMMAND_PREVIEW_CHARS = 300;
 const PREVIEW_CHARS = 160;
+/**
+ * Shell prompt prefixes. The PowerShell one mirrors pi's own prompt so the
+ * preview reads like a PowerShell transcript instead of a bash one.
+ */
+const SHELL_PREFIXES: Record<string, string> = {
+	bash: "$ ",
+	powershell: "PS> ",
+};
 
 const RISK_LABELS: Record<RiskLevel, string> = {
 	very_low: "Very Low",
@@ -96,21 +104,51 @@ function assessmentSummary(
 	return `AI Approval · ${verdict} · ${riskLabel(assessment.risk_level)} risk`;
 }
 
+/** The collapsed and expanded forms of a shell command preview. */
+export interface ShellCommandPreview {
+	/** Single-line, size-bounded command without any truncation marker. */
+	collapsed: string;
+	/** The command as written, keeping its own line breaks. */
+	expanded: string;
+	/** True when the command was cut short to fit the collapsed form. */
+	truncated: boolean;
+}
+
+/**
+ * Preview of a shell command, or undefined for every other tool. Only commands
+ * have an expanded form: a command is what the user has to judge, and a cut
+ * preview can hide the part that decides the risk. The collapsed form carries
+ * no marker, so each caller can name the way its context offers the rest.
+ */
+export function shellCommandPreview(
+	action: ReviewAction,
+): ShellCommandPreview | undefined {
+	const prefix = SHELL_PREFIXES[action.tool];
+	if (prefix === undefined) return undefined;
+	const command = String(action.payload.command ?? "");
+	const oneLine = singleLine(command);
+	const truncated = oneLine.length > COMMAND_PREVIEW_CHARS;
+	return {
+		collapsed: `${prefix}${
+			truncated ? oneLine.slice(0, COMMAND_PREVIEW_CHARS) : oneLine
+		}`,
+		// The whole command, byte for byte: indentation and trailing newlines are
+		// part of what the user is judging.
+		expanded: `${prefix}${command}`,
+		truncated,
+	};
+}
+
 /** One-line, size-bounded description of the planned action for UI display. */
 export function formatActionPreview(action: ReviewAction): string {
+	const shell = shellCommandPreview(action);
+	if (shell) {
+		return shell.truncated
+			? `${shell.collapsed}… [truncated]`
+			: shell.collapsed;
+	}
 	const path = () => singleLine(String(action.payload.path ?? ""));
-	const command = () =>
-		truncatePreview(
-			singleLine(String(action.payload.command ?? "")),
-			COMMAND_PREVIEW_CHARS,
-		);
 	switch (action.tool) {
-		case "bash":
-			return `$ ${command()}`;
-		// Mirrors pi's own PowerShell prompt so the preview reads like a
-		// PowerShell transcript instead of a bash one.
-		case "powershell":
-			return `PS> ${command()}`;
 		case "write":
 			return truncatePreview(`write ${path()}`, PREVIEW_CHARS);
 		case "edit": {

@@ -1,7 +1,14 @@
 import type { ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { ReviewAction, RiskAssessment, RiskLevel } from "./review.ts";
-import { showApprovalDialog } from "./approval-dialog.ts";
-import { formatActionPreview, riskLabel } from "./review-presentation.ts";
+import {
+	showApprovalDialog,
+	type ApprovalExpansion,
+} from "./approval-dialog.ts";
+import {
+	formatActionPreview,
+	riskLabel,
+	shellCommandPreview,
+} from "./review-presentation.ts";
 
 /**
  * Choices are fixed and ordered so the initial cursor rests on "Deny":
@@ -11,6 +18,12 @@ export const APPROVAL_CHOICES = ["Deny", "Approve"] as const;
 
 const FIELD_CHARS = 400;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
+/**
+ * The same ranges, but line feeds survive. A multi-line command is only
+ * readable while its own line breaks are intact.
+ */
+const CONTROL_CHARS_KEEPING_NEWLINES =
+	/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
 /**
  * Risk levels worth coloring. Bold alone is invisible on terminals that do not
  * render bold, so elevated risk also gets a theme color.
@@ -40,6 +53,13 @@ export type ApprovalDecision =
  */
 export const APPROVAL_PROMPT_TITLE = "Approval Required";
 
+/**
+ * Stands in for an Operation preview that was cut short, and names the way to
+ * see the rest. The dialog receives the same text as its click target, so the
+ * constant is shared instead of spelled out twice.
+ */
+export const EXPANSION_HINT = "(truncated, ctrl+o to expand)";
+
 /** The approval prompt: title, Markdown body, and its emphasis target. */
 export interface ApprovalPrompt {
 	/** Prompt title. Where it is rendered is up to the renderer. */
@@ -51,6 +71,22 @@ export interface ApprovalPrompt {
 	 * stays visible on terminals that do not render bold.
 	 */
 	emphasis?: { text: string; color: ThemeColor };
+	/**
+	 * Present when the Operation block was cut short and can be shown in full,
+	 * which only the TUI dialog can do.
+	 */
+	expansion?: ApprovalExpansion;
+}
+
+/** How `buildApprovalPrompt` adapts the document to its renderer. */
+export interface ApprovalPromptOptions {
+	/**
+	 * Attach the expanded document and mark the collapsed Operation block. Only
+	 * the TUI dialog can expand it; selectors in the other modes cannot, so they
+	 * keep the plain `… [truncated]` marker instead of promising a key that does
+	 * nothing there.
+	 */
+	expandable?: boolean;
 }
 
 /** Minimal writable used for the terminal bell (defaults to `process.stdout`). */
@@ -88,6 +124,19 @@ export function sanitizePromptField(
 }
 
 /**
+ * Sanitizes the expanded Operation block: the same control-character and ANSI
+ * removal as every other interpolated value, except that line feeds survive so a
+ * multi-line command stays readable. Nothing else is altered — no trimming and no
+ * length cap — because the user asked to see the whole command, and the block is
+ * rendered only after ctrl+o or a click. The result is always handed to
+ * `fencedCode`, whose fence is sized to the value, so no line of the command can
+ * escape the block.
+ */
+export function sanitizeExpandedCommand(value: string): string {
+	return value.replace(CONTROL_CHARS_KEEPING_NEWLINES, " ");
+}
+
+/**
  * Wraps a value in a fenced code block. The fence is longer than any backtick
  * run in the value, so a value containing backticks cannot close it early.
  */
@@ -105,12 +154,15 @@ export function fencedCode(value: string, language?: string): string {
  * document that every renderer receives as-is (the TUI renders it under a rule
  * carrying the title, other modes hand the document to their own selector).
  * Reviewer output and the operation preview go through the same Markdown path;
- * control characters are stripped and values are bounded first.
+ * control characters are stripped and values are bounded first. A cut-short
+ * command is the exception: an expandable prompt also carries the same document
+ * with that one block in full, which is what the dialog shows after ctrl+o.
  */
 export function buildApprovalPrompt(
 	action: ReviewAction,
 	assessment: RiskAssessment,
 	assessor?: string,
+	options: ApprovalPromptOptions = {},
 ): ApprovalPrompt {
 	const riskText = `Risk: ${riskLabel(assessment.risk_level)}`;
 	const bullets = assessor
@@ -121,24 +173,39 @@ export function buildApprovalPrompt(
 		: [
 				`- Instruction Alignment: ${sanitizePromptField(assessment.instruction_alignment)}`,
 			];
-	const blocks = [
-		`**${riskText}**`,
-		["Review Information:", ...bullets].join("\n"),
+	const language = SHELL_LANGUAGES[action.tool];
+	const document = (operation: string) =>
 		[
-			`Operation (tool: ${sanitizePromptField(action.tool)}):`,
-			fencedCode(
-				sanitizePromptField(formatActionPreview(action)),
-				SHELL_LANGUAGES[action.tool],
-			),
-		].join("\n\n"),
-		`Operation Summary:\n${sanitizePromptField(assessment.action_summary)}`,
-		`Reason:\n${sanitizePromptField(assessment.rationale)}`,
-	];
+			`**${riskText}**`,
+			["Review Information:", ...bullets].join("\n"),
+			[
+				`Operation (tool: ${sanitizePromptField(action.tool)}):`,
+				fencedCode(operation, language),
+			].join("\n\n"),
+			`Operation Summary:\n${sanitizePromptField(assessment.action_summary)}`,
+			`Reason:\n${sanitizePromptField(assessment.rationale)}`,
+		].join("\n\n");
+	const shell = shellCommandPreview(action);
+	const expandable = options.expandable === true && shell?.truncated === true;
 	const color = RISK_EMPHASIS[assessment.risk_level];
-	return {
+	const prompt: ApprovalPrompt = {
 		title: APPROVAL_PROMPT_TITLE,
-		markdown: blocks.join("\n\n"),
+		markdown: document(
+			sanitizePromptField(
+				shell && expandable
+					? `${shell.collapsed} ... ${EXPANSION_HINT}`
+					: formatActionPreview(action),
+			),
+		),
 		...(color === undefined ? {} : { emphasis: { text: riskText, color } }),
+	};
+	if (!(shell && expandable)) return prompt;
+	return {
+		...prompt,
+		expansion: {
+			markdown: document(sanitizeExpandedCommand(shell.expanded)),
+			marker: EXPANSION_HINT,
+		},
 	};
 }
 
@@ -156,7 +223,11 @@ export async function showApprovalPrompt(
 	}
 	try {
 		ringTerminalBell(ctx.mode);
-		const prompt = buildApprovalPrompt(action, assessment, assessor);
+		// Only the TUI dialog can expand the Operation block, so only that path is
+		// told about it; a selector would show a hint it cannot honour.
+		const prompt = buildApprovalPrompt(action, assessment, assessor, {
+			expandable: ctx.mode === "tui",
+		});
 		// The TUI gets the scrollable dialog with the title in its rule; every
 		// other mode hands the same document (title first) to its own selector
 		// (custom components are unsupported outside the TUI).
@@ -167,6 +238,7 @@ export async function showApprovalPrompt(
 							title: prompt.title,
 							markdown: prompt.markdown,
 							emphasis: prompt.emphasis,
+							expansion: prompt.expansion,
 							choices: APPROVAL_CHOICES,
 						},
 						ctx,

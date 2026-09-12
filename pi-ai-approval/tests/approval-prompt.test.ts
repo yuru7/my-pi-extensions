@@ -7,8 +7,10 @@ import {
 	APPROVAL_CHOICES,
 	ApprovalQueue,
 	buildApprovalPrompt,
+	EXPANSION_HINT,
 	fencedCode,
 	ringTerminalBell,
+	sanitizeExpandedCommand,
 	sanitizePromptField,
 	showApprovalPrompt,
 } from "../src/approval-prompt.ts";
@@ -174,6 +176,142 @@ test("labels the operation code block for shell tools only", () => {
 	const writePrompt = buildApprovalPrompt(write, assessment, assessor).markdown;
 	assert.match(writePrompt, /```\nwrite \/repo\/out\.txt\n```/);
 	assert.match(writePrompt, /Operation \(tool: write\):/);
+});
+
+/** Command whose folded form crosses the 300-character preview cut. */
+const longCommandAction: ReviewAction = {
+	tool: "bash",
+	cwd: "/repo",
+	payload: {
+		command: [
+			"set -e",
+			"echo one",
+			...Array.from({ length: 30 }, () => "echo padding-line"),
+			"tail-marker",
+		].join("\n"),
+	},
+};
+
+test("offers the whole command only when the preview was cut short", () => {
+	// A command that fits keeps the document as it was, with no expansion.
+	const fitting = buildApprovalPrompt(action, assessment, assessor, {
+		expandable: true,
+	});
+	assert.equal(fitting.expansion, undefined);
+	assert.doesNotMatch(fitting.markdown, /ctrl\+o/);
+	assert.match(fitting.markdown, /\$ git reset --hard HEAD~1/);
+
+	const cut = buildApprovalPrompt(longCommandAction, assessment, assessor, {
+		expandable: true,
+	});
+	assert.match(cut.markdown, /\.\.\. \(truncated, ctrl\+o to expand\)/);
+	assert.doesNotMatch(cut.markdown, /tail-marker/);
+
+	const expansion = cut.expansion;
+	assert.ok(expansion, "a cut command carries the expanded document");
+	assert.equal(expansion.marker, EXPANSION_HINT);
+	assert.match(expansion.markdown, /\$ set -e\necho one\n/);
+	assert.match(expansion.markdown, /tail-marker/);
+	assert.doesNotMatch(expansion.markdown, /ctrl\+o/);
+	for (const section of [
+		"**Risk: Medium**",
+		"Review Information:",
+		"Operation Summary:",
+		"Reason:",
+	]) {
+		assert.ok(
+			expansion.markdown.includes(section),
+			`${section} stays in the expanded document`,
+		);
+	}
+});
+
+test("leaves the plain truncation marker where nothing can expand", () => {
+	const plain = buildApprovalPrompt(longCommandAction, assessment, assessor);
+	assert.match(plain.markdown, /… \[truncated\]/);
+	assert.doesNotMatch(plain.markdown, /ctrl\+o/);
+	assert.equal(plain.expansion, undefined);
+
+	// Only shell commands have an expanded form, however long a path gets.
+	const read: ReviewAction = {
+		tool: "read",
+		cwd: "/repo",
+		payload: { path: `/${"d/".repeat(120)}file.txt` },
+	};
+	const readPrompt = buildApprovalPrompt(read, assessment, assessor, {
+		expandable: true,
+	});
+	assert.match(readPrompt.markdown, /… \[truncated\]/);
+	assert.equal(readPrompt.expansion, undefined);
+});
+
+test("sanitizes the expanded command while keeping its line breaks", () => {
+	assert.equal(
+		sanitizeExpandedCommand(`printf 'a'\u001b[31mb\u0007\nrm -rf /\r\n tail`),
+		"printf 'a' [31mb \nrm -rf / \n tail",
+	);
+	assert.doesNotMatch(sanitizeExpandedCommand("\u001b[2Jrm -rf /"), /\u001b/);
+	// Only control characters change: the command keeps its own spacing.
+	assert.equal(sanitizeExpandedCommand("\n\n  echo ok  \n"), "\n\n  echo ok  \n");
+});
+
+test("expands the command byte for byte", () => {
+	const command = `\n  ${["echo padding-line", ...Array.from({ length: 30 }, () => "echo padding-line")].join("\n  ")}\ntail-marker\n`;
+	const { expansion } = buildApprovalPrompt(
+		{ tool: "bash", cwd: "/repo", payload: { command } },
+		assessment,
+		assessor,
+		{ expandable: true },
+	);
+	assert.ok(expansion);
+	assert.match(expansion.markdown, /\$ \n  echo padding-line\n/);
+	assert.match(expansion.markdown, /tail-marker\n\n```/);
+});
+
+test("an expanded command cannot close its own code fence", () => {
+	const command = [
+		"echo ```tick```",
+		...Array.from({ length: 20 }, () => "echo padding-line"),
+		"echo done",
+	].join("\n");
+	const { markdown, expansion } = buildApprovalPrompt(
+		{ tool: "bash", cwd: "/repo", payload: { command } },
+		assessment,
+		assessor,
+		{ expandable: true },
+	);
+	assert.ok(expansion);
+	assert.match(expansion.markdown, /^````bash$/m);
+	assert.match(expansion.markdown, /echo ```tick```/);
+	assert.match(markdown, /^````bash$/m, "the collapsed fence is lengthened too");
+});
+
+test("offers expansion in the TUI and not to a selector", async () => {
+	let selectTitle: string | undefined;
+	await showApprovalPrompt(
+		longCommandAction,
+		assessment,
+		assessor,
+		ctxWithSelect((title) => {
+			selectTitle = title;
+			return Promise.resolve("Deny");
+		}),
+	);
+	assert.ok(selectTitle, "the selector was asked");
+	assert.match(selectTitle, /… \[truncated\]/);
+	assert.doesNotMatch(selectTitle, /ctrl\+o/);
+
+	const tui = ctxWithCustom({ rows: 40 });
+	const pending = showApprovalPrompt(
+		longCommandAction,
+		assessment,
+		assessor,
+		tui.ctx,
+	);
+	const rendered = tui.dialog().render(200).join("\n");
+	assert.match(rendered, /\(truncated, ctrl\+o to expand\)/);
+	tui.decide("Deny");
+	assert.deepEqual(await pending, { kind: "declined" });
 });
 
 test("keeps a value containing backticks from closing the fence early", () => {
