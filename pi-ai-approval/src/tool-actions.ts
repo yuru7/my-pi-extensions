@@ -73,15 +73,20 @@ export function actionFromToolCall(
 	directoryScanCache?: DirectoryScanCache,
 ): ReviewAction | undefined {
 	if (isToolCallEventType("bash", event)) {
-		if ((rules["bash.command"] ?? "always") === "off") return;
-		return {
-			tool: "bash",
-			payload: {
-				command: event.input.command,
-				private_data_read: commandReferencesPrivateData(event.input.command, cwd),
-			},
+		return shellCommandAction(
+			"bash",
+			event.input.command,
 			cwd,
-		};
+			rules["bash.command"] ?? "always",
+		);
+	}
+	if (isToolCallEventType("powershell", event)) {
+		return shellCommandAction(
+			"powershell",
+			event.input.command,
+			cwd,
+			rules["powershell.command"] ?? "always",
+		);
 	}
 	if (isToolCallEventType("read", event)) {
 		return pathReadAction(
@@ -136,6 +141,28 @@ export function actionFromToolCall(
 		rules[`${event.toolName}.path`] ?? "private-only",
 		directoryScanCache,
 	);
+}
+
+/**
+ * Shell tools carry a command string instead of a path, so both shells share
+ * one routing shape: only `off` skips review, and a command that references
+ * private data is marked for the restricted reviewer mode.
+ */
+function shellCommandAction(
+	tool: "bash" | "powershell",
+	command: string,
+	cwd: string,
+	level: ReviewLevel,
+): ReviewAction | undefined {
+	if (level === "off") return;
+	return {
+		tool,
+		payload: {
+			command,
+			private_data_read: commandReferencesPrivateData(command, cwd),
+		},
+		cwd,
+	};
 }
 
 function pathReadAction(

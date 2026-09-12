@@ -145,6 +145,7 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 {
   "review": {
     "bash.command": "always",
+    "powershell.command": "always",
     "read.path": "outside-or-private",
     "grep.path": "outside-or-private",
     "write.path": "outside-or-private",
@@ -153,9 +154,9 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 }
 ```
 
-ビルトインのデフォルトは `bash.command: always`、`read.path` / `grep.path` / `write.path` / `edit.path: outside-or-private`、`find.path` / `ls.path: private-only` です。
+ビルトインのデフォルトは `bash.command: always` と `powershell.command: always`、`read.path` / `grep.path` / `write.path` / `edit.path: outside-or-private`、`find.path` / `ls.path: private-only` です。
 
-ルールキーは `<ツール>.<パラメータ>` です。`bash.command` はすべての bash 呼び出しのコマンド文字列を、`read.path` / `grep.path` / `find.path` / `ls.path` は読み取り・検索のスコープを、`write.path` / `edit.path` は変更対象のファイルをルーティングします。ビルトインのルールがなくても文字列の `path` パラメータを持つツール(例: `custom_reader.path`)も指定でき、デフォルトは `private-only` です。
+ルールキーは `<ツール>.<パラメータ>` です。`bash.command` / `powershell.command` は bash / PowerShell 呼び出しのコマンド文字列を、`read.path` / `grep.path` / `find.path` / `ls.path` は読み取り・検索のスコープを、`write.path` / `edit.path` は変更対象のファイルをルーティングします。ビルトインのルールがなくても文字列の `path` パラメータを持つツール(例: `custom_reader.path`)も指定でき、デフォルトは `private-only` です。
 
 ### スコープの値
 
@@ -168,7 +169,7 @@ Yes が有効なのは**その1件のツール呼び出しのみ**です。次�
 
 「private」は決定論的なルールカタログで判定されます: 認証情報・秘密ファイル(`.env*`、鍵ファイル、`auth.json`、トークンストア、ブラウザのログインデータなど)、プロジェクト外の private ディレクトリ(`.ssh`、`.gnupg`、`.aws`/`.kube` などのクラウド CLI 設定、ブラウザプロファイル、Pi エージェントデータ)、そして検索ツールの場合はそのようなファイルを含みうるディレクトリスコープや glob。`write`/`edit` の「sensitive」はさらに、CI ワークフロー、コンテナ/デプロイマニフェスト、依存ロックファイル、シェルプロファイル、鍵ファイル(`.pem`、`.key` など)、機密ディレクトリセグメント(`.git`、`secrets`、`terraform`、`k8s` など)を含みます。
 
-`bash.command` は特殊で、パスではなくコマンド文字列を対象とします。そのため `off` のときだけスキップされ、それ以外のスコープではすべてのコマンドがレビューされます(private データを参照するコマンドは、ツールなしの制限モードでレビューされます)。
+`bash.command` と `powershell.command` は特殊で、パスではなくコマンド文字列を対象とします。そのため `off` のときだけスキップされ、それ以外のスコープではすべてのシェルコマンドがレビューされます(private データを参照するコマンドは、ツールなしの制限モードでレビューされます)。
 
 レビュー対象 = ブロックではありません。レビューされた呼び出しは AI レビュワーがリスクレベルを分類し、`riskActions` 設定が allow / ask / deny を決定します。
 

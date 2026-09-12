@@ -139,6 +139,47 @@ test("defaults unconfigured path-based tools to private-only", () => {
 	);
 });
 
+test("routes PowerShell commands to the reviewer like bash", () => {
+	const reviewed = actionFromToolCall(
+		event("powershell", { command: "Get-ChildItem -Path ." }),
+		"/repo/project",
+		{ ...DEFAULT_REVIEW_RULES },
+	);
+	assert.equal(reviewed?.tool, "powershell");
+	assert.equal(reviewed?.payload.command, "Get-ChildItem -Path .");
+	assert.equal(reviewed?.payload.private_data_read, false);
+
+	for (const command of [
+		"Get-Content $env:USERPROFILE\\.ssh\\id_rsa",
+		"Get-Content C:\\Users\\test\\.aws\\credentials",
+	]) {
+		const action = actionFromToolCall(
+			event("powershell", { command }),
+			"/repo/project",
+			{ ...DEFAULT_REVIEW_RULES },
+		);
+		assert.equal(action?.payload.private_data_read, true, command);
+	}
+
+	// Shell commands have no path parameter, so only `off` removes them from review.
+	assert.equal(
+		actionFromToolCall(
+			event("powershell", { command: "Get-ChildItem" }),
+			"/repo/project",
+			{ ...DEFAULT_REVIEW_RULES, "powershell.command": "private-only" },
+		)?.tool,
+		"powershell",
+	);
+	assert.equal(
+		actionFromToolCall(
+			event("powershell", { command: "Get-ChildItem" }),
+			"/repo/project",
+			{ ...DEFAULT_REVIEW_RULES, "powershell.command": "off" },
+		),
+		undefined,
+	);
+});
+
 test("marks obvious shell private-data access for high authorization", () => {
 	for (const command of [
 		"cat .env",
@@ -462,7 +503,7 @@ test("invalidates cached directory scopes after potentially mutating tools", asy
 	for (const toolName of ["read", "grep", "find", "ls"]) {
 		assert.equal(shouldInvalidateDirectoryScanCache(toolName), false, toolName);
 	}
-	for (const toolName of ["bash", "write", "edit", "custom_tool"]) {
+	for (const toolName of ["bash", "powershell", "write", "edit", "custom_tool"]) {
 		assert.equal(shouldInvalidateDirectoryScanCache(toolName), true, toolName);
 	}
 });
@@ -1710,7 +1751,7 @@ test("warns and continues when configuration entries are unsupported", async () 
 		JSON.stringify({
 			review: {
 				"bash.command": "off",
-				"powershell.command": "always",
+				"pwsh.command": "always",
 				"pwsh-start-job.command": "always",
 			},
 		}),
@@ -1764,7 +1805,7 @@ test("warns and continues when configuration entries are unsupported", async () 
 		await handlers.get("session_start")?.({}, ctx);
 		assert.equal(statuses.length, 0);
 		assert.match(notices.join("\n"), /Invalid entries were ignored/);
-		assert.match(notices.join("\n"), /review\.powershell\.command/);
+		assert.match(notices.join("\n"), /review\.pwsh\.command/);
 		assert.match(notices.join("\n"), /review\.pwsh-start-job\.command/);
 
 		notices.length = 0;
@@ -1863,7 +1904,14 @@ function approvalHarness(options: {
 		},
 	} as never;
 
-	const queueToolCall = (toolCallId: string, batchId: string) => {
+	const queueToolCall = (
+		toolCallId: string,
+		batchId: string,
+		call: { toolName: string; input: Record<string, unknown> } = {
+			toolName: "bash",
+			input: { command: "git reset --hard HEAD~1" },
+		},
+	) => {
 		branch = [
 			{ type: "message", message: { role: "user", content: "Do it." } },
 			{
@@ -1875,9 +1923,9 @@ function approvalHarness(options: {
 				},
 			},
 		];
-		const call = event("bash", { command: "git reset --hard HEAD~1" });
-		(call as { toolCallId: string }).toolCallId = toolCallId;
-		return call;
+		const toolCall = event(call.toolName, call.input);
+		(toolCall as { toolCallId: string }).toolCallId = toolCallId;
+		return toolCall;
 	};
 
 	return {
@@ -1936,6 +1984,66 @@ test("asks for medium-risk actions and executes only after Yes", async () => {
 		assert.match(harness.selects[0].title, /Risk: Medium/);
 		assert.match(harness.selects[0].title, /\$ git reset --hard HEAD~1/);
 		assert.match(harness.selects[0].title, /Force-resets the current branch/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("asks for PowerShell commands and shows the PowerShell preview", async () => {
+	const harness = approvalHarness({
+		assessment: mediumAssessment,
+		select: () => Promise.resolve("Yes"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("ps-ask-1", "ps-ask-batch-1", {
+			toolName: "powershell",
+			input: { command: "Get-ChildItem -Path ." },
+		});
+		assert.equal(
+			await (handlersToolCall(harness) as ToolCallHandler)(call, harness.ctx),
+			undefined,
+			"Yes must let the PowerShell call execute",
+		);
+		assert.equal(harness.reviewCalls, 1);
+		assert.equal(Object.isFrozen(call.input), true);
+		assert.match(harness.selects[0]?.title ?? "", /PS> Get-ChildItem -Path \./);
+		assert.match(harness.selects[0]?.title ?? "", /```powershell/);
+		assert.match(harness.notices.join("\n"), /approved by user · Medium risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("denies high-risk PowerShell commands without any prompt", async () => {
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => ({
+			risk_level: "high",
+			instruction_alignment: "weak",
+			action_summary: "Recursively deletes user documents.",
+			rationale: "Irreversible data loss outside the project.",
+		}),
+		select: () => {
+			selectCalls++;
+			return Promise.resolve("Yes");
+		},
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("ps-deny-1", "ps-deny-batch-1", {
+			toolName: "powershell",
+			input: {
+				command: "Remove-Item -Recurse -Force $env:USERPROFILE\\Documents",
+			},
+		});
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(call, harness.ctx)) as { block: boolean; reason: string } | undefined;
+		assert.equal(result?.block, true);
+		assert.match(result?.reason ?? "", /rejected due to unacceptable risk/);
+		assert.equal(harness.reviewCalls, 1);
+		assert.equal(selectCalls, 0, "deny must not show an approval prompt");
 	} finally {
 		harness.restore();
 	}

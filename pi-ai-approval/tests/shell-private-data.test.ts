@@ -47,3 +47,29 @@ test("detects private references in shell commands", () => {
 		false,
 	);
 });
+
+test("detects PowerShell private-data references", () => {
+	for (const command of [
+		"Get-Content $env:USERPROFILE\\.ssh\\id_rsa",
+		"Get-Content ${env:USERPROFILE}\\.aws\\credentials",
+		"Get-Content $env:HOME\\.kube\\config",
+		"Get-Content $HOME\\.ssh\\config",
+		"Get-Content ~\\.ssh\\id_rsa",
+		"Get-Content $env:USERPROFILE\\.pi\\agent\\auth.json",
+		'Get-Content "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Preferences"',
+		"Get-ChildItem $env:APPDATA\\Mozilla\\Firefox\\Profiles\\default\\prefs.js",
+		"Select-String -Path ~/.ssh/config -Pattern PRIVATE",
+	]) {
+		assert.equal(commandReferencesPrivateData(command, "/repo"), true, command);
+	}
+
+	for (const command of [
+		"Get-ChildItem -Path .",
+		"Get-Content src/app.ts",
+		"Get-Content $env:TEMP\\notes.txt",
+		"Get-Content $env:USERPROFILE\\Documents\\notes.txt",
+		"Get-ChildItem $env:APPDATA\\MyApp\\cache.json",
+	]) {
+		assert.equal(commandReferencesPrivateData(command, "/repo"), false, command);
+	}
+});

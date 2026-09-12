@@ -229,6 +229,7 @@ export async function showApprovalConfiguration(
 					...Object.entries(config.review)
 						.sort(([left], [right]) => left.localeCompare(right))
 						.map(([key, level]) => `${key} → ${level}`),
+					"bash.command and powershell.command route a command string rather than a path; only off skips them.",
 					"Unconfigured tools with a top-level string path parameter default to private-only.",
 					"Risk actions (risk level → local decision):",
 					...riskActionLines,

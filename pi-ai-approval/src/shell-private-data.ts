@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { classifyReadPath } from "./gate.ts";
 import {
 	PRIVATE_CONFIG_GLOB_DIRECTORY_CANDIDATES,
@@ -16,7 +17,7 @@ export function commandReferencesPrivateData(
 	command: string,
 	cwd: string,
 ): boolean {
-	const expanded = expandHomeReferences(command);
+	const expanded = expandShellVariableReferences(command);
 	if (referencesDynamicPiPath(expanded)) return true;
 
 	for (const token of shellEvidenceTokens(expanded)) {
@@ -38,10 +39,36 @@ export function looksLikePrivateGlob(glob: string): boolean {
 	return pathPatternReferencesPrivateData(glob);
 }
 
-function expandHomeReferences(value: string): string {
+/**
+ * Expands home-directory references used by bash and PowerShell: `~`,
+ * `$HOME`/`${HOME}`, and PowerShell `$env:NAME`/`${env:NAME}`. Known Windows
+ * profile variables resolve to their profile locations; unknown variables stay
+ * untouched, so an unrelated variable can never fabricate a private literal
+ * path.
+ */
+function expandShellVariableReferences(value: string): string {
 	return value
+		.replace(
+			/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)/gi,
+			(match, braced: string | undefined, plain: string | undefined) =>
+				profileVariableValue(braced ?? plain) ?? match,
+		)
 		.replace(/\$\{HOME\}|\$HOME/gi, homedir())
-		.replace(/(^|[\s'"=(])~(?=\/)/g, `$1${homedir()}`);
+		.replace(/(^|[\s'"=(])~(?=[\\/])/g, `$1${homedir()}`);
+}
+
+function profileVariableValue(name: string | undefined): string | undefined {
+	switch (name?.toUpperCase()) {
+		case "USERPROFILE":
+		case "HOME":
+			return homedir();
+		case "APPDATA":
+			return join(homedir(), "AppData", "Roaming");
+		case "LOCALAPPDATA":
+			return join(homedir(), "AppData", "Local");
+		default:
+			return undefined;
+	}
 }
 
 function shellEvidenceTokens(command: string): string[] {

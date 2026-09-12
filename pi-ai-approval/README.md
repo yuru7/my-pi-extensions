@@ -145,6 +145,7 @@ Which tool calls get reviewed is controlled by `review` rules (tool parameter �
 {
   "review": {
     "bash.command": "always",
+    "powershell.command": "always",
     "read.path": "outside-or-private",
     "grep.path": "outside-or-private",
     "write.path": "outside-or-private",
@@ -153,9 +154,9 @@ Which tool calls get reviewed is controlled by `review` rules (tool parameter �
 }
 ```
 
-Built-in defaults are `bash.command: always`; `read.path`, `grep.path`, `write.path`, `edit.path: outside-or-private`; `find.path`, `ls.path: private-only`.
+Built-in defaults are `bash.command: always` and `powershell.command: always`; `read.path`, `grep.path`, `write.path`, `edit.path: outside-or-private`; `find.path`, `ls.path: private-only`.
 
-Rule keys are `<tool>.<parameter>`: `bash.command` routes the command string of every bash call, `read.path`/`grep.path`/`find.path`/`ls.path` route the read or search scope, and `write.path`/`edit.path` route the file being modified. Tools without a built-in rule but with a top-level string `path` parameter (for example `custom_reader.path`) are supported too and default to `private-only`.
+Rule keys are `<tool>.<parameter>`: `bash.command`/`powershell.command` route the command string of every bash/PowerShell call, `read.path`/`grep.path`/`find.path`/`ls.path` route the read or search scope, and `write.path`/`edit.path` route the file being modified. Tools without a built-in rule but with a top-level string `path` parameter (for example `custom_reader.path`) are supported too and default to `private-only`.
 
 ### Scope values
 
@@ -168,7 +169,7 @@ Rule keys are `<tool>.<parameter>`: `bash.command` routes the command string of 
 
 "Private" is decided by a deterministic rule catalog: credential and secret files (`.env*`, key files, `auth.json`, token stores, browser login data, …), private directories outside the project (`.ssh`, `.gnupg`, `.aws`/`.kube`/cloud-CLI configs, browser profiles, Pi agent data, …) and, for the search tools, directory scopes or globs that may contain such files. For `write`/`edit`, "sensitive" additionally covers security-relevant in-project targets such as CI workflows, container/deploy manifests, dependency lockfiles, shell profiles, key material (`.pem`, `.key`, …) and sensitive directory segments (`.git`, `secrets`, `terraform`, `k8s`, …).
 
-`bash.command` is special: it routes a command string rather than a path, so only `off` skips it — every other scope reviews each bash command (commands that reference private data are reviewed in a restricted no-tool mode).
+`bash.command` and `powershell.command` are special: they route a command string rather than a path, so only `off` skips them — every other scope reviews each of those shell commands (commands that reference private data are reviewed in a restricted no-tool mode).
 
 Being reviewed does not mean being blocked: a reviewed call goes to the AI reviewer, which classifies its risk level, and your `riskActions` config then decides allow/ask/deny.
 

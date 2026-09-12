@@ -91,6 +91,7 @@ const RISK_ACTION_RANK: Record<RiskAction, number> = {
 
 export const DEFAULT_REVIEW_RULES: Readonly<Record<string, ReviewLevel>> = {
 	"bash.command": "always",
+	"powershell.command": "always",
 	"read.path": "outside-or-private",
 	"grep.path": "outside-or-private",
 	"find.path": "private-only",

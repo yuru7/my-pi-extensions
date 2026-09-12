@@ -24,6 +24,7 @@ test("builds the default configuration file contents", () => {
 		},
 		review: {
 			"bash.command": "always",
+			"powershell.command": "always",
 			"read.path": "outside-or-private",
 			"grep.path": "outside-or-private",
 			"find.path": "private-only",
@@ -47,7 +48,11 @@ test("loads global and trusted project config with documented precedence", () =>
 			secondaryModel: "global/fallback",
 			timeoutMs: 60_000,
 			policy: "global policy",
-			review: { "grep.path": "outside-or-private", "read.path": "off" },
+			review: {
+				"grep.path": "outside-or-private",
+				"read.path": "off",
+				"powershell.command": "off",
+			},
 		}),
 	);
 	writeFileSync(
@@ -75,6 +80,7 @@ test("loads global and trusted project config with documented precedence", () =>
 	assert.equal(config.timeoutMs, 60_000);
 	assert.equal(config.policy, "global policy\n\nproject policy");
 	assert.equal(config.review["bash.command"], "always");
+	assert.equal(config.review["powershell.command"], "off");
 	assert.equal(config.review["read.path"], "private-only");
 	assert.equal(config.review["grep.path"], "outside-or-private");
 	assert.equal(config.globalConfigPresent, true);
@@ -93,7 +99,13 @@ test("trusted project review rules cannot weaken the global floor", () => {
 	);
 	writeFileSync(
 		join(cwd, ".pi", "ai-approval.json"),
-		JSON.stringify({ review: { "bash.command": "off", "read.path": "off" } }),
+		JSON.stringify({
+			review: {
+				"bash.command": "off",
+				"read.path": "off",
+				"powershell.command": "off",
+			},
+		}),
 	);
 	const config = loadApprovalConfig({
 		cwd,
@@ -103,6 +115,7 @@ test("trusted project review rules cannot weaken the global floor", () => {
 	});
 	assert.equal(config.review["bash.command"], "always");
 	assert.equal(config.review["read.path"], "always");
+	assert.equal(config.review["powershell.command"], "always");
 });
 
 test("warns and falls back to defaults for invalid configured values", () => {

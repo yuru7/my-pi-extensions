@@ -83,10 +83,10 @@ tool_call イベント
 | モジュール | 役割 |
 | --- | --- |
 | `src/config.ts` | 設定スキーマ、既定値、ファイル・環境変数の読み込み、優先順位、厳格化のみのマージ、警告。`riskActions`、`review` ルール、`primaryModel` / `secondaryModel`（`CURRENT` = セッションモデル）、`primaryThinkingLevel` / `secondaryThinkingLevel`（思考量または `CURRENT` = セッション継承、既定 `low`）、`timeoutMs`、`assessmentLanguage`、`policy`。 |
-| `src/tool-actions.ts` | `tool_call` → `ReviewAction \| undefined`。`bash.command`、`read/grep/find/ls.path`、`write/edit.path`、および汎用 `<tool>.path`（既定 `private-only`）を振り分ける。`private_data_read` を付与。 |
+| `src/tool-actions.ts` | `tool_call` → `ReviewAction \| undefined`。`bash.command` / `powershell.command`、`read/grep/find/ls.path`、`write/edit.path`、および汎用 `<tool>.path`（既定 `private-only`）を振り分ける。`private_data_read` を付与。 |
 | `src/gate.ts` | ゲート共通基盤: `ReviewResult`・決定型、`DenialCircuitBreaker`、`ReviewBatchTracker`、パス分類（`classifyMutationPath`、`classifyReadPath`、`shouldReviewPath`）、ディレクトリのプライベートデータ走査。 |
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
-| `src/shell-private-data.ts` | `bash.command` 用ヒューリスティクス: シェルをトークン化し `~` を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
+| `src/shell-private-data.ts` | `bash.command` / `powershell.command` 用ヒューリスティクス: シェルをトークン化し `~`・`$HOME`・`$env:NAME`（`USERPROFILE` / `HOME` / `APPDATA` / `LOCALAPPDATA`）を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
 | `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`、文字数制限付きのプロンプト・トランスクリプト構築、`parseRiskAssessment`（未知レベル・要約/根拠欠落を拒否する厳密検証）。 |
 | `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。明示依頼の通常ローカル commit は `low`、履歴書き換え系は `medium` 以上に据え置く。 |
 | `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
@@ -125,8 +125,10 @@ tool_call イベント
 
 1. **フェイルクローズド**: すべてのエラーパスはブロックする。`decideAction` が許可するのは、
    明示的な `allow` ポリシーヒットか明示的なユーザーの `Yes` のみ。
-   **既知のギャップ（別タスク）**: Pi の `powershell` ツール呼び出しは現状レビュー対象外で
-   素通りする。詳細と対応案は [`POWERSHELL-FOLLOWUP.md`](POWERSHELL-FOLLOWUP.md) を参照。
+   レビュー対象は `bash` / `powershell` のコマンド文字列、`read`/`grep`/`find`/`ls` の
+   スコープ、`write`/`edit` の対象、および汎用 `<tool>.path` で決まる
+   （`src/tool-actions.ts`）。その他の top-level 文字列 `path` を持つツールは
+   `<tool>.path` ルールで追加できる。command のみを持つ未知ツールは未対応（別課題）。
 2. **レビュアーは何も決めない**: 唯一の allow/ask/deny 決定権は `risk-policy` であり、
    レビュアー出力は `parseRiskAssessment` で検証される untrusted データである。
 3. **プライベートデータの封じ込め**: `private_data_read` 付きの操作ではレビュアーは
