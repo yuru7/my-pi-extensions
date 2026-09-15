@@ -11,6 +11,7 @@ const ACTION_CHARS = 64_000;
 const ACTION_FIELD_CHARS = 2_048;
 const RETRY_CONTEXT_CHARS = 4_000;
 const RECENT_NON_USER_LIMIT = 40;
+const MATCHED_RULE_ID_MAX_CHARS = 128;
 const TRANSCRIPT_NOTICE = stringifyJsonLine({
 	type: "notice",
 	provenance: "untrusted",
@@ -58,6 +59,12 @@ export interface RiskAssessment {
 	instruction_alignment: InstructionAlignment;
 	action_summary: string;
 	rationale: string;
+	/**
+	 * Session approval rule the reviewer considers to clearly cover this action.
+	 * Present only when session rules were supplied and one matched; the local
+	 * layer validates the ID against the live rule set before using it.
+	 */
+	matched_rule_id?: string;
 }
 
 interface TranscriptEntry {
@@ -331,12 +338,36 @@ export function parseRiskAssessment(text: string): RiskAssessment {
 	if (!rationale) {
 		throw new Error("reviewer response did not contain a rationale");
 	}
+	const matchedRuleId = parseMatchedRuleId(payload.matched_rule_id);
 	return {
 		risk_level: payload.risk_level,
 		instruction_alignment: payload.instruction_alignment,
 		action_summary: actionSummary,
 		rationale,
+		...(matchedRuleId === undefined
+			? {}
+			: { matched_rule_id: matchedRuleId }),
 	};
+}
+
+/**
+ * Validates the optional session-rule match. An absent or blank field means no
+ * rule covers the action; any other present value must be a non-empty bounded
+ * string, because a malformed reference must not silently shift the risk
+ * decision. The ID is still untrusted: the caller looks it up in the live rule
+ * set, and an unknown ID is treated as no match.
+ */
+function parseMatchedRuleId(value: unknown): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "string") {
+		throw new Error("reviewer response contained an invalid matched_rule_id");
+	}
+	const trimmed = value.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.length > MATCHED_RULE_ID_MAX_CHARS) {
+		throw new Error("reviewer response contained an invalid matched_rule_id");
+	}
+	return trimmed;
 }
 
 function messageToEntries(message: ReviewMessage): TranscriptEntry[] {

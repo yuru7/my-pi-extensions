@@ -13,6 +13,7 @@ import {
 import {
 	ApprovalQueue,
 	showApprovalPrompt,
+	type SessionRuleSubmission,
 } from "../src/approval-prompt.ts";
 import {
 	buildDefaultConfigFile,
@@ -39,9 +40,16 @@ import {
 	formatReviewResult,
 	rejectionReason,
 	reviewResultDiagnostic,
+	riskLabel,
 } from "../src/review-presentation.ts";
-import { applyRiskPolicy } from "../src/risk-policy.ts";
-import type { ReviewAction } from "../src/review.ts";
+import {
+	applySessionRulePolicy,
+	sessionRuleRejectionMessage,
+	SessionRuleStore,
+	type SessionApprovalRule,
+} from "../src/session-rules.ts";
+import { manageSessionRules } from "../src/session-rules-command.ts";
+import type { ReviewAction, RiskLevel } from "../src/review.ts";
 import { shellActionContainsRtk } from "../src/rtk-detection.ts";
 import {
 	buildReviewerChannels,
@@ -87,7 +95,8 @@ export interface AiApprovalOptions {
 
 /**
  * `/ai-approval init` asks a plain file-overwrite question, so it keeps its own
- * No/Yes wording instead of the approval prompt's Deny/Approve choices.
+ * No/Yes wording instead of the approval prompt's Deny / Approve / Approve +
+ * Add Rule choices.
  */
 const OVERWRITE_CONFIRMATION_CHOICES = ["No", "Yes"] as const;
 
@@ -109,6 +118,7 @@ export default function aiApproval(
 	const circuitBreaker = new DenialCircuitBreaker();
 	const reviewBatches = new ReviewBatchTracker();
 	const approvalQueue = new ApprovalQueue();
+	const sessionRules = new SessionRuleStore();
 	const directoryScanCache =
 		options.directoryScanCache ?? new DirectoryScanCache();
 	const directUserInputTracker = new DirectUserInputTracker();
@@ -145,6 +155,8 @@ export default function aiApproval(
 		reviewBatches.reset();
 		directoryScanCache.clear();
 		directUserInputTracker.reset();
+		// Session approval rules are memory-only and belong to this session.
+		sessionRules.clear();
 	};
 
 	const syncConfigurationWarnings = (
@@ -361,6 +373,11 @@ export default function aiApproval(
 
 	const commandArguments = [
 		{
+			value: "session-rules",
+			label: "session-rules",
+			description: "View and manage session approval rules",
+		},
+		{
 			value: "rules",
 			label: "rules",
 			description: "Show review levels and risk actions",
@@ -402,6 +419,16 @@ export default function aiApproval(
 					return;
 				case "init":
 					await writeDefaultConfiguration(ctx);
+					return;
+				case "session-rules":
+					try {
+						await manageSessionRules(sessionRules, ctx.ui);
+					} catch (error) {
+						ctx.ui.notify(
+							`Could not open the session rule manager: ${error instanceof Error ? error.message : String(error)}`,
+							"warning",
+						);
+					}
 					return;
 				default:
 					await showApprovalConfiguration(
@@ -551,8 +578,52 @@ export default function aiApproval(
 	}
 
 	/**
+	 * Stores a rule typed in the approval prompt. The rule is valid only for this
+	 * session, so it is held in memory until the session runtime resets.
+	 */
+	const addSessionRule = (
+		text: string,
+		ctx: ExtensionContext,
+	): SessionRuleSubmission => {
+		const added = sessionRules.add(text);
+		if (!added.ok) {
+			return { ok: false, message: sessionRuleRejectionMessage(added.reason) };
+		}
+		ctx.ui.notify(
+			[
+				`AI Approval · session rule added · ${added.rule.id}: ${added.rule.text}`,
+				"This rule applies to this session only and is cleared when the session ends.",
+			].join("\n"),
+			"info",
+		);
+		return { ok: true };
+	};
+
+	/**
+	 * Reports a rule that lowered an `ask` classification, so an automatic allow
+	 * always names the authorization that produced it.
+	 */
+	const notifySessionRuleApplied = (
+		ctx: ExtensionContext,
+		rule: SessionApprovalRule | undefined,
+		loweredFrom: RiskLevel | undefined,
+		effectiveLevel: RiskLevel,
+	): void => {
+		if (!rule || loweredFrom === undefined) return;
+		ctx.ui.notify(
+			[
+				`AI Approval · session rule applied · ${rule.id}: ${rule.text}`,
+				`Risk lowered from ${riskLabel(loweredFrom)} to ${riskLabel(effectiveLevel)}.`,
+			].join("\n"),
+			"info",
+		);
+	};
+
+	/**
 	 * Applies the local risk policy to the reviewer's classification. The
-	 * reviewer never decides the outcome; this function and the user do.
+	 * reviewer never decides the outcome; this function and the user do. A
+	 * session rule may lower an `ask` classification, and the live rule set is
+	 * the only source of truth for whether a reported rule ID exists.
 	 */
 	async function decideAction(
 		action: ReviewAction,
@@ -562,11 +633,21 @@ export default function aiApproval(
 		assessorChannel?: ReviewerChannel,
 	): Promise<ReviewDecisionResult> {
 		if (reviewed.kind !== "assessed") return reviewed;
-		const decision = applyRiskPolicy(
+		const matchedRule = reviewed.assessment.matched_rule_id
+			? sessionRules.find(reviewed.assessment.matched_rule_id)
+			: undefined;
+		const decision = applySessionRulePolicy(
 			reviewed.assessment,
 			config.riskActions,
+			matchedRule !== undefined,
 		);
 		if (decision.kind === "allow") {
+			notifySessionRuleApplied(
+				ctx,
+				matchedRule,
+				decision.loweredFrom,
+				decision.assessment.risk_level,
+			);
 			return { kind: "allowed", assessment: decision.assessment };
 		}
 		if (decision.kind === "deny") {
@@ -575,17 +656,29 @@ export default function aiApproval(
 		const assessor = assessorChannel
 			? `${reviewerChannelIdentity(assessorChannel)} (${reviewerChannelLabel(assessorChannel.role)})`
 			: undefined;
+		const ruleNote =
+			matchedRule && decision.loweredFrom !== undefined
+				? {
+						id: matchedRule.id,
+						text: matchedRule.text,
+						loweredFrom: decision.loweredFrom,
+					}
+				: undefined;
 		// Serialize approval dialogs: one tool call, one prompt, no overlap.
 		const approval = await approvalQueue.runExclusive(() =>
-			showApprovalPrompt(action, decision.assessment, assessor, ctx),
+			showApprovalPrompt(action, decision.assessment, assessor, ctx, {
+				submitSessionRule: (text) => addSessionRule(text, ctx),
+				...(ruleNote ? { sessionRule: ruleNote } : {}),
+			}),
 		);
-		return approval.kind === "approved"
-			? { kind: "user-approved", assessment: decision.assessment }
-			: {
-					kind: "user-declined",
-					assessment: decision.assessment,
-					...(approval.detail ? { detail: approval.detail } : {}),
-				};
+		if (approval.kind === "approved" || approval.kind === "approved-with-rule") {
+			return { kind: "user-approved", assessment: decision.assessment };
+		}
+		return {
+			kind: "user-declined",
+			assessment: decision.assessment,
+			...(approval.detail ? { detail: approval.detail } : {}),
+		};
 	}
 
 	async function reviewWithChannel(
@@ -619,6 +712,7 @@ export default function aiApproval(
 			const systemPrompt = buildActionReviewSystemPrompt(baseSystemPrompt, {
 				privateDataReview,
 				containsRtk,
+				sessionRules: sessionRules.list(),
 			});
 			const reviewerTools = reviewerToolsForAction(action);
 			// The context key tracks configuration only, not the live session
@@ -634,6 +728,11 @@ export default function aiApproval(
 				secondaryThinkingLevel: config.secondaryThinkingLevel,
 				timeoutMs: config.timeoutMs,
 				baseSystemPrompt,
+				// Rules are part of the reviewer's system prompt, so a changed rule
+				// set must never reuse a session that still holds the old one.
+				sessionRules: sessionRules
+					.list()
+					.map((rule) => `${rule.id}:${rule.text}`),
 			});
 			if (controllerContextKey !== nextContextKey) {
 				for (const existing of controllers.values()) existing.dispose();

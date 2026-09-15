@@ -2,7 +2,7 @@
 
 English | [日本語](./README_ja.md)
 
-A fail-closed approval gate for [Pi](https://pi.dev), the coding agent. An isolated AI reviewer classifies every covered tool call into one of six risk levels, and a local `riskActions` policy decides whether it runs: `allow`, `ask` (a Deny/Approve prompt), or `deny`.
+A fail-closed approval gate for [Pi](https://pi.dev), the coding agent. An isolated AI reviewer classifies every covered tool call into one of six risk levels, and a local `riskActions` policy decides whether it runs: `allow`, `ask` (a Deny / Approve / Approve + Add Rule prompt), or `deny`.
 
 The AI never decides the final outcome. It only assesses risk and explains what the operation does; the decision always comes from your local configuration, and anything the reviewer cannot classify is blocked.
 
@@ -18,15 +18,18 @@ Risk level + instruction alignment + operation summary + rationale
 riskActions configuration
    ↓
 allow ─────────→ execute
-ask  → Deny/Approve → Approve: execute this call / Deny: block
+ask  → Deny / Approve / Approve + Add Rule
+       Approve: execute this call
+       Approve + Add Rule: approve and add a session rule
+       Deny: block
 deny ─────────→ block
 ```
 
 - **`allow`** runs the tool call without confirmation.
-- **`ask`** shows an approval prompt and rings the terminal bell in interactive TUI mode. The prompt is a title plus one Markdown document: `Approval Required`, `**Risk: <level>**` (bold, plus a level color in the TUI — `warning` for medium/high, `error` for very high/critical — so it stays readable on terminals that do not render bold), `Review Information:` with the `Risk Assessor:` model and channel rank plus `Instruction Alignment`, `Operation (tool: <tool name>):` with the command in a syntax-labelled code block (`bash` or `powershell`, matching the tool that will run), `Operation Summary:`, and `Reason:` (all labels are plain lines; the document has no headings). In the TUI the document is rendered by the standard Markdown component under a full-width rule that carries the title (`─── Approval Required ─────`), so the prompt reads as its own area and not as another line of the session transcript; when the prompt is taller than the screen the body scrolls (mouse wheel or `shift+↑`/`shift+↓`) with a transient scrollbar and a remaining-lines hint, while the choices stay pinned. When a command is longer than the preview keeps (300 characters), the `Operation` code block ends with `... (truncated, ctrl+o to expand)`; `ctrl+o` — or, in a fullscreen TUI, a click on that marker text itself — swaps in the whole command with its own line breaks, and the help line under the choices then reads `ctrl+o collapse`. Mouse input only reaches the prompt in fullscreen mode, so `ctrl+o` is the way to expand in a regular TUI. Selectors outside the TUI keep the plain `… [truncated]` marker, because they cannot expand the block. The choice list is fixed to **Deny / Approve with Deny preselected**, so pressing Enter keeps the action blocked. Esc, Ctrl-C, and an unavailable UI also block (fail closed). Outside the TUI (RPC, print, JSON) the title is prepended to the same document and passed to the client's own selector.
+- **`ask`** shows an approval prompt and rings the terminal bell in interactive TUI mode. The prompt is a title plus one Markdown document: `Approval Required`, `**Risk: <level>**` (bold, plus a level color in the TUI — `warning` for medium/high, `error` for very high/critical — so it stays readable on terminals that do not render bold), `Review Information:` with the `Risk Assessor:` model and channel rank plus `Instruction Alignment` (and a `Session Rule:` line when an existing rule lowered the classification), `Operation (tool: <tool name>):` with the command in a syntax-labelled code block (`bash` or `powershell`, matching the tool that will run), `Operation Summary:`, and `Reason:` (all labels are plain lines; the document has no headings). In the TUI the document is rendered by the standard Markdown component under a full-width rule that carries the title (`─── Approval Required ─────`), so the prompt reads as its own area and not as another line of the session transcript; when the prompt is taller than the screen the body scrolls (mouse wheel or `shift+↑`/`shift+↓`) with a transient scrollbar and a remaining-lines hint, while the choices stay pinned. When a command is longer than the preview keeps (300 characters), the `Operation` code block ends with `... (truncated, ctrl+o to expand)`; `ctrl+o` — or, in a fullscreen TUI, a click on that marker text itself — swaps in the whole command with its own line breaks, and the help line under the choices then reads `ctrl+o collapse`. Mouse input only reaches the prompt in fullscreen mode, so `ctrl+o` is the way to expand in a regular TUI. Selectors outside the TUI keep the plain `… [truncated]` marker, because they cannot expand the block. The choice list is fixed to **Deny / Approve / Approve + Add Rule with Deny preselected**, so pressing Enter keeps the action blocked. `Approve + Add Rule` approves the current call and then asks for a session approval rule: Enter stores the typed text, and Esc cancels the input and brings the choices back, so a cancelled input never approves anything. Esc, Ctrl-C, and an unavailable UI also block (fail closed). Outside the TUI (RPC, print, JSON) the title is prepended to the same document and passed to the client's own selector.
 - **`deny`** blocks the tool call and returns the AI's rationale to the agent, together with instructions not to retry the same action through a workaround.
 
-An Approve applies to exactly that one tool call. The next call is reviewed and approved on its own. Concurrent `ask` outcomes are serialized so only one prompt is ever visible.
+An Approve (including `Approve + Add Rule`) applies to exactly that one tool call. The next call is reviewed on its own, and a session rule only lets the reviewer-confirmed classification fall by one level; the rule never approves anything by itself. Concurrent `ask` outcomes are serialized so only one prompt is ever visible.
 
 ## Risk levels
 
@@ -48,6 +51,25 @@ Key principles:
 | `critical` | Beyond normal agent auto-execution regardless of instruction: secret exfiltration, unrecoverable mass destruction, permanent security-mechanism disablement, broad privilege grants |
 
 Worked examples: editing a file to fix the reported bug → `low`; installing a needed dependency → `medium`; a requested operation under `/tmp` → `very_low`/`low` (`rm -rf /tmp/*` at most `medium`; deleting `/tmp` itself → `high`); an explicitly requested plain local `git commit` → `low` (`--amend` and history rewrites stay `medium` or above); an unrequested `git reset --hard` → `high` (explicitly requested → `medium`); a production DB migration, even explicitly requested → `high`; bulk-deleting production data → `very_high`; sending secrets to an external URL, even if requested → `critical`.
+
+## Session approval rules
+
+The third approval choice, **Approve + Add Rule**, approves the current call and then asks you to type a rule that applies to the rest of this Pi session. The rule is memory-only: it is never written to disk and it disappears when the session runtime resets (including a session reload or replacement). Esc in the rule input cancels the input and brings the choices back; Enter stores the sanitized text.
+
+How a rule affects later calls:
+
+- The active rules are added to the reviewer's system prompt with the explicit instruction that they never change its risk classification. The reviewer may only report the ID of the single rule that clearly and entirely covers the planned action.
+- The local layer treats every reported rule ID that is not in the live rule set as no match.
+- When the reported rule exists, the classification is lowered by exactly one step and the policy is applied again — for `ask` and for `deny` alike. An `allow` classification is already permissive, so the rule changes nothing there, and `very_low` is the floor.
+- A rule only moves a decision toward `allow`. If the lowered level is mapped to `deny` again (or cannot fall further), the original decision and level stand, so a rule never strengthens an outcome. `critical` can never become an automatic `allow`, because its single step lands on `very_high`, which the policy never allows.
+- With the default policy, a matched rule turns a `high` deny into the `medium` prompt, while `very_high` and `critical` stay blocked. A policy that maps `medium` to `allow` would let the rule run a `high` action automatically.
+- An automatic `allow` that came from a rule posts an info notification naming the rule and the original and effective levels. When the lowered level asks, the prompt shows a `Session Rule:` line naming the rule and the level it was lowered from.
+
+Rules are bounded: at most 20 rules per session, each at most 500 characters after control characters and ANSI escapes are stripped and line breaks are folded. In the approval prompt, empty or over-long text is rejected with the reason and the input stays open; nothing is truncated silently. The rule manager reports the same rejection instead.
+
+Manage the rules with `/ai-approval session-rules`: it lists the active rules with their IDs and lets you add, edit (the editor is prefilled with the current text), or remove one. Esc at any step leaves everything unchanged.
+
+Example: a command keeps landing on `medium` → `ask`. Choose **Approve + Add Rule** and type `Allow pnpm test and pnpm build in this repository for this session`. On the next call the reviewer reports the rule ID, the local policy lowers `medium` to `low`, and the call runs with an info notification instead of a prompt. With the default policy the same rule turns a `high` deny into the `medium` prompt; `very_high` and `critical` remain blocked.
 
 ## Configuration
 
@@ -135,6 +157,8 @@ The following all block the tool call, without ever showing an approval prompt:
 - all reviewer channels failing
 - the approval prompt being dismissed or unavailable
 
+Session rules never turn a failure into an approval, but not every rule problem is a block. An unavailable rule input UI still blocks (declined with a diagnostic); hitting Esc in the rule input returns to the choices without approving the call; empty or over-limit rule text keeps the input open; and a rule ID the reviewer reports that is not in the live rule set is treated as no match, so the call falls back to the normal approval prompt.
+
 A denial circuit breaker stops runaway retry loops: repeated adverse outcomes (denials, declined approvals, review failures, timeouts) within one turn abort the agent turn.
 
 ## Review scope
@@ -178,6 +202,7 @@ Being reviewed does not mean being blocked: a reviewed call goes to the AI revie
 - `/ai-approval` — status: reviewer channels, timeout, config paths, warnings
 - `/ai-approval init` — write the default configuration file (chooses global/project; asks before overwriting an existing file)
 - `/ai-approval rules` — the review matrix and the effective risk actions
+- `/ai-approval session-rules` — list, add, edit, or remove session approval rules (interactive)
 - `/ai-approval bypass` / `enable` — temporarily disable/restore review (interactive TUI only, with a persistent warning)
 
 ## Install

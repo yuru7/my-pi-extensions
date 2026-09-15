@@ -234,7 +234,9 @@ export async function showApprovalConfiguration(
 					"Risk actions (risk level → local decision):",
 					...riskActionLines,
 					"very_high and critical cannot be configured to allow.",
-					"allow runs without confirmation; ask shows a Deny/Approve prompt (Deny is preselected); deny blocks.",
+					"allow runs without confirmation; ask shows a Deny / Approve / Approve + Add Rule prompt (Deny is preselected); deny blocks.",
+					"Approve + Add Rule adds a memory-only rule for this session; a matched rule lowers an ask or deny classification by one level and the policy is applied again.",
+					"Run /ai-approval session-rules to view or change the rules.",
 				]
 			: [
 					"Reviews configured shell, private-read/search, and sensitive/out-of-project mutation actions before execution.",

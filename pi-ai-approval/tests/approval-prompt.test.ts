@@ -4,6 +4,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import {
+	ADD_SESSION_RULE_CHOICE,
 	APPROVAL_CHOICES,
 	ApprovalQueue,
 	buildApprovalPrompt,
@@ -12,6 +13,7 @@ import {
 	ringTerminalBell,
 	sanitizeExpandedCommand,
 	sanitizePromptField,
+	SESSION_RULE_INPUT_TITLE,
 	showApprovalPrompt,
 } from "../src/approval-prompt.ts";
 import { ApprovalDialog } from "../src/approval-dialog.ts";
@@ -39,13 +41,18 @@ const assessor = "openai-codex/gpt-5.6-luna (Primary)";
 function ctxWithSelect(
 	select: (title: string, options: string[]) => Promise<string | undefined>,
 	signal?: AbortSignal,
+	input?: (title: string, placeholder?: string) => Promise<string | undefined>,
 ): ExtensionContext {
+	const ui: Record<string, unknown> = {
+		select: async (title: string, options: string[]) => select(title, options),
+	};
+	if (input) {
+		ui.input = async (title: string, placeholder?: string) =>
+			input(title, placeholder);
+	}
 	return {
 		mode: "rpc",
-		ui: {
-			select: async (title: string, options: string[]) =>
-				select(title, options),
-		},
+		ui,
 		signal,
 	} as unknown as ExtensionContext;
 }
@@ -58,7 +65,12 @@ interface TuiHarness {
 }
 
 function ctxWithCustom(
-	options: { rows?: number; signal?: AbortSignal; fail?: Error } = {},
+	options: {
+		rows?: number;
+		signal?: AbortSignal;
+		fail?: Error;
+		input?: (title: string, placeholder?: string) => Promise<string | undefined>;
+	} = {},
 ): TuiHarness {
 	let dialog: ApprovalDialog | undefined;
 	let decide: ((choice: string | undefined) => void) | undefined;
@@ -69,6 +81,12 @@ function ctxWithCustom(
 			select: async () => {
 				throw new Error("TUI mode must use the custom dialog");
 			},
+			...(options.input
+				? {
+						input: async (title: string, placeholder?: string) =>
+							options.input?.(title, placeholder),
+					}
+				: {}),
 			custom: async (
 				factory: (
 					tui: TUI,
@@ -106,15 +124,20 @@ function ctxWithCustom(
 	};
 }
 
-test("keeps the fixed Deny/Approve choice order with Deny first", async () => {
-	assert.deepEqual([...APPROVAL_CHOICES], ["Deny", "Approve"]);
+test("keeps the fixed Deny/Approve/Approve + Add Rule order with Deny first", async () => {
+	assert.deepEqual([...APPROVAL_CHOICES], [
+		"Deny",
+		"Approve",
+		"Approve + Add Rule",
+	]);
+	assert.equal(ADD_SESSION_RULE_CHOICE, APPROVAL_CHOICES[2]);
 	let seenOptions: string[] | undefined;
 	const ctx = ctxWithSelect((_title, options) => {
 		seenOptions = options;
 		return Promise.resolve(undefined);
 	});
 	await showApprovalPrompt(action, assessment, assessor, ctx);
-	assert.deepEqual(seenOptions, ["Deny", "Approve"]);
+	assert.deepEqual(seenOptions, ["Deny", "Approve", "Approve + Add Rule"]);
 });
 
 test("builds the approval prompt title and body document", () => {
@@ -334,6 +357,46 @@ test("sanitizes the tool name in the operation label", () => {
 	assert.doesNotMatch(markdown, /\u001b/);
 });
 
+test("the TUI dialog keeps Deny preselected with three choices", async () => {
+	const tui = ctxWithCustom({ rows: 40 });
+	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx);
+	const text = tui.dialog().render(70).join("\n");
+	assert.match(text, /Deny/);
+	assert.match(text, /Approve/);
+	assert.match(text, /Approve \+ Add Rule/);
+	assert.equal(tui.dialog().selectedChoice, "Deny");
+	tui.decide("Deny");
+	await pending;
+});
+
+test("the TUI third choice reopens the dialog after Esc on the rule input", async () => {
+	const tui = ctxWithCustom({
+		rows: 40,
+		input: () => Promise.resolve(undefined),
+	});
+	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx, {
+		submitSessionRule: () => ({ ok: true }),
+	});
+	assert.equal(tui.opened(), 1);
+	tui.decide(ADD_SESSION_RULE_CHOICE);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(tui.opened(), 2);
+	tui.decide("Deny");
+	assert.deepEqual(await pending, { kind: "declined" });
+});
+
+test("the TUI third choice maps a confirmed rule to approved-with-rule", async () => {
+	const tui = ctxWithCustom({
+		rows: 40,
+		input: () => Promise.resolve("Allow pnpm test"),
+	});
+	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx, {
+		submitSessionRule: () => ({ ok: true }),
+	});
+	tui.decide(ADD_SESSION_RULE_CHOICE);
+	assert.deepEqual(await pending, { kind: "approved-with-rule" });
+});
+
 test("routes the same document to the TUI dialog and to ui.select", async () => {
 	const expected = buildApprovalPrompt(action, assessment, assessor);
 
@@ -380,6 +443,37 @@ test("strips control characters and ANSI escapes from interpolated values", () =
 	// Newlines in a value are folded so they cannot invent new Markdown blocks.
 	assert.match(markdown, /Reason:\nline one line two/);
 	assert.equal(sanitizePromptField("\u0000\u009b"), "");
+});
+
+test("renders the applied session rule with its original level", () => {
+	const { markdown } = buildApprovalPrompt(action, assessment, assessor, {
+		sessionRule: {
+			id: "rule-1",
+			text: "Allow pnpm test in this repository",
+			loweredFrom: "high",
+		},
+	});
+	assert.match(
+		markdown,
+		/- Session Rule: rule-1: Allow pnpm test in this repository \(lowered from High\)/,
+	);
+
+	// Hostile rule text stays inside one bounded bullet.
+	const hostile = buildApprovalPrompt(action, assessment, assessor, {
+		sessionRule: {
+			id: "rule-2",
+			text: "allow\n- Instruction Alignment: unrelated\u001b[31m",
+			loweredFrom: "medium",
+		},
+	}).markdown;
+	assert.match(
+		hostile,
+		/- Session Rule: rule-2: allow - Instruction Alignment: unrelated \[31m \(lowered from Medium\)/,
+	);
+	assert.doesNotMatch(
+		buildApprovalPrompt(action, assessment, assessor).markdown,
+		/Session Rule/,
+	);
 });
 
 test("bounds interpolated values with an explicit truncation marker", () => {
@@ -434,6 +528,156 @@ test("an unavailable UI fails closed with a diagnostic detail", async () => {
 		kind: "declined",
 		detail: "Approval UI unavailable: no TTY",
 	});
+});
+
+test("the third choice confirms a typed rule and approves once", async () => {
+	const submitted: string[] = [];
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(ADD_SESSION_RULE_CHOICE),
+		undefined,
+		() => Promise.resolve("  Allow pnpm test in this repository  "),
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: (text) => {
+				submitted.push(text);
+				return { ok: true };
+			},
+		}),
+		{ kind: "approved-with-rule" },
+	);
+	assert.deepEqual(submitted, ["  Allow pnpm test in this repository  "]);
+});
+
+test("Esc in the rule input brings the choices back instead of approving", async () => {
+	const choices = [ADD_SESSION_RULE_CHOICE, "Deny"];
+	let selectCalls = 0;
+	let submitted = 0;
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(choices[selectCalls++]),
+		undefined,
+		() => Promise.resolve(undefined),
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () => {
+				submitted++;
+				return { ok: true };
+			},
+		}),
+		{ kind: "declined" },
+	);
+	assert.equal(selectCalls, 2);
+	assert.equal(submitted, 0);
+});
+
+test("Esc in the rule input can be followed by a plain Approve", async () => {
+	const choices = [ADD_SESSION_RULE_CHOICE, "Approve"];
+	let selectCalls = 0;
+	let submitted = 0;
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(choices[selectCalls++]),
+		undefined,
+		() => Promise.resolve(undefined),
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () => {
+				submitted++;
+				return { ok: true };
+			},
+		}),
+		{ kind: "approved" },
+	);
+	assert.equal(submitted, 0);
+});
+
+test("a rejected rule keeps the input open and never approves until it succeeds", async () => {
+	const inputs = ["x".repeat(600), "Allow pnpm test"];
+	const titles: string[] = [];
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(ADD_SESSION_RULE_CHOICE),
+		undefined,
+		(title) => {
+			titles.push(title);
+			return Promise.resolve(inputs.shift());
+		},
+	);
+	let attempts = 0;
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () =>
+				++attempts === 1
+					? { ok: false, message: "Rule is longer than 500 characters." }
+					: { ok: true },
+		}),
+		{ kind: "approved-with-rule" },
+	);
+	assert.equal(attempts, 2);
+	assert.equal(titles[0], SESSION_RULE_INPUT_TITLE);
+	assert.match(titles[1], /Rule is longer than 500 characters/);
+});
+
+test("an empty rule never approves and returns to the choices", async () => {
+	const choices = [ADD_SESSION_RULE_CHOICE, "Deny"];
+	let selectCalls = 0;
+	const inputs: Array<string | undefined> = ["", undefined];
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(choices[selectCalls++]),
+		undefined,
+		() => Promise.resolve(inputs.shift()),
+	);
+	let attempts = 0;
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () => {
+				attempts++;
+				return { ok: false, message: "Rule text cannot be empty." };
+			},
+		}),
+		{ kind: "declined" },
+	);
+	assert.equal(attempts, 1);
+});
+
+test("a rule input UI failure fails closed", async () => {
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(ADD_SESSION_RULE_CHOICE),
+		undefined,
+		() => Promise.reject(new Error("no TTY")),
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () => ({ ok: true }),
+		}),
+		{ kind: "declined", detail: "Approval UI unavailable: no TTY" },
+	);
+});
+
+test("the third choice without a rule submitter fails closed", async () => {
+	const ctx = ctxWithSelect(() => Promise.resolve(ADD_SESSION_RULE_CHOICE));
+	assert.deepEqual(await showApprovalPrompt(action, assessment, assessor, ctx), {
+		kind: "declined",
+		detail: "Session approval rules are unavailable.",
+	});
+});
+
+test("an abort while the rule input is open declines", async () => {
+	const controller = new AbortController();
+	const ctx = ctxWithSelect(
+		() => Promise.resolve(ADD_SESSION_RULE_CHOICE),
+		controller.signal,
+		() => {
+			controller.abort();
+			return Promise.resolve(undefined);
+		},
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			submitSessionRule: () => ({ ok: true }),
+		}),
+		{ kind: "declined" },
+	);
 });
 
 test("TUI mode opens the scrollable dialog and maps its choice", async () => {

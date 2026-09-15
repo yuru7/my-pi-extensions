@@ -12,9 +12,23 @@ import {
 
 /**
  * Choices are fixed and ordered so the initial cursor rests on "Deny":
- * pressing Enter immediately keeps the action blocked (fail closed).
+ * pressing Enter immediately keeps the action blocked (fail closed). The third
+ * choice approves the call while adding a session-scoped approval rule.
  */
-export const APPROVAL_CHOICES = ["Deny", "Approve"] as const;
+export const APPROVAL_CHOICES = [
+	"Deny",
+	"Approve",
+	"Approve + Add Rule",
+] as const;
+
+/** Choice that approves the call and opens the session-rule text input. */
+export const ADD_SESSION_RULE_CHOICE = APPROVAL_CHOICES[2];
+
+/** Title of the session-rule text input opened by the third choice. */
+export const SESSION_RULE_INPUT_TITLE = "Session approval rule";
+
+const SESSION_RULE_INPUT_PLACEHOLDER =
+	"Describe the operation this session may run without asking";
 
 const FIELD_CHARS = 400;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -45,7 +59,26 @@ const SHELL_LANGUAGES: Record<string, string> = {
 
 export type ApprovalDecision =
 	| { kind: "approved" }
+	| { kind: "approved-with-rule" }
 	| { kind: "declined"; detail?: string };
+
+/**
+ * Outcome of submitting typed rule text. A rejection keeps the text input open
+ * with its message, so an unusable rule can never approve the action.
+ */
+export type SessionRuleSubmission =
+	| { ok: true }
+	| { ok: false; message: string };
+
+export type SessionRuleSubmitter = (text: string) => SessionRuleSubmission;
+
+/** Session rule that lowered the current ask, for transparency in the prompt. */
+export interface SessionRuleNote {
+	id: string;
+	text: string;
+	/** Level the reviewer classified before the rule lowered it. */
+	loweredFrom: RiskLevel;
+}
 
 /**
  * Title of the approval prompt. Non-TUI selectors get it as the first line of
@@ -87,6 +120,8 @@ export interface ApprovalPromptOptions {
 	 * nothing there.
 	 */
 	expandable?: boolean;
+	/** Session rule that lowered this ask, shown in Review Information. */
+	sessionRule?: SessionRuleNote;
 }
 
 /** Minimal writable used for the terminal bell (defaults to `process.stdout`). */
@@ -165,14 +200,18 @@ export function buildApprovalPrompt(
 	options: ApprovalPromptOptions = {},
 ): ApprovalPrompt {
 	const riskText = `Risk: ${riskLabel(assessment.risk_level)}`;
-	const bullets = assessor
+	const ruleBullet = options.sessionRule
 		? [
-				`- Risk Assessor: ${sanitizePromptField(assessor)}`,
-				`- Instruction Alignment: ${sanitizePromptField(assessment.instruction_alignment)}`,
+				`- Session Rule: ${sanitizePromptField(options.sessionRule.id)}: ${sanitizePromptField(options.sessionRule.text)} (lowered from ${riskLabel(options.sessionRule.loweredFrom)})`,
 			]
-		: [
-				`- Instruction Alignment: ${sanitizePromptField(assessment.instruction_alignment)}`,
-			];
+		: [];
+	const bullets = [
+		...(assessor
+			? [`- Risk Assessor: ${sanitizePromptField(assessor)}`]
+			: []),
+		`- Instruction Alignment: ${sanitizePromptField(assessment.instruction_alignment)}`,
+		...ruleBullet,
+	];
 	const language = SHELL_LANGUAGES[action.tool];
 	const document = (operation: string) =>
 		[
@@ -209,11 +248,24 @@ export function buildApprovalPrompt(
 	};
 }
 
+/** Per-call extras: rule submission and the note for a lowered ask. */
+export interface ApprovalPromptRequest {
+	/**
+	 * Validates and stores the typed rule from the third choice. The third choice
+	 * approves only when this returns `ok`; a rejection keeps the input open with
+	 * its message.
+	 */
+	submitSessionRule?: SessionRuleSubmitter;
+	/** Session rule that lowered this ask, rendered in the prompt document. */
+	sessionRule?: SessionRuleNote;
+}
+
 export async function showApprovalPrompt(
 	action: ReviewAction,
 	assessment: RiskAssessment,
 	assessor: string | undefined,
 	ctx: ExtensionContext,
+	request: ApprovalPromptRequest = {},
 ): Promise<ApprovalDecision> {
 	if (ctx.signal?.aborted) {
 		return {
@@ -227,36 +279,70 @@ export async function showApprovalPrompt(
 		// told about it; a selector would show a hint it cannot honour.
 		const prompt = buildApprovalPrompt(action, assessment, assessor, {
 			expandable: ctx.mode === "tui",
+			sessionRule: request.sessionRule,
 		});
-		// The TUI gets the scrollable dialog with the title in its rule; every
-		// other mode hands the same document (title first) to its own selector
-		// (custom components are unsupported outside the TUI).
-		const choice =
-			ctx.mode === "tui"
-				? await showApprovalDialog(
-						{
-							title: prompt.title,
-							markdown: prompt.markdown,
-							emphasis: prompt.emphasis,
-							expansion: prompt.expansion,
-							choices: APPROVAL_CHOICES,
-						},
-						ctx,
-					)
-				: await ctx.ui.select(
-						`${prompt.title}\n\n${prompt.markdown}`,
-						[...APPROVAL_CHOICES],
-						ctx.signal ? { signal: ctx.signal } : undefined,
-					);
-		return choice === "Approve"
-			? { kind: "approved" }
-			: { kind: "declined" };
+		for (;;) {
+			const choice = await selectApprovalChoice(prompt, ctx);
+			if (choice === "Approve") return { kind: "approved" };
+			if (choice !== ADD_SESSION_RULE_CHOICE) return { kind: "declined" };
+			if (!request.submitSessionRule) {
+				return {
+					kind: "declined",
+					detail: "Session approval rules are unavailable.",
+				};
+			}
+			let rejection: string | undefined;
+			for (;;) {
+				const text = await ctx.ui.input(
+					rejection
+						? `${SESSION_RULE_INPUT_TITLE} — ${rejection}`
+						: SESSION_RULE_INPUT_TITLE,
+					SESSION_RULE_INPUT_PLACEHOLDER,
+					ctx.signal ? { signal: ctx.signal } : undefined,
+				);
+				// Esc leaves the rule input and brings the choices back: a cancelled
+				// input must never approve the action.
+				if (text === undefined) break;
+				const result = request.submitSessionRule(text);
+				if (result.ok) return { kind: "approved-with-rule" };
+				rejection = result.message;
+			}
+			if (ctx.signal?.aborted) return { kind: "declined" };
+		}
 	} catch (error) {
 		return {
 			kind: "declined",
 			detail: `Approval UI unavailable: ${error instanceof Error ? error.message : String(error)}`,
 		};
 	}
+}
+
+/**
+ * One approval choice: the TUI gets the scrollable dialog with the title in its
+ * rule; every other mode hands the same document (title first) to its own
+ * selector, because custom components are unsupported outside the TUI.
+ */
+async function selectApprovalChoice(
+	prompt: ApprovalPrompt,
+	ctx: ExtensionContext,
+): Promise<string | undefined> {
+	if (ctx.mode === "tui") {
+		return showApprovalDialog(
+			{
+				title: prompt.title,
+				markdown: prompt.markdown,
+				emphasis: prompt.emphasis,
+				expansion: prompt.expansion,
+				choices: APPROVAL_CHOICES,
+			},
+			ctx,
+		);
+	}
+	return ctx.ui.select(
+		`${prompt.title}\n\n${prompt.markdown}`,
+		[...APPROVAL_CHOICES],
+		ctx.signal ? { signal: ctx.signal } : undefined,
+	);
 }
 
 /**

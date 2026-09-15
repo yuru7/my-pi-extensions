@@ -1657,7 +1657,7 @@ test("temporarily bypasses reviews with only a persistent below-editor warning",
 		assert.equal(statuses.length, 0);
 		assert.deepEqual(
 			command.getArgumentCompletions?.("")?.map(({ value }) => value),
-			["rules", "init", "bypass", "enable"],
+			["session-rules", "rules", "init", "bypass", "enable"],
 		);
 
 		notices.length = 0;
@@ -1905,6 +1905,7 @@ type ToolCallHandler = (event: unknown, ctx: never) => Promise<unknown>;
 function approvalHarness(options: {
 	assessment: () => unknown;
 	select: (title: string, choices: string[]) => Promise<string | undefined>;
+	input?: (title: string) => Promise<string | undefined>;
 }) {
 	const handlers = new Map<string, (event: unknown, ctx: never) => unknown>();
 	aiApproval({
@@ -1922,12 +1923,20 @@ function approvalHarness(options: {
 	process.env.PI_AI_APPROVAL_PRIMARY_MODEL = "test/reviewer";
 	process.env.PI_AI_APPROVAL_SECONDARY_MODEL = "test/reviewer";
 	let reviewCalls = 0;
-	ReviewerSessionController.prototype.review = async function () {
+	const systemPrompts: string[] = [];
+	ReviewerSessionController.prototype.review = async function (
+		this: ReviewerSessionController,
+	) {
 		reviewCalls++;
+		systemPrompts.push(
+			(this as unknown as { options: { systemPrompt: string } }).options
+				.systemPrompt,
+		);
 		return { kind: "assessed", assessment: options.assessment() };
 	} as typeof originalReview;
 
 	const selects: Array<{ title: string; choices: string[] }> = [];
+	const inputs: string[] = [];
 	const notices: string[] = [];
 	let branch: unknown[] = [];
 	const ctx = {
@@ -1946,6 +1955,14 @@ function approvalHarness(options: {
 				selects.push({ title, choices });
 				return options.select(title, choices);
 			},
+			...(options.input
+				? {
+						input: async (title: string) => {
+							inputs.push(title);
+							return options.input?.(title);
+						},
+					}
+				: {}),
 			notify: (message: string) => notices.push(message),
 			setWidget: () => undefined,
 		},
@@ -1980,6 +1997,8 @@ function approvalHarness(options: {
 		ctx,
 		notices,
 		selects,
+		inputs,
+		systemPrompts,
 		get reviewCalls() {
 			return reviewCalls;
 		},
@@ -2020,7 +2039,11 @@ test("asks for medium-risk actions and executes only after Approve", async () =>
 		);
 		assert.equal(Object.isFrozen(call.input), true);
 		assert.equal(harness.selects.length, 1);
-		assert.deepEqual(harness.selects[0].choices, ["Deny", "Approve"]);
+		assert.deepEqual(harness.selects[0].choices, [
+			"Deny",
+			"Approve",
+			"Approve + Add Rule",
+		]);
 		assert.match(harness.notices.join("\n"), /approved by user · Medium risk/);
 		assert.match(harness.selects[0].title, /Approval Required/);
 		assert.match(
@@ -2153,6 +2176,402 @@ test("denies high-risk actions from configuration without any prompt", async () 
 		assert.match(harness.notices.join("\n"), /blocked · High risk/);
 	} finally {
 		harness.restore();
+	}
+});
+
+test("the third choice adds a session rule and approves the current call", async () => {
+	const harness = approvalHarness({
+		assessment: mediumAssessment,
+		select: () => Promise.resolve("Approve + Add Rule"),
+		input: () => Promise.resolve("Allow git reset --hard in this repository"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("rule-add-1", "rule-add-batch-1");
+		assert.equal(
+			await (handlersToolCall(harness) as ToolCallHandler)(call, harness.ctx),
+			undefined,
+			"the third choice must approve the current call",
+		);
+		assert.equal(Object.isFrozen(call.input), true);
+		assert.equal(harness.selects.length, 1);
+		assert.equal(harness.inputs.length, 1);
+		assert.match(harness.inputs[0], /Session approval rule/);
+		assert.match(
+			harness.notices.join("\n"),
+			/session rule added · rule-1: Allow git reset --hard in this repository/,
+		);
+		assert.match(harness.notices.join("\n"), /applies to this session only/);
+		assert.match(harness.notices.join("\n"), /approved by user · Medium risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("Esc in the rule input returns to the choices and can still deny", async () => {
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: mediumAssessment,
+		select: () => {
+			selectCalls++;
+			return Promise.resolve(selectCalls === 1 ? "Approve + Add Rule" : "Deny");
+		},
+		input: () => Promise.resolve(undefined),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("rule-esc-1", "rule-esc-batch-1");
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(call, harness.ctx)) as { block: boolean } | undefined;
+		assert.equal(result?.block, true);
+		assert.equal(selectCalls, 2, "the choices must come back after Esc");
+		assert.equal(Object.isFrozen(call.input), false);
+		assert.doesNotMatch(harness.notices.join("\n"), /session rule added/);
+		assert.match(harness.notices.join("\n"), /declined by user · Medium risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("a matching session rule lowers the next ask and allows it without a prompt", async () => {
+	let assessmentCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => {
+			assessmentCalls++;
+			return assessmentCalls === 1
+				? mediumAssessment()
+				: { ...mediumAssessment(), matched_rule_id: "rule-1" };
+		},
+		select: () => Promise.resolve("Approve + Add Rule"),
+		input: () => Promise.resolve("Allow this repository's local git reset"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const first = harness.queueToolCall("rule-low-1", "rule-low-batch-1");
+		assert.equal(
+			await (handlersToolCall(harness) as ToolCallHandler)(first, harness.ctx),
+			undefined,
+		);
+		const second = harness.queueToolCall("rule-low-2", "rule-low-batch-2");
+		assert.equal(
+			await (handlersToolCall(harness) as ToolCallHandler)(second, harness.ctx),
+			undefined,
+			"the matched rule must allow the lowered ask without another prompt",
+		);
+		assert.equal(harness.selects.length, 1, "no second prompt");
+		assert.match(harness.notices.join("\n"), /session rule applied · rule-1/);
+		assert.match(harness.notices.join("\n"), /Risk lowered from Medium to Low/);
+		assert.match(harness.notices.join("\n"), /allowed · Low risk/);
+		// The rule is in the reviewer prompt only after it exists, and the
+		// changed rule set must have rebuilt the reviewer session.
+		assert.doesNotMatch(harness.systemPrompts[0], /Session Approval Rules/);
+		assert.match(harness.systemPrompts[1], /Session Approval Rules/);
+		assert.match(
+			harness.systemPrompts[1],
+			/rule-1: Allow this repository's local git reset/,
+		);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("a session rule lowers a deny level into an ask prompt", async () => {
+	let assessmentCalls = 0;
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => {
+			assessmentCalls++;
+			return assessmentCalls === 1
+				? mediumAssessment()
+				: {
+						risk_level: "high",
+						instruction_alignment: "direct",
+						action_summary: "Force-resets the current branch one commit back.",
+						rationale: "Uncommitted changes may be lost.",
+						matched_rule_id: "rule-1",
+					};
+		},
+		select: () => {
+			selectCalls++;
+			return Promise.resolve(selectCalls === 1 ? "Approve + Add Rule" : "Deny");
+		},
+		input: () => Promise.resolve("Allow local git reset in this repository"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const first = harness.queueToolCall("rule-deny-1", "rule-deny-batch-1");
+		await (handlersToolCall(harness) as ToolCallHandler)(first, harness.ctx);
+		const second = harness.queueToolCall("rule-deny-2", "rule-deny-batch-2");
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(second, harness.ctx)) as { block: boolean } | undefined;
+		assert.equal(result?.block, true, "the prompt can still be denied");
+		assert.equal(
+			harness.selects.length,
+			2,
+			"a matched rule must turn the deny level into a prompt",
+		);
+		assert.match(harness.selects[1].title, /Risk: Medium/);
+		assert.match(
+			harness.selects[1].title,
+			/Session Rule: rule-1: Allow local git reset in this repository \(lowered from High\)/,
+		);
+		assert.doesNotMatch(harness.notices.join("\n"), /session rule applied/);
+		assert.match(harness.notices.join("\n"), /declined by user · Medium risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("approving the lowered deny level allows the call at the lower risk", async () => {
+	let assessmentCalls = 0;
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => {
+			assessmentCalls++;
+			return assessmentCalls === 1
+				? mediumAssessment()
+				: {
+						...mediumAssessment(),
+						risk_level: "high",
+						matched_rule_id: "rule-1",
+					};
+		},
+		select: () => {
+			selectCalls++;
+			return Promise.resolve(selectCalls === 1 ? "Approve + Add Rule" : "Approve");
+		},
+		input: () => Promise.resolve("Allow local git reset in this repository"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const first = harness.queueToolCall(
+			"rule-deny-allow-1",
+			"rule-deny-allow-batch-1",
+		);
+		await (handlersToolCall(harness) as ToolCallHandler)(first, harness.ctx);
+		const second = harness.queueToolCall(
+			"rule-deny-allow-2",
+			"rule-deny-allow-batch-2",
+		);
+		assert.equal(
+			await (handlersToolCall(harness) as ToolCallHandler)(second, harness.ctx),
+			undefined,
+		);
+		assert.match(harness.notices.join("\n"), /approved by user · Medium risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("very_high stays denied when the lowered level is still deny", async () => {
+	let assessmentCalls = 0;
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => {
+			assessmentCalls++;
+			return assessmentCalls === 1
+				? mediumAssessment()
+				: {
+						risk_level: "very_high",
+						instruction_alignment: "direct",
+						action_summary: "Force-resets the current branch one commit back.",
+						rationale: "Uncommitted changes may be lost.",
+						matched_rule_id: "rule-1",
+					};
+		},
+		select: () => {
+			selectCalls++;
+			return Promise.resolve(selectCalls === 1 ? "Approve + Add Rule" : "Approve");
+		},
+		input: () => Promise.resolve("Allow local git reset in this repository"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const first = harness.queueToolCall("rule-vh-1", "rule-vh-batch-1");
+		await (handlersToolCall(harness) as ToolCallHandler)(first, harness.ctx);
+		const second = harness.queueToolCall("rule-vh-2", "rule-vh-batch-2");
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(second, harness.ctx)) as { block: boolean } | undefined;
+		assert.equal(result?.block, true);
+		assert.equal(harness.selects.length, 1, "the lowered high is still deny");
+		assert.match(harness.notices.join("\n"), /blocked · Very High risk/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("an unknown rule ID is ignored and the normal ask prompt appears", async () => {
+	const harness = approvalHarness({
+		assessment: () => ({ ...mediumAssessment(), matched_rule_id: "rule-99" }),
+		select: () => Promise.resolve("Deny"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("rule-unknown-1", "rule-unknown-batch-1");
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(call, harness.ctx)) as { block: boolean } | undefined;
+		assert.equal(result?.block, true);
+		assert.equal(harness.selects.length, 1, "the normal prompt must still appear");
+		assert.doesNotMatch(harness.notices.join("\n"), /session rule applied/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("session rules are cleared when the session runtime resets", async () => {
+	let assessmentCalls = 0;
+	let selectCalls = 0;
+	const harness = approvalHarness({
+		assessment: () => {
+			assessmentCalls++;
+			return assessmentCalls === 1
+				? mediumAssessment()
+				: { ...mediumAssessment(), matched_rule_id: "rule-1" };
+		},
+		select: () => {
+			selectCalls++;
+			return Promise.resolve(selectCalls === 1 ? "Approve + Add Rule" : "Deny");
+		},
+		input: () => Promise.resolve("Allow local git reset in this repository"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const first = harness.queueToolCall("rule-reset-1", "rule-reset-batch-1");
+		await (handlersToolCall(harness) as ToolCallHandler)(first, harness.ctx);
+		// A new session runtime starts with no rules, so the same match is
+		// unknown again and the normal prompt returns.
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const second = harness.queueToolCall("rule-reset-2", "rule-reset-batch-2");
+		const result = (await (
+			handlersToolCall(harness) as ToolCallHandler
+		)(second, harness.ctx)) as { block: boolean } | undefined;
+		assert.equal(result?.block, true);
+		assert.equal(harness.selects.length, 2, "the prompt must appear again");
+		assert.doesNotMatch(harness.notices.join("\n"), /session rule applied/);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("session rules survive a temporary bypass", async () => {
+	const commands = new Map<
+		string,
+		{ handler: (args: string, ctx: never) => Promise<void> }
+	>();
+	const handlers = new Map<string, (event: unknown, ctx: never) => unknown>();
+	aiApproval({
+		on: (name: string, handler: (event: unknown, ctx: never) => unknown) => {
+			handlers.set(name, handler);
+		},
+		registerCommand: (name: string, options: never) => {
+			commands.set(name, options as never);
+		},
+	} as never);
+	const originalReview = ReviewerSessionController.prototype.review;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousPrimary = process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
+	const previousFallback = process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-bypass-rules-"));
+	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+	process.env.PI_AI_APPROVAL_PRIMARY_MODEL = "test/reviewer";
+	process.env.PI_AI_APPROVAL_SECONDARY_MODEL = "test/reviewer";
+	let assessmentCalls = 0;
+	ReviewerSessionController.prototype.review = async function (
+		this: ReviewerSessionController,
+	) {
+		assessmentCalls++;
+		return {
+			kind: "assessed",
+			assessment:
+				assessmentCalls === 1
+					? mediumAssessment()
+					: { ...mediumAssessment(), matched_rule_id: "rule-1" },
+		};
+	} as typeof originalReview;
+
+	const notices: string[] = [];
+	let customCalls = 0;
+	let branch: unknown[] = [];
+	const ctx = {
+		mode: "tui",
+		cwd: join(root, "project"),
+		isProjectTrusted: () => false,
+		modelRegistry: {
+			find: () => ({ provider: "test", id: "reviewer" }),
+			hasConfiguredAuth: () => true,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
+		},
+		sessionManager: { getBranch: () => branch },
+		signal: undefined,
+		abort: () => undefined,
+		waitForIdle: async () => undefined,
+		ui: {
+			theme: { fg: (_color: string, text: string) => text },
+			// TUI mode resolves the approval choice through ui.custom; the rule
+			// manager itself stays on select/input/editor.
+			custom: async () => {
+				customCalls++;
+				return "Approve + Add Rule";
+			},
+			select: async () => undefined,
+			input: async () => "Allow local git reset in this repository",
+			setWidget: () => undefined,
+			notify: (message: string) => notices.push(message),
+		},
+	} as never;
+	const queueToolCall = (toolCallId: string, batchId: string) => {
+		branch = [
+			{ type: "message", message: { role: "user", content: "Do it." } },
+			{
+				type: "message",
+				id: batchId,
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: toolCallId }],
+				},
+			},
+		];
+		const toolCall = event("bash", { command: "git reset --hard HEAD~1" });
+		(toolCall as { toolCallId: string }).toolCallId = toolCallId;
+		return toolCall;
+	};
+
+	try {
+		await handlers.get("session_start")?.({}, ctx);
+		const first = queueToolCall("bypass-rule-1", "bypass-rule-batch-1");
+		assert.equal(
+			await (handlers.get("tool_call") as ToolCallHandler)(first, ctx),
+			undefined,
+		);
+		const command = commands.get("ai-approval");
+		assert.ok(command);
+		await command.handler("bypass", ctx);
+		await command.handler("enable", ctx);
+		const second = queueToolCall("bypass-rule-2", "bypass-rule-batch-2");
+		assert.equal(
+			await (handlers.get("tool_call") as ToolCallHandler)(second, ctx),
+			undefined,
+		);
+		assert.equal(
+			customCalls,
+			1,
+			"the rule must survive bypass, so no second prompt appears",
+		);
+		assert.match(notices.join("\n"), /session rule applied · rule-1/);
+	} finally {
+		ReviewerSessionController.prototype.review = originalReview;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousPrimary === undefined)
+			delete process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
+		else process.env.PI_AI_APPROVAL_PRIMARY_MODEL = previousPrimary;
+		if (previousFallback === undefined)
+			delete process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
+		else process.env.PI_AI_APPROVAL_SECONDARY_MODEL = previousFallback;
 	}
 });
 
@@ -2332,4 +2751,57 @@ test("/ai-approval init writes defaults and confirms overwrites", async () => {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	}
+});
+
+test("/ai-approval session-rules opens the session rule manager", async () => {
+	const commands = new Map<
+		string,
+		{
+			handler: (args: string, ctx: never) => Promise<void>;
+			getArgumentCompletions?: (
+				prefix: string,
+			) => Array<{ value: string }> | null;
+		}
+	>();
+	aiApproval({
+		on: () => undefined,
+		registerCommand: (name: string, options: never) => {
+			commands.set(name, options as never);
+		},
+	} as never);
+	const command = commands.get("ai-approval");
+	assert.ok(command);
+	assert.deepEqual(
+		command.getArgumentCompletions?.("session")?.map((item) => item.value),
+		["session-rules"],
+	);
+
+	const selects: Array<{ title: string; options: string[] }> = [];
+	const notices: string[] = [];
+	const script: Array<string | undefined> = [undefined];
+	const ctx = {
+		cwd: process.cwd(),
+		isProjectTrusted: () => false,
+		ui: {
+			select: async (title: string, options: string[]) => {
+				selects.push({ title, options });
+				return script.shift();
+			},
+			input: async () => undefined,
+			editor: async () => undefined,
+			notify: (message: string) => notices.push(message),
+		},
+	} as never;
+	await command.handler("session-rules", ctx);
+	assert.equal(selects.length, 1);
+	assert.match(
+		selects[0].title,
+		/Session approval rules \(this session only\)/,
+	);
+	assert.match(
+		selects[0].title,
+		/No session approval rules have been added yet/,
+	);
+	assert.deepEqual(selects[0].options, ["Add a rule", "Close"]);
+	assert.deepEqual(notices, []);
 });
