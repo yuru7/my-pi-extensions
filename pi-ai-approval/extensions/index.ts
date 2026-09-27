@@ -5,6 +5,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { collectActionReasoning } from "../src/action-reasoning.ts";
 import {
 	collectReviewMessages,
 	DIRECT_USER_INPUT_ENTRY_TYPE,
@@ -49,7 +50,7 @@ import {
 	type SessionApprovalRule,
 } from "../src/session-rules.ts";
 import { manageSessionRules } from "../src/session-rules-command.ts";
-import type { ReviewAction, RiskLevel } from "../src/review.ts";
+import type { ReviewAction, ReviewMessage, RiskLevel } from "../src/review.ts";
 import { shellActionContainsRtk } from "../src/rtk-detection.ts";
 import {
 	buildReviewerChannels,
@@ -443,10 +444,8 @@ export default function aiApproval(
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (temporaryBypassActive) return;
-		const batch = toolCallBatchInfo(
-			event.toolCallId,
-			ctx.sessionManager.getBranch(),
-		);
+		const branch = ctx.sessionManager.getBranch();
+		const batch = toolCallBatchInfo(event.toolCallId, branch);
 		try {
 			const config = loadApprovalConfig({
 				cwd: ctx.cwd,
@@ -470,7 +469,10 @@ export default function aiApproval(
 				return { block: true, reason: rejectionReason(result) };
 			}
 
-			const reviewed = await reviewAction(action, config, ctx);
+			const reviewed = await reviewAction(action, config, ctx, {
+				messages: collectReviewMessages(branch),
+				actionReasoning: collectActionReasoning(branch, event.toolCallId),
+			});
 			const decided = await decideAction(
 				action,
 				reviewed.result,
@@ -518,6 +520,7 @@ export default function aiApproval(
 		action: ReviewAction,
 		config: ApprovalConfig,
 		ctx: ExtensionContext,
+		evidence: { messages: ReviewMessage[]; actionReasoning?: string },
 	): Promise<{ result: ReviewResult; channel?: ReviewerChannel }> {
 		try {
 			const channels = buildReviewerChannels(
@@ -528,7 +531,8 @@ export default function aiApproval(
 			);
 			const { result, finalChannel, attempts } = await runReviewWithFallbackChain(
 				channels,
-				(channel) => reviewWithChannel(channel, config, action, ctx),
+				(channel) =>
+					reviewWithChannel(channel, config, action, ctx, evidence),
 				(from, to) => notifyReviewerSwitch(ctx, from, to),
 			);
 			const usedFallback = attempts.length > 1;
@@ -686,6 +690,7 @@ export default function aiApproval(
 		config: ApprovalConfig,
 		action: ReviewAction,
 		ctx: ExtensionContext,
+		evidence: { messages: ReviewMessage[]; actionReasoning?: string },
 	): Promise<ReviewResult> {
 		try {
 			const model = channel.model;
@@ -760,11 +765,9 @@ export default function aiApproval(
 				});
 				controllers.set(key, controller);
 			}
-			return controller.review(
-				action,
-				collectReviewMessages(ctx.sessionManager.getBranch()),
-				ctx.signal,
-			);
+			return controller.review(action, evidence.messages, ctx.signal, {
+				actionReasoning: evidence.actionReasoning,
+			});
 		} catch (error) {
 			return {
 				kind: "failure",

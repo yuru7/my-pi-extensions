@@ -86,9 +86,15 @@ export class ReviewerSessionController {
 		action: ReviewAction,
 		messages: ReviewMessage[],
 		parentSignal?: AbortSignal,
+		options?: { actionReasoning?: string },
 	): Promise<ReviewResult> {
 		const run = this.queue.then(() =>
-			this.reviewSerialized(action, messages, parentSignal),
+			this.reviewSerialized(
+				action,
+				messages,
+				parentSignal,
+				options?.actionReasoning,
+			),
 		);
 		this.queue = run.then(
 			() => undefined,
@@ -108,6 +114,7 @@ export class ReviewerSessionController {
 		action: ReviewAction,
 		messages: ReviewMessage[],
 		parentSignal?: AbortSignal,
+		actionReasoning?: string,
 	): Promise<ReviewResult> {
 		if (this.disposed) {
 			return { kind: "cancelled", message: "Reviewer was disposed." };
@@ -126,6 +133,7 @@ export class ReviewerSessionController {
 			const prompt = buildReviewPrompt({
 				action,
 				transcript: buildReviewTranscript(delta.messages),
+				actionReasoning,
 				mode: delta.mode,
 				retryReason,
 			});

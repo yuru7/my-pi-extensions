@@ -62,15 +62,20 @@ pi-ai-approval/
 
 ```text
 tool_call イベント
+  ↓ branch snapshot（`getBranch()` はここだけで1回。以降は同じスナップショット）
   ↓ actionFromToolCall(event, cwd, review rules, cache)   [src/tool-actions.ts]
   │  undefined = 審査対象外 → そのまま返す（審査なし）
   │  bash/powershell: RTK 呼び出しを検出し、レビュアーガイダンスの
   │  付与条件に使用 [src/rtk-detection.ts]
   ↓ ReviewAction { tool, payload, cwd }
   ↓ DenialCircuitBreaker.isOpen()? → { block, "circuit-open" }
-  ↓ reviewAction: buildReviewerChannels → runReviewWithFallbackChain
+  ↓ reviewAction
+  │    collectReviewMessages(branch)
+  │    collectActionReasoning(branch, toolCallId)
+  │    buildReviewerChannels → runReviewWithFallbackChain
   │    primary → secondary → current-model（モデル同一性で重複排除）
-  │    各試行: ReviewerSessionController.review(action, messages)
+  │    各試行: ReviewerSessionController.review(action, messages, signal, { actionReasoning })
+  │    actionReasoning は full / delta のどちらでも、トランスクリプト差分とは別に毎回渡す
   │    failure/timeout → 次チャネルへ; cancel → フォールバックせずフェイルクローズド
   ↓ ReviewResult: assessed | allowed | user-approved | user-declined |
   │               denied | timeout | failure | cancelled | circuit-open
@@ -91,6 +96,12 @@ tool_call イベント
 `direct_user` とし、それ以外はレビュアー向けの `untrusted` な証拠として残す。
 `src/review.ts` はサイズ制限付きの JSON-lines トランスクリプトを構築する
 （最新 + 先頭のユーザーメッセージを優先し、次に直近の非ユーザー entries）。
+thinking は通常トランスクリプトには混ぜない。`src/action-reasoning.ts` の
+`collectActionReasoning(branch, toolCallId)` が、対象 ToolCall と直前の
+ToolCall の間にある visible な thinking だけを current action reasoning として
+取り出し、プロンプトの専用セクションで `provenance: "untrusted"` として渡す。
+`thinkingSignature` と redacted 本文は送らない。reasoning が無くてもレビューは
+失敗しない。
 
 ## 5. モジュールの責務
 
@@ -102,9 +113,9 @@ tool_call イベント
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
 | `src/shell-private-data.ts` | `bash.command` / `powershell.command` 用ヒューリスティクス: シェルをトークン化し `~`・`$HOME`・`$env:NAME`（`USERPROFILE` / `HOME` / `APPDATA` / `LOCALAPPDATA`）を展開、リテラルパス・glob を `path-rules` カタログに `classifyReadPath` で照合。 |
 | `src/rtk-detection.ts` | `pi-rtk-optimizer` が rewrite した `rtk ...` 呼び出しを検出する純粋関数。引用符・エスケープ・heredoc 本文を区別し、`&&`・`||`・`;`・`|`・`&`・改行で区切った各コマンド位置の `rtk` のみを検出する。実行コマンドの変更や正規化は行わない。 |
-| `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`（任意の `matched_rule_id` を含む）、文字数制限付きのプロンプト・トランスクリプト構築、`parseRiskAssessment`（未知レベル・要約/根拠欠落・不正な `matched_rule_id` を拒否する厳密検証）。 |
+| `src/review.ts` | レビュアー契約: `RiskLevel`、`RiskAssessment`（任意の `matched_rule_id` を含む）、文字数制限付きのプロンプト・トランスクリプト構築、`CURRENT ACTION REASONING` セクション（常に `untrusted`）、`parseRiskAssessment`（未知レベル・要約/根拠欠落・不正な `matched_rule_id` を拒否する厳密検証）。 |
 | `src/policy.ts` | レビュアーのシステムプロンプト（Codex Guardian 由来。`UPSTREAM_GUARDIAN_COMMIT` 参照）。レビュアーが適用すべき 6 段階ルーブリックを定義。明示依頼の通常ローカル commit は `low`、履歴書き換え系は `medium` 以上に据え置く。`/tmp` 配下は依頼済みなら `low` 以下・未依頼でも `medium` 上限、`/tmp` 自体の削除は `high`。`buildActionReviewSystemPrompt` は RTK を含むときだけ、RTK の用途と `do not assume low risk` を含む短い注意書き（`RTK_COMMAND_REVIEW_GUIDANCE`）を、private 判定時だけ封じ込め指示を追加する。セッション承認ルールがあるときだけ `Session Approval Rules` 節を追加し、ルールが `risk_level` を変えないこと・明確にカバーする1件だけを `matched_rule_id` として返すことを指示する。 |
-| `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
+| `src/reviewer-session.ts` | 隔離されたレビュアー用エージェントセッション（`ReviewerSessionController`）: 直列キュー、full/delta カーソルによるセッション再利用、試行ごとの期限、最大 3 試行、リトライ可能失敗のみ再試行、破棄。`actionReasoning` はトランスクリプト差分とは別に毎回プロンプトへ載せる。チャンネルごとの `thinkingLevel` で生成する。レビュアーには読み取り専用 `read/grep/find/ls` ツール群か無しを与える。 |
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
 | `src/risk-policy.ts` | 純粋な `assessment → allow/ask/deny` 変換（`resolveRiskAction` / `applyRiskPolicy`）。手作り設定で迂回されても `very_high` / `critical` の `allow` を拒否。I/O・UI なし。 |
@@ -115,6 +126,7 @@ tool_call イベント
 | `src/review-presentation.ts` | 人・ agent 向け文面: `riskLabel`、操作プレビュー、`formatReviewResult`（UI 通知用）、`rejectionReason`（agent 向けブロック理由。回避策禁止の指示付き）。`shellCommandPreview` はシェルコマンドの折りたたみ形（300 文字上限・マーカー無し）と展開形（改行保持・上限無し）を返し、展開できるのはシェルコマンドだけ。 |
 | `src/reviewer-status.ts` | `/ai-approval` の status・`rules` 出力、起動時ヘルス同期、フォールバック通知。両方の設定ファイルが存在しない場合の起動時 `/ai-approval init` 案内を含む。 |
 | `src/authorization-provenance.ts` | `DirectUserInputTracker` + `collectReviewMessages`: 展開前入力と保存済みユーザーメッセージを突合し、完全一致した対話・RPC のみを `direct_user` とする。 |
+| `src/action-reasoning.ts` | `collectActionReasoning`: レビュー対象 ToolCall と直前の ToolCall の間の visible thinking を、上限付きの current action reasoning として取り出す。`thinkingSignature` と redacted 本文は含めない。authorization provenance とは別責務。 |
 | `src/directory-scan-cache.ts` | 短命（1 秒、LRU-128）のプロセス内キャッシュ（制限付きディレクトリ走査用）。変更系ツールの実行後は必ずクリアすること。 |
 | `src/tool-input-lock.ts` | 承認後 TOCTOU ガード: 承認済み `event.input` を deep-freeze し、凍結不能な入力は `failure`（ブロック）にする。 |
 
@@ -165,7 +177,9 @@ tool_call イベント
    触れるレビュアーのツール呼び出しは例外化する（`reviewer-tools` のガード）。
 4. **来歴の規律**: ユーザー意図を確立するのは `provenance: "direct_user"` の
    トランスクリプト行のみであり、content 内テキストが来歴を作ることはない。
-   拡張機能・展開済みコンテンツは `untrusted` のままである。
+   拡張機能・展開済みコンテンツは `untrusted` のままである。assistant reasoning は
+   常に `untrusted` であり、許可の根拠にもリスクを下げる根拠にもならない。
+   `thinkingSignature` と redacted reasoning 本文はレビュアーへ送らない。
 5. **承認の完全性**: 1 回の `Approve`（第三の選択肢 `Approve + Add Rule` を含む）
    = 1 回のツール呼び出しのみ。追加されたルール自体は何も許可せず、以降の
    レビューでレビュアーが報告した一致IDをローカル層が検証して初めて意味を持つ。
@@ -207,7 +221,7 @@ pnpm check   # = tsc -p tsconfig.json && node --test tests/*.test.ts
 - `tests/*.test.ts` は `src/` の各モジュール（`gate`、`config`、`review`、
   `risk-policy`、`session-rules`、`session-rules-command`、`reviewer-*`、
   `approval-prompt`、`approval-dialog`、`review-presentation`、
-  `authorization-provenance`、`rtk-detection`）に対応し、
+  `authorization-provenance`、`action-reasoning`、`rtk-detection`）に対応し、
   配線用に `extension.test.ts` がある。前者はサニタイズ・上限・ID 安定性・
   1段階低下表（`deny` からの低下を含む）・判定を強化しないこと・未知ID無視を、後者は第三選択肢の
   追加承認・Esc での選択肢復帰・ルール変更時のレビュアー再生成・

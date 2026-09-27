@@ -228,8 +228,96 @@ test("reuses a successful reviewer session with transcript deltas", async () => 
 	assert.match(prompts[1], /TRANSCRIPT DELTA START/);
 	assert.match(prompts[1], /Second request/);
 	assert.doesNotMatch(prompts[1], /First request/);
+	assert.doesNotMatch(prompts[0], /CURRENT ACTION REASONING/);
+	assert.doesNotMatch(prompts[1], /CURRENT ACTION REASONING/);
 	controller.dispose();
 	assert.equal(disposed, 1);
+});
+
+test("sends current action reasoning on every review, including transcript deltas", async () => {
+	const prompts: string[] = [];
+	const session = {
+		messages: [] as Array<{
+			role: "assistant";
+			stopReason: "stop";
+			content: Array<{ type: "text"; text: string }>;
+		}>,
+		isStreaming: false,
+		prompt: async (prompt: string) => {
+			prompts.push(prompt);
+			session.messages.push({
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: '{"risk_level":"low","instruction_alignment":"direct","action_summary":"Runs a benign echo command.","rationale":"No state change or data exposure."}' }],
+			});
+		},
+		abort: async () => undefined,
+		dispose: () => undefined,
+	};
+	const controller = new ReviewerSessionController({
+		model: { provider: "test", id: "reviewer" } as never,
+		modelRegistry: {} as never,
+		cwd: "/repo",
+		systemPrompt: "Review safely.",
+		timeoutMs: 1_000,
+	});
+	const internals = controller as unknown as {
+		session?: typeof session;
+		getSession: () => Promise<typeof session>;
+	};
+	internals.getSession = async () => {
+		internals.session = session;
+		return session;
+	};
+	const action = { tool: "bash", cwd: "/repo", payload: { command: "echo ok" } };
+	const firstMessage = {
+		role: "user" as const,
+		content: "First request",
+		authorizationSource: "direct" as const,
+	};
+	const secondMessage = {
+		role: "user" as const,
+		content: "Second request",
+		authorizationSource: "direct" as const,
+	};
+	assert.equal(
+		(
+			await controller.review(action, [firstMessage], undefined, {
+				actionReasoning: "Need to inspect the cache first.",
+			})
+		).kind,
+		"assessed",
+	);
+	assert.equal(
+		(
+			await controller.review(
+				action,
+				[firstMessage, secondMessage],
+				undefined,
+				{
+					actionReasoning:
+						"The user asked to remove only the generated cache.",
+				},
+			)
+		).kind,
+		"assessed",
+	);
+	assert.match(prompts[0], />>> TRANSCRIPT START/);
+	assert.doesNotMatch(prompts[0], /TRANSCRIPT DELTA/);
+	assert.match(prompts[0], />>> CURRENT ACTION REASONING START/);
+	assert.match(prompts[0], /Need to inspect the cache first/);
+	assert.doesNotMatch(
+		prompts[1],
+		/Need to inspect the cache first/,
+	);
+	assert.match(prompts[1], />>> TRANSCRIPT DELTA START/);
+	assert.match(prompts[1], />>> CURRENT ACTION REASONING START/);
+	assert.match(
+		prompts[1],
+		/The user asked to remove only the generated cache/,
+	);
+	assert.match(prompts[1], /not part of the transcript delta/);
+	controller.dispose();
 });
 
 test("serializes concurrent reviews within one controller", async () => {
