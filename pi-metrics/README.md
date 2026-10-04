@@ -1,5 +1,7 @@
 # pi-metrics
 
+English | [日本語](./README_ja.md)
+
 A Pi extension that prints one dim metrics line after each run finishes.
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
@@ -126,6 +128,12 @@ The line uses the standard theme's `dim` color with no background. Nothing is
 written to the session, so resuming a session does not replay old metrics.
 Metrics and the live working indicator are not rendered in non-interactive modes
 (`rpc`, `json`, `print`); state is still reset so the next run starts clean.
+
+## Acknowledgements
+
+This extension was inspired by
+[`pi-metrics`](https://github.com/maplezzk/pi-extensions/tree/main/packages/pi-metrics)
+in [maplezzk/pi-extensions](https://github.com/maplezzk/pi-extensions).
 
 ## Development
 
