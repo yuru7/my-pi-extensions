@@ -31,7 +31,7 @@ export type Clock = () => number;
 /** Structural view of an assistant message's usage, so this module needs no Pi import. */
 export interface AssistantMessageLike {
   role?: unknown;
-  usage?: { input?: unknown; output?: unknown } | null;
+  usage?: { input?: unknown; output?: unknown; cost?: { total?: unknown } | null } | null;
 }
 
 /** True when the value is an assistant message (usage may still be missing). */
@@ -55,6 +55,8 @@ export interface RunMetrics {
   ttftMs: number | null;
   inputTokens: number;
   outputTokens: number;
+  /** Cost reported by the provider in US dollars; 0 when it reports none. */
+  costUsd: number;
 }
 
 /** Timing and finalized usage for one assistant message within a turn. */
@@ -74,6 +76,7 @@ interface TurnState {
   completedWindows: StreamWindow[];
   inputTokens: number;
   outputTokens: number;
+  costUsd: number;
 }
 
 export interface MetricsTrackerOptions {
@@ -156,6 +159,7 @@ export class MetricsTracker {
   private runStartedAtMs: number | null = null;
   private inputTokens = 0;
   private outputTokens = 0;
+  private costUsd = 0;
   private firstTtftMs: number | null = null;
   private measuredOutputTokens = 0;
   private measuredGenerationMs = 0;
@@ -191,6 +195,7 @@ export class MetricsTracker {
       completedWindows: [],
       inputTokens: 0,
       outputTokens: 0,
+      costUsd: 0,
     };
   }
 
@@ -233,8 +238,10 @@ export class MetricsTracker {
     if (!turn) return;
     const input = toCount(message.usage?.input);
     const output = toCount(message.usage?.output);
+    const cost = toCount(message.usage?.cost?.total);
     turn.inputTokens += input;
     turn.outputTokens += output;
+    turn.costUsd += cost;
     turn.window.outputTokens += output;
     turn.window.endedAtMs = this.now();
   }
@@ -251,6 +258,7 @@ export class MetricsTracker {
 
     this.inputTokens += turn.inputTokens;
     this.outputTokens += turn.outputTokens;
+    this.costUsd += turn.costUsd;
 
     // TTFT is the first observed token delta; a response without deltas has none.
     if (this.firstTtftMs === null) {
@@ -311,6 +319,7 @@ export class MetricsTracker {
       ttftMs: this.firstTtftMs,
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,
+      costUsd: this.costUsd,
     };
     this.reset();
     return metrics;
@@ -321,6 +330,7 @@ export class MetricsTracker {
     this.runStartedAtMs = null;
     this.inputTokens = 0;
     this.outputTokens = 0;
+    this.costUsd = 0;
     this.firstTtftMs = null;
     this.measuredOutputTokens = 0;
     this.measuredGenerationMs = 0;

@@ -12,8 +12,11 @@ function controlledClock(start = 0) {
   };
 }
 
-function assistant(input: number, output: number): AssistantMessageLike {
-  return { role: "assistant", usage: { input, output } };
+function assistant(input: number, output: number, costUsd?: number): AssistantMessageLike {
+  return {
+    role: "assistant",
+    usage: { input, output, ...(costUsd === undefined ? {} : { cost: { total: costUsd } }) },
+  };
 }
 
 /** Stream `updates` message updates `intervalMs` apart, then record one message. */
@@ -538,5 +541,64 @@ describe("MetricsTracker", () => {
     assert.equal(metrics.outputTokens, 1_000);
     // 1000 tokens over 800ms; dropping the first turn would report 900/0.4s.
     assert.equal(metrics.tps, 1_250);
+  });
+
+  test("cost is summed over every finalized assistant message", () => {
+    const clock = controlledClock();
+    const tracker = new MetricsTracker({ now: clock.now });
+
+    tracker.startRun();
+    tracker.startTurn();
+    tracker.startMessage();
+    tracker.recordAssistantMessage(assistant(0, 100, 0.25));
+    // A second message in the same turn, as a retry produces.
+    tracker.startMessage();
+    tracker.recordAssistantMessage(assistant(0, 100, 0.5));
+    tracker.endTurn();
+
+    tracker.startTurn();
+    tracker.startMessage();
+    tracker.recordAssistantMessage(assistant(0, 100, 1.25));
+    tracker.endTurn();
+
+    const metrics = tracker.finish();
+    assert.ok(metrics);
+    assert.equal(metrics.costUsd, 2);
+  });
+
+  test("a run without reported cost stays at zero", () => {
+    const clock = controlledClock();
+    const tracker = new MetricsTracker({ now: clock.now });
+
+    tracker.startRun();
+    tracker.startTurn();
+    streamTurn(tracker, clock, { updates: 5, intervalMs: 100, input: 10, output: 10 });
+    tracker.endTurn();
+
+    const metrics = tracker.finish();
+    assert.ok(metrics);
+    assert.equal(metrics.costUsd, 0);
+  });
+
+  test("a finished run does not leak its cost into the next run", () => {
+    const clock = controlledClock();
+    const tracker = new MetricsTracker({ now: clock.now });
+
+    tracker.startRun();
+    tracker.startTurn();
+    tracker.startMessage();
+    tracker.recordAssistantMessage(assistant(0, 100, 3.5));
+    tracker.endTurn();
+    tracker.finish();
+
+    tracker.startRun();
+    tracker.startTurn();
+    tracker.startMessage();
+    tracker.recordAssistantMessage(assistant(0, 100, 0.5));
+    tracker.endTurn();
+
+    const metrics = tracker.finish();
+    assert.ok(metrics);
+    assert.equal(metrics.costUsd, 0.5);
   });
 });

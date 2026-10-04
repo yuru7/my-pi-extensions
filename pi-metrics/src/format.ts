@@ -15,6 +15,11 @@ const SCALED_DECIMAL_PLACES = 1;
 const ZERO_DECIMAL_SUFFIX = ".0";
 const DURATION_DECIMAL_PLACES = 1;
 const TPS_DECIMAL_PLACES = 1;
+const COST_DECIMAL_PLACES = 6;
+
+/** Segment appended after the rendered format when a run reported a cost. */
+const COST_SEPARATOR = " · ";
+const COST_LABEL = "cost ";
 
 /** Placeholder values substituted into a user format string. */
 export interface MetricValues {
@@ -34,6 +39,8 @@ export interface RawMetrics {
   ttftMs: number | null;
   inputTokens: number;
   outputTokens: number;
+  /** Cost reported by the provider in US dollars; 0 when it reports none. */
+  costUsd: number;
 }
 
 /** Placeholder names recognized in a format string; anything else is left as-is. */
@@ -98,9 +105,20 @@ export function renderFormat(format: string, values: MetricValues): string {
   return format.replace(PLACEHOLDER_PATTERN, (_match, key: keyof MetricValues) => values[key]);
 }
 
-/** Format raw metrics into one line using the configured format string. */
+/** Format a cost in US dollars for a trailing `cost $1.234567` segment. */
+export function formatCost(usd: number): string {
+  return `$${usd.toFixed(COST_DECIMAL_PLACES)}`;
+}
+
+/**
+ * Format raw metrics into one line using the configured format string.
+ *
+ * A positive cost is appended as ` · cost $1.234567`; providers that report no
+ * cost leave it at zero, and the segment (including its separator) is omitted
+ * so the line keeps its configured shape.
+ */
 export function renderMetrics(format: string, metrics: RawMetrics): string {
-  return renderFormat(format, {
+  const line = renderFormat(format, {
     elapsed: formatDuration(metrics.elapsedMs),
     tps:
       metrics.tps === null
@@ -110,4 +128,7 @@ export function renderMetrics(format: string, metrics: RawMetrics): string {
     input: formatTokens(metrics.inputTokens),
     output: formatTokens(metrics.outputTokens),
   });
+  return metrics.costUsd > 0
+    ? `${line}${COST_SEPARATOR}${COST_LABEL}${formatCost(metrics.costUsd)}`
+    : line;
 }

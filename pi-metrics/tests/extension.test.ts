@@ -56,17 +56,20 @@ function controlledClock(start = 0) {
   };
 }
 
-function assistantMessage(input: number, output: number) {
-  return { role: "assistant", usage: { input, output } };
+function assistantMessage(input: number, output: number, costUsd?: number) {
+  return {
+    role: "assistant",
+    usage: { input, output, ...(costUsd === undefined ? {} : { cost: { total: costUsd } }) },
+  };
 }
 
-function setup(mode: Mode = "tui") {
+function setup(mode: Mode = "tui", format = DEFAULT_FORMAT) {
   const clock = controlledClock();
   const { ctx, notifications } = createFakeCtx(mode);
   const pi = createFakePi();
   registerMetrics(pi as unknown as ExtensionAPI, {
     now: clock.now,
-    loadConfig: () => ({ config: { format: DEFAULT_FORMAT } }),
+    loadConfig: () => ({ config: { format } }),
   });
   return { clock, ctx, notifications, pi };
 }
@@ -76,10 +79,17 @@ function emitTurn(
   pi: FakePi,
   ctx: ExtensionContext,
   clock: ReturnType<typeof controlledClock>,
-  options: { ttftMs: number; updates: number; intervalMs: number; input: number; output: number },
+  options: {
+    ttftMs: number;
+    updates: number;
+    intervalMs: number;
+    input: number;
+    output: number;
+    costUsd?: number;
+  },
 ): void {
   if (options.ttftMs > 0) clock.advance(options.ttftMs);
-  const message = assistantMessage(options.input, options.output);
+  const message = assistantMessage(options.input, options.output, options.costUsd);
   pi.emit("message_start", { message }, ctx);
   for (let i = 0; i < options.updates; i += 1) {
     pi.emit(
@@ -461,6 +471,62 @@ describe("pi-metrics extension", () => {
 
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]?.message, "1.0s | 8.1K → 1.3K | 1300.0 tok/s");
+  });
+
+  test("a reported cost is appended to the metrics line", () => {
+    const { clock, ctx, notifications, pi } = setup("tui");
+
+    pi.emit("agent_start", {}, ctx);
+    pi.emit("turn_start", {}, ctx);
+    emitTurn(pi, ctx, clock, {
+      ttftMs: 500,
+      updates: 5,
+      intervalMs: 100,
+      input: 1_200,
+      output: 80,
+      costUsd: 1.234567,
+    });
+    pi.emit("agent_settled", {}, ctx);
+
+    assert.equal(notifications.length, 1);
+    assert.equal(
+      notifications[0]?.message,
+      "Worked for 0.9s · TPS 200.0 tok/s · TTFT 0.5s · in 1.2K · out 80 · cost $1.234567",
+    );
+  });
+
+  test("a run without a reported cost has no cost segment", () => {
+    const { clock, ctx, notifications, pi } = setup("tui");
+
+    pi.emit("agent_start", {}, ctx);
+    pi.emit("turn_start", {}, ctx);
+    emitTurn(pi, ctx, clock, { ttftMs: 500, updates: 5, intervalMs: 100, input: 1_200, output: 80 });
+    pi.emit("agent_settled", {}, ctx);
+
+    assert.equal(notifications.length, 1);
+    assert.equal(
+      notifications[0]?.message,
+      "Worked for 0.9s · TPS 200.0 tok/s · TTFT 0.5s · in 1.2K · out 80",
+    );
+  });
+
+  test("a cost is appended after a custom format too", () => {
+    const { clock, ctx, notifications, pi } = setup("tui", "{elapsed} | in {input}");
+
+    pi.emit("agent_start", {}, ctx);
+    pi.emit("turn_start", {}, ctx);
+    emitTurn(pi, ctx, clock, {
+      ttftMs: 0,
+      updates: 5,
+      intervalMs: 100,
+      input: 1_200,
+      output: 80,
+      costUsd: 0.5,
+    });
+    pi.emit("agent_settled", {}, ctx);
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0]?.message, "0.4s | in 1.2K · cost $0.500000");
   });
 
   test("a configuration warning is surfaced once", () => {

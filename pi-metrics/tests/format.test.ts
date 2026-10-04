@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  formatCost,
   formatDuration,
   formatTokens,
   renderFormat,
@@ -82,6 +83,23 @@ describe("renderFormat", () => {
   });
 });
 
+describe("formatCost", () => {
+  test("renders US dollars with six decimals", () => {
+    assert.equal(formatCost(1.234567), "$1.234567");
+    assert.equal(formatCost(1.234), "$1.234000");
+    assert.equal(formatCost(0.5), "$0.500000");
+    assert.equal(formatCost(42), "$42.000000");
+  });
+
+  test("keeps a sub-cent cost visible", () => {
+    assert.equal(formatCost(0.004), "$0.004000");
+  });
+
+  test("keeps a positive cost below the displayed precision visible", () => {
+    assert.equal(formatCost(0.0000004), "$0.000000");
+  });
+});
+
 describe("renderMetrics", () => {
   test("renders the default line", () => {
     const rendered = renderMetrics(
@@ -92,12 +110,55 @@ describe("renderMetrics", () => {
         ttftMs: 2_000,
         inputTokens: 12_200,
         outputTokens: 1_700,
+        costUsd: 0,
       },
     );
     assert.equal(
       rendered,
       "Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K",
     );
+  });
+
+  test("appends a cost segment when the provider reported a cost", () => {
+    const rendered = renderMetrics(
+      "Worked for {elapsed} · in {input} · out {output}",
+      {
+        elapsedMs: 79_100,
+        tps: null,
+        ttftMs: null,
+        inputTokens: 12_200,
+        outputTokens: 1_700,
+        costUsd: 1.234567,
+      },
+    );
+    assert.equal(
+      rendered,
+      "Worked for 1m 19.1s · in 12.2K · out 1.7K · cost $1.234567",
+    );
+  });
+
+  test("appends a cost segment for a positive cost below the displayed precision", () => {
+    const rendered = renderMetrics("{input}", {
+      elapsedMs: 1_000,
+      tps: null,
+      ttftMs: null,
+      inputTokens: 10,
+      outputTokens: 10,
+      costUsd: 0.0000004,
+    });
+    assert.equal(rendered, "10 · cost $0.000000");
+  });
+
+  test("omits the cost segment for a zero cost", () => {
+    const rendered = renderMetrics("{input}", {
+      elapsedMs: 1_000,
+      tps: null,
+      ttftMs: null,
+      inputTokens: 10,
+      outputTokens: 10,
+      costUsd: 0,
+    });
+    assert.equal(rendered, "10");
   });
 
   test("marks an estimated tps with a leading approx sign", () => {
@@ -108,6 +169,7 @@ describe("renderMetrics", () => {
       ttftMs: null,
       inputTokens: 0,
       outputTokens: 0,
+      costUsd: 0,
     });
     assert.equal(rendered, "≈66.7");
   });
@@ -121,6 +183,7 @@ describe("renderMetrics", () => {
         ttftMs: null,
         inputTokens: 0,
         outputTokens: 0,
+        costUsd: 0,
       },
     );
     assert.equal(

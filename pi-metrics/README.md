@@ -5,7 +5,7 @@ A Pi extension that prints one dim metrics line after each run finishes.
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
 ```text
-Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K
+Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K · cost $1.234567
 ```
 
 Metrics are collected from `agent_start` through `agent_settled`, so a run with
@@ -53,6 +53,12 @@ are left untouched, so typos stay visible and future placeholders keep working.
 `tps` gets a leading `≈` (for example `≈66.7`). The format itself never changes
 shape.
 
+The appended **cost** segment is not a placeholder and is not part of `format`.
+When the run reported a positive cost, ` · cost $1.234567` is added after the
+rendered line; providers that report no cost leave it at zero and the segment
+is omitted entirely, separator included. The value is shown with six decimal
+places, so small per-run costs stay visible.
+
 ```json
 { "format": "{elapsed} | {input} → {output} | {tps} tok/s" }
 ```
@@ -70,6 +76,11 @@ way, and unknown fields are ignored.
 - **elapsed** starts when the run starts (`agent_start`). Input handling,
   authentication checks, compaction, and image resizing that happen before the
   run are not counted.
+- **cost** is the sum of `usage.cost.total` over the run's finalized assistant
+  messages, in US dollars. It reflects the cost the provider reports for those
+  messages, not a separate billing statement. Providers that do not report a
+  cost contribute zero, and the cost segment is hidden unless the run total is
+  positive.
 - **input** / **output** sum the `usage` of every finalized assistant message in
   the run. Partial stream updates never contribute tokens.
 - **TTFT** measures the first turn where a token delta was observed, from that
