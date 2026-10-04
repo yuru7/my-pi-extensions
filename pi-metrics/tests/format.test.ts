@@ -4,6 +4,8 @@ import {
   formatCost,
   formatDuration,
   formatTokens,
+  formatWorkingElapsed,
+  formatWorkingMessage,
   renderFormat,
   renderMetrics,
 } from "../src/format.ts";
@@ -21,6 +23,35 @@ describe("formatDuration", () => {
 
   test("renders hours and minutes", () => {
     assert.equal(formatDuration(4_320_000), "1h 12m");
+  });
+});
+
+describe("formatWorkingElapsed", () => {
+  test("renders seconds under a minute without decimals", () => {
+    assert.equal(formatWorkingElapsed(0), "0s");
+    assert.equal(formatWorkingElapsed(5_000), "5s");
+    assert.equal(formatWorkingElapsed(59_999), "59s");
+  });
+
+  test("renders minutes and seconds", () => {
+    assert.equal(formatWorkingElapsed(60_000), "1m0s");
+    assert.equal(formatWorkingElapsed(79_100), "1m19s");
+  });
+
+  test("renders hours, minutes and seconds", () => {
+    assert.equal(formatWorkingElapsed(3_600_000), "1h0m0s");
+    assert.equal(formatWorkingElapsed(4_323_000), "1h12m3s");
+  });
+
+  test("clamps a negative duration to zero", () => {
+    assert.equal(formatWorkingElapsed(-500), "0s");
+  });
+});
+
+describe("formatWorkingMessage", () => {
+  test("prefixes the elapsed time with the working label", () => {
+    assert.equal(formatWorkingMessage(5_000), "Working (5s)");
+    assert.equal(formatWorkingMessage(79_100), "Working (1m19s)");
   });
 });
 

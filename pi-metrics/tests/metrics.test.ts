@@ -426,6 +426,28 @@ describe("MetricsTracker", () => {
     assert.equal(metrics.elapsedMs, 1_400);
   });
 
+  test("startRun accepts an explicit send anchor and elapsedMs tracks it", () => {
+    const clock = controlledClock(1_000);
+    const tracker = new MetricsTracker({ now: clock.now });
+
+    assert.equal(tracker.elapsedMs(), null);
+    // The prompt was sent 500ms before the run started.
+    tracker.startRun(500);
+    assert.equal(tracker.elapsedMs(), 500);
+
+    clock.advance(250);
+    assert.equal(tracker.elapsedMs(), 750);
+
+    tracker.startTurn();
+    streamTurn(tracker, clock, { updates: 2, intervalMs: 100, input: 1, output: 1 });
+    tracker.endTurn();
+
+    const metrics = tracker.finish();
+    assert.ok(metrics);
+    assert.equal(metrics.elapsedMs, 850);
+    assert.equal(tracker.elapsedMs(), null);
+  });
+
   test("only a measurable message counts toward TPS within a turn", () => {
     const clock = controlledClock();
     const tracker = new MetricsTracker({ now: clock.now });

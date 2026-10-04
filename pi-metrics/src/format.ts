@@ -21,6 +21,9 @@ const COST_DECIMAL_PLACES = 6;
 const COST_SEPARATOR = " · ";
 const COST_LABEL = "cost ";
 
+/** Label prefixed to the live elapsed time in Pi's streaming indicator. */
+const WORKING_LABEL = "Working";
+
 /** Placeholder values substituted into a user format string. */
 export interface MetricValues {
   elapsed: string;
@@ -64,6 +67,29 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
   const minutes = totalMinutes % MINUTES_PER_HOUR;
   return `${hours}h ${minutes}m`;
+}
+
+/**
+ * Format elapsed run time for the live streaming indicator.
+ *
+ * Second precision, no decimals, no spaces, and only the units that have
+ * passed: `0s`, `5s`, `1m19s`, `1h2m3s`. The whole seconds are truncated so
+ * the value never shows a time that has not elapsed yet.
+ */
+export function formatWorkingElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / MS_PER_SECOND));
+  const seconds = totalSeconds % SECONDS_PER_MINUTE;
+  const totalMinutes = Math.floor(totalSeconds / SECONDS_PER_MINUTE);
+  const minutes = totalMinutes % MINUTES_PER_HOUR;
+  const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  if (hours > 0) return `${hours}h${minutes}m${seconds}s`;
+  if (totalMinutes > 0) return `${totalMinutes}m${seconds}s`;
+  return `${seconds}s`;
+}
+
+/** Text for Pi's streaming indicator, for example `Working (5s)`. */
+export function formatWorkingMessage(elapsedMs: number): string {
+  return `${WORKING_LABEL} (${formatWorkingElapsed(elapsedMs)})`;
 }
 
 /** Round a scaled count to the displayed precision. */

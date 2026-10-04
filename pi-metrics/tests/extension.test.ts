@@ -34,6 +34,7 @@ interface RecordedNotification {
 
 function createFakeCtx(mode: Mode = "tui") {
   const notifications: RecordedNotification[] = [];
+  const workingMessages: (string | undefined)[] = [];
   const ctx = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
@@ -41,9 +42,12 @@ function createFakeCtx(mode: Mode = "tui") {
       notify: (message: string, type?: string) => {
         notifications.push({ message, type });
       },
+      setWorkingMessage: (message?: string) => {
+        workingMessages.push(message);
+      },
     },
   } as unknown as ExtensionContext;
-  return { ctx, notifications };
+  return { ctx, notifications, workingMessages };
 }
 
 function controlledClock(start = 0) {
@@ -56,6 +60,42 @@ function controlledClock(start = 0) {
   };
 }
 
+/** Manual interval scheduler so ticks are driven by the test, not by real time. */
+function createFakeScheduler() {
+  const timers = new Map<number, () => void>();
+  let nextHandle = 1;
+  return {
+    setInterval: (callback: () => void) => {
+      const handle = nextHandle++;
+      timers.set(handle, callback);
+      return handle as unknown as ReturnType<typeof setInterval>;
+    },
+    clearInterval: (handle: ReturnType<typeof setInterval>) => {
+      timers.delete(handle as unknown as number);
+    },
+    /** Run every active interval callback `times` times. */
+    tick: (times = 1) => {
+      for (let i = 0; i < times; i += 1) for (const callback of [...timers.values()]) callback();
+    },
+    activeCount: () => timers.size,
+  };
+}
+
+/** Register the extension with deterministic clock and scheduler deps. */
+function registerForTest(
+  pi: FakePi,
+  clock: ReturnType<typeof controlledClock>,
+  scheduler: ReturnType<typeof createFakeScheduler>,
+  format = DEFAULT_FORMAT,
+): void {
+  registerMetrics(pi as unknown as ExtensionAPI, {
+    now: clock.now,
+    loadConfig: () => ({ config: { format } }),
+    setInterval: scheduler.setInterval,
+    clearInterval: scheduler.clearInterval,
+  });
+}
+
 function assistantMessage(input: number, output: number, costUsd?: number) {
   return {
     role: "assistant",
@@ -65,13 +105,11 @@ function assistantMessage(input: number, output: number, costUsd?: number) {
 
 function setup(mode: Mode = "tui", format = DEFAULT_FORMAT) {
   const clock = controlledClock();
-  const { ctx, notifications } = createFakeCtx(mode);
+  const { ctx, notifications, workingMessages } = createFakeCtx(mode);
+  const scheduler = createFakeScheduler();
   const pi = createFakePi();
-  registerMetrics(pi as unknown as ExtensionAPI, {
-    now: clock.now,
-    loadConfig: () => ({ config: { format } }),
-  });
-  return { clock, ctx, notifications, pi };
+  registerForTest(pi, clock, scheduler, format);
+  return { clock, ctx, notifications, workingMessages, scheduler, pi };
 }
 
 /** Emit one assistant turn: optional TTFT delay, then `updates` streamed updates. */
@@ -292,10 +330,7 @@ describe("pi-metrics extension", () => {
     const rpc = createFakeCtx("rpc");
     const tui = createFakeCtx("tui");
     const pi = createFakePi();
-    registerMetrics(pi as unknown as ExtensionAPI, {
-      now: clock.now,
-      loadConfig: () => ({ config: { format: DEFAULT_FORMAT } }),
-    });
+    registerForTest(pi, clock, createFakeScheduler());
 
     pi.emit("input", { source: "interactive", text: "first" }, rpc.ctx);
     pi.emit("agent_start", {}, rpc.ctx);
@@ -457,10 +492,12 @@ describe("pi-metrics extension", () => {
     const clock = controlledClock();
     const { ctx, notifications } = createFakeCtx("tui");
     const pi = createFakePi();
-    registerMetrics(pi as unknown as ExtensionAPI, {
-      now: clock.now,
-      loadConfig: () => ({ config: { format: "{elapsed} | {input} → {output} | {tps} tok/s" } }),
-    });
+    registerForTest(
+      pi,
+      clock,
+      createFakeScheduler(),
+      "{elapsed} | {input} → {output} | {tps} tok/s",
+    );
 
     pi.emit("input", { source: "interactive", text: "go" }, ctx);
     pi.emit("agent_start", {}, ctx);
@@ -533,9 +570,12 @@ describe("pi-metrics extension", () => {
     const clock = controlledClock();
     const { ctx, notifications } = createFakeCtx("tui");
     const pi = createFakePi();
+    const scheduler = createFakeScheduler();
     registerMetrics(pi as unknown as ExtensionAPI, {
       now: clock.now,
       loadConfig: () => ({ config: { format: DEFAULT_FORMAT }, warning: "pi-metrics: bad config" }),
+      setInterval: scheduler.setInterval,
+      clearInterval: scheduler.clearInterval,
     });
 
     pi.emit("session_start", {}, ctx);
@@ -543,5 +583,127 @@ describe("pi-metrics extension", () => {
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]?.type, "warning");
     assert.equal(notifications[0]?.message, "pi-metrics: bad config");
+  });
+
+  test("the working indicator counts elapsed from the input event", () => {
+    const { clock, ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("input", { source: "interactive", text: "go" }, ctx);
+    clock.advance(3_000); // auth check or pre-prompt compaction
+    pi.emit("before_agent_start", { prompt: "go" }, ctx);
+    pi.emit("agent_start", {}, ctx);
+
+    assert.equal(workingMessages.at(-1), "Working (3s)");
+    assert.equal(scheduler.activeCount(), 1);
+  });
+
+  test("the working indicator ticks and is restored when the run settles", () => {
+    const { clock, ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("agent_start", {}, ctx);
+    assert.equal(workingMessages.at(-1), "Working (0s)");
+
+    clock.advance(5_000);
+    scheduler.tick();
+    assert.equal(workingMessages.at(-1), "Working (5s)");
+
+    clock.advance(60_000);
+    scheduler.tick();
+    assert.equal(workingMessages.at(-1), "Working (1m5s)");
+
+    pi.emit("agent_settled", {}, ctx);
+    assert.equal(workingMessages.at(-1), undefined);
+    assert.equal(scheduler.activeCount(), 0);
+  });
+
+  test("a steer during a run does not restart the elapsed time", () => {
+    const { clock, ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("input", { source: "interactive", text: "go" }, ctx);
+    pi.emit("before_agent_start", { prompt: "go" }, ctx);
+    pi.emit("agent_start", {}, ctx);
+
+    clock.advance(10_000);
+    pi.emit("input", { source: "interactive", text: "stop", streamingBehavior: "steer" }, ctx);
+    scheduler.tick();
+    assert.equal(workingMessages.at(-1), "Working (10s)");
+  });
+
+  test("a prompt that never runs does not leak its send time into the next run", () => {
+    const { clock, ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    // The input is rejected before `before_agent_start`; only the clock moves.
+    pi.emit("input", { source: "interactive", text: "/bad" }, ctx);
+    clock.advance(30_000);
+    // An extension-injected run starts without a user input.
+    pi.emit("agent_start", {}, ctx);
+    scheduler.tick();
+
+    assert.equal(workingMessages.at(-1), "Working (0s)");
+  });
+
+  test("non-TUI modes do not schedule or set a working message", () => {
+    const { ctx, workingMessages, scheduler, pi } = setup("print");
+
+    pi.emit("input", { source: "interactive", text: "go" }, ctx);
+    pi.emit("before_agent_start", { prompt: "go" }, ctx);
+    pi.emit("agent_start", {}, ctx);
+
+    assert.equal(scheduler.activeCount(), 0);
+    assert.equal(workingMessages.length, 0);
+  });
+
+  test("session_start stops the working timer and restores the message", () => {
+    const { ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("agent_start", {}, ctx);
+    assert.equal(scheduler.activeCount(), 1);
+    pi.emit("session_start", {}, ctx);
+    assert.equal(scheduler.activeCount(), 0);
+    assert.equal(workingMessages.at(-1), undefined);
+  });
+
+  test("a duplicate agent_start keeps a single working timer", () => {
+    const { clock, ctx, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("agent_start", {}, ctx);
+    clock.advance(10_000);
+    // A continuation or retry emits `agent_start` again within the same run.
+    pi.emit("agent_start", {}, ctx);
+    assert.equal(scheduler.activeCount(), 1);
+
+    scheduler.tick();
+    assert.equal(workingMessages.at(-1), "Working (10s)");
+
+    pi.emit("agent_settled", {}, ctx);
+    assert.equal(scheduler.activeCount(), 0);
+  });
+
+  test("a new input replaces a rejected input's send time", () => {
+    const { clock, ctx, workingMessages, pi } = setup("tui");
+
+    pi.emit("input", { source: "interactive", text: "/bad" }, ctx);
+    clock.advance(30_000);
+    pi.emit("input", { source: "interactive", text: "real" }, ctx);
+    pi.emit("before_agent_start", { prompt: "real" }, ctx);
+    pi.emit("agent_start", {}, ctx);
+
+    assert.equal(workingMessages.at(-1), "Working (0s)");
+  });
+
+  test("the settled elapsed shares the send origin with the live indicator", () => {
+    const { clock, ctx, notifications, workingMessages, scheduler, pi } = setup("tui");
+
+    pi.emit("input", { source: "interactive", text: "go" }, ctx);
+    clock.advance(3_000); // auth check or pre-prompt compaction
+    pi.emit("before_agent_start", { prompt: "go" }, ctx);
+    pi.emit("agent_start", {}, ctx);
+    clock.advance(2_000);
+    scheduler.tick();
+    assert.equal(workingMessages.at(-1), "Working (5s)");
+
+    pi.emit("agent_settled", {}, ctx);
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0]?.message ?? "", /Worked for 5\.0s/);
   });
 });

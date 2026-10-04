@@ -1,7 +1,7 @@
 {
   "name": "@yuru7/pi-metrics",
   "version": "0.1.0",
-  "description": "A Pi extension that prints one dim metrics line when a run settles: elapsed, TPS, TTFT, input and output tokens",
+  "description": "A Pi extension that prints one dim metrics line when a run settles (elapsed, TPS, TTFT, tokens) and shows the live elapsed time in the working indicator",
   "keywords": [
     "pi-package",
     "pi-coding-agent",

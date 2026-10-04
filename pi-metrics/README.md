@@ -12,6 +12,10 @@ Metrics are collected from `agent_start` through `agent_settled`, so a run with
 several turns and tool calls produces exactly one line. Retries, auto-compaction,
 and queued follow-ups that happen before the run settles are all included.
 
+While a run is active, Pi's working indicator above the editor gains a live
+elapsed time: `⠋ Working (5s)`. It counts from the prompt's `input` event, the
+same origin as `{elapsed}` in the settled line, and refreshes every second.
+
 ## Install
 
 ```bash
@@ -41,7 +45,7 @@ The `format` string may use these placeholders:
 
 | Placeholder | Meaning | Example |
 | --- | --- | --- |
-| `{elapsed}` | Run start (`agent_start`) through `agent_settled` | `1m 19.1s` |
+| `{elapsed}` | Prompt send (`input`) through `agent_settled` | `1m 19.1s` |
 | `{tps}` | Output tokens per second of generation | `227.8` |
 | `{ttft}` | Time to first token of the first measurable turn | `2.0s` |
 | `{input}` | Input tokens summed over all turns | `12.2K` |
@@ -71,11 +75,28 @@ A missing file is normal and silent. Invalid JSON or a non-string `format`
 falls back to the default format and shows one warning. Pi keeps working either
 way, and unknown fields are ignored.
 
+## Live working indicator
+
+While a run is active, Pi's streaming indicator above the editor shows the
+elapsed time since you sent the message: `Working (5s)`, `Working (1m19s)`,
+`Working (1h2m3s)`. It uses whole seconds without decimals or spaces and only
+the units that have passed.
+
+The timer starts at the prompt's `input` event, so the wait for authentication
+and any pre-prompt compaction is included, and it refreshes every second until
+the run settles. On settle, Pi's default working message is restored. The value
+is driven in TUI mode only, matching the metrics line.
+
+The live value and `{elapsed}` in the settled line share one origin: the
+prompt's `input` event. The live value refreshes every second and shows whole
+seconds, while the settled value is taken at `agent_settled` with one decimal
+place.
+
 ## What the numbers mean
 
-- **elapsed** starts when the run starts (`agent_start`). Input handling,
-  authentication checks, compaction, and image resizing that happen before the
-  run are not counted.
+- **elapsed** starts when the prompt was sent (`input`), so the wait for
+  authentication and any pre-prompt compaction is included, and ends at
+  `agent_settled`.
 - **cost** is the sum of `usage.cost.total` over the run's finalized assistant
   messages, in US dollars. It reflects the cost the provider reports for those
   messages, not a separate billing statement. Providers that do not report a
@@ -103,8 +124,8 @@ way, and unknown fields are ignored.
 
 The line uses the standard theme's `dim` color with no background. Nothing is
 written to the session, so resuming a session does not replay old metrics.
-Metrics are not rendered in non-interactive modes (`rpc`, `json`, `print`);
-state is still reset so the next run starts clean.
+Metrics and the live working indicator are not rendered in non-interactive modes
+(`rpc`, `json`, `print`); state is still reset so the next run starts clean.
 
 ## Development
 

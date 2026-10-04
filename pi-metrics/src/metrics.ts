@@ -3,7 +3,9 @@
  *
  * Pure logic with an injectable clock: no Pi UI, no session state, no
  * persistence. A run spans `agent_start` through `agent_settled` and may
- * contain several turns (tool loops, retries). Display totals sum every
+ * contain several turns (tool loops, retries). The elapsed anchor is
+ * caller-provided, so a run can start counting at the prompt's send instead of
+ * at `agent_start`. Display totals sum every
  * message, while TPS is aggregated as measured output over measured generation
  * time, with a turn-duration estimate (shown as approximate) when a turn has no
  * measurable delta span.
@@ -45,7 +47,7 @@ export function isAssistantMessage(value: unknown): value is AssistantMessageLik
 
 /** Aggregated metrics for one settled run. */
 export interface RunMetrics {
-  /** From `agent_start` to `agent_settled`. */
+  /** From the run's start (the prompt's send when the caller provides it) to `agent_settled`. */
   elapsedMs: number;
   /** Weighted output-token rate, or null when no turn had measurable output. */
   tps: number | null;
@@ -172,13 +174,18 @@ export class MetricsTracker {
   }
 
   /**
-   * Start a run when idle. Elapsed is measured from `agent_start`, the first
-   * event guaranteed to be followed by `agent_settled`, so a prompt that never
-   * becomes a run cannot leave a stale timer behind. A steer or follow-up
-   * mid-run keeps the original start.
+   * Start a run when idle. `startedAtMs` defaults to now; the caller may pass
+   * the prompt's send time so elapsed covers the wait before `agent_start`. A
+   * second call while a run is active keeps the original start, so a steer,
+   * continuation, or retry cannot restart it.
    */
-  startRun(): void {
-    if (this.runStartedAtMs === null) this.runStartedAtMs = this.now();
+  startRun(startedAtMs = this.now()): void {
+    if (this.runStartedAtMs === null) this.runStartedAtMs = startedAtMs;
+  }
+
+  /** Milliseconds since the current run started, or null when no run is active. */
+  elapsedMs(): number | null {
+    return this.runStartedAtMs === null ? null : this.now() - this.runStartedAtMs;
   }
 
   /**
