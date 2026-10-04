@@ -1,0 +1,113 @@
+/**
+ * Pure formatting helpers for the completion metrics line.
+ *
+ * No Pi or Node dependency: every function is deterministic and unit-tested.
+ */
+
+const MS_PER_SECOND = 1_000;
+const SECONDS_PER_MINUTE = 60;
+const MINUTES_PER_HOUR = 60;
+
+const TOKEN_PER_THOUSAND = 1_000;
+const TOKEN_PER_MILLION = 1_000_000;
+/** One decimal place for K/M values; a trailing `.0` is dropped. */
+const SCALED_DECIMAL_PLACES = 1;
+const ZERO_DECIMAL_SUFFIX = ".0";
+const DURATION_DECIMAL_PLACES = 1;
+const TPS_DECIMAL_PLACES = 1;
+
+/** Placeholder values substituted into a user format string. */
+export interface MetricValues {
+  elapsed: string;
+  tps: string;
+  ttft: string;
+  input: string;
+  output: string;
+}
+
+/** Raw metrics needed to render one line. */
+export interface RawMetrics {
+  elapsedMs: number;
+  tps: number | null;
+  /** True when `tps` is a turn-duration estimate, rendered with a leading `≈`. */
+  tpsEstimated?: boolean;
+  ttftMs: number | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Placeholder names recognized in a format string; anything else is left as-is. */
+const PLACEHOLDER_PATTERN = /\{(elapsed|tps|ttft|input|output)\}/g;
+
+/**
+ * Format a duration in milliseconds for `{elapsed}` / `{ttft}`.
+ *
+ * Under a minute: `2.0s`. Under an hour: `1m 19.1s`. Longer: `1h 12m`.
+ */
+export function formatDuration(ms: number): string {
+  const totalSeconds = ms / MS_PER_SECOND;
+  if (totalSeconds < SECONDS_PER_MINUTE) {
+    return `${totalSeconds.toFixed(DURATION_DECIMAL_PLACES)}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / SECONDS_PER_MINUTE);
+  if (totalMinutes < MINUTES_PER_HOUR) {
+    const seconds = totalSeconds - totalMinutes * SECONDS_PER_MINUTE;
+    return `${totalMinutes}m ${seconds.toFixed(DURATION_DECIMAL_PLACES)}s`;
+  }
+  const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  const minutes = totalMinutes % MINUTES_PER_HOUR;
+  return `${hours}h ${minutes}m`;
+}
+
+/** Round a scaled count to the displayed precision. */
+function roundScaled(value: number): number {
+  const factor = 10 ** SCALED_DECIMAL_PLACES;
+  return Math.round(value * factor) / factor;
+}
+
+/** Round to one decimal and drop a trailing `.0` (1000 → `1K`, 1234 → `1.2K`). */
+function scaleCount(value: number, suffix: string): string {
+  const rounded = roundScaled(value);
+  const formatted = rounded.toFixed(SCALED_DECIMAL_PLACES);
+  return formatted.endsWith(ZERO_DECIMAL_SUFFIX)
+    ? `${rounded.toFixed(0)}${suffix}`
+    : `${formatted}${suffix}`;
+}
+
+/**
+ * Format a token count for `{input}` / `{output}`: 999, 1K, 1.2K, 12.2K, 1M.
+ *
+ * The unit is chosen from the rounded value, so a count that would display as
+ * `1000.0K` (999_950..999_999) is promoted to millions instead.
+ */
+export function formatTokens(count: number): string {
+  if (count < TOKEN_PER_THOUSAND) return String(count);
+  const thousands = count / TOKEN_PER_THOUSAND;
+  if (count < TOKEN_PER_MILLION && roundScaled(thousands) < TOKEN_PER_THOUSAND) {
+    return scaleCount(thousands, "K");
+  }
+  return scaleCount(count / TOKEN_PER_MILLION, "M");
+}
+
+/**
+ * Replace the known placeholders in a format string. Every occurrence is
+ * replaced; unknown placeholders such as `{foo}` are kept verbatim so typos
+ * stay visible and future placeholders remain valid.
+ */
+export function renderFormat(format: string, values: MetricValues): string {
+  return format.replace(PLACEHOLDER_PATTERN, (_match, key: keyof MetricValues) => values[key]);
+}
+
+/** Format raw metrics into one line using the configured format string. */
+export function renderMetrics(format: string, metrics: RawMetrics): string {
+  return renderFormat(format, {
+    elapsed: formatDuration(metrics.elapsedMs),
+    tps:
+      metrics.tps === null
+        ? "n/a"
+        : `${metrics.tpsEstimated === true ? "≈" : ""}${metrics.tps.toFixed(TPS_DECIMAL_PLACES)}`,
+    ttft: metrics.ttftMs === null ? "n/a" : formatDuration(metrics.ttftMs),
+    input: formatTokens(metrics.inputTokens),
+    output: formatTokens(metrics.outputTokens),
+  });
+}
