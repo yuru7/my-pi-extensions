@@ -26,6 +26,7 @@
     "extensions",
     "src",
     "README.md",
+    "README_ja.md",
     "LICENSE"
   ],
   "engines": {
