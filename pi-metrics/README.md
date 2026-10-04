@@ -2,7 +2,7 @@
 
 English | [日本語](./README_ja.md)
 
-A Pi extension that prints one dim metrics line after each run finishes.
+A Pi Coding Agent extension that prints a metrics line after each run finishes.
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
@@ -11,12 +11,11 @@ Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K · c
 ```
 
 Metrics are collected from `agent_start` through `agent_settled`, so a run with
-several turns and tool calls produces exactly one line. Retries, auto-compaction,
-and queued follow-ups that happen before the run settles are all included.
+several turns and tool calls shows only one line. Retries, Compaction, and
+queued follow-ups that happen before the run settles are all included.
 
-While a run is active, Pi's working indicator above the editor gains a live
-elapsed time: `⠋ Working (5s)`. It counts from the prompt's `input` event, the
-same origin as `{elapsed}` in the settled line, and refreshes every second.
+While a run is active, Pi's working indicator above the editor shows the live
+elapsed time, for example `Working (5s)`.
 
 ## Install
 
@@ -24,18 +23,12 @@ same origin as `{elapsed}` in the settled line, and refreshes every second.
 pi install npm:@yuru7/pi-metrics
 ```
 
-Or load it directly while developing:
-
-```bash
-pi --extension ./extensions/index.ts
-```
-
 ## Configuration
 
 Create `pi-metrics.json` in Pi's agent directory
 (`~/.pi/agent/pi-metrics.json` by default; `PI_CODING_AGENT_DIR` and a
 customized config directory are honored). The file is optional; without it the
-default format above is used.
+default format below is used.
 
 ```json
 {

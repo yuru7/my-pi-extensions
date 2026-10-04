@@ -2,7 +2,7 @@
 
 # pi-metrics
 
-実行が終わるたびに、薄字（dim）のメトリクス行を1行だけ出力する Pi 拡張です。
+実行が終わるたびに、メトリクス行を出力する Pi Coding Agents 拡張機能。
 
 リポジトリ: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
@@ -10,9 +10,9 @@
 Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K · cost $1.234567
 ```
 
-メトリクスは `agent_start` から `agent_settled` までを対象に収集するため、複数のターンやツール呼び出しを含む実行でも行はちょうど1行になります。リトライ、自動コンパクション、実行が settle する前にキューへ入ったフォローアップもすべて含まれます。
+メトリクスは `agent_start` から `agent_settled` までを対象に収集するため、複数のターンやツール呼び出しを含む実行でも1行のみ表示されます。リトライ、Compaction、実行が settle する前にキューへ入ったフォローアップもすべて含まれます。
 
-実行中は、エディタ上部にある Pi の working インジケータに経過時間がライブ表示されます: `⠋ Working (5s)`。これはプロンプトの `input` イベントを起点にカウントし、確定行の `{elapsed}` と同じ起点を持ち、毎秒更新されます。
+実行中は、エディタ上部にある Pi の working インジケータに `Working (5s)` のように経過時間がライブ表示されます。
 
 ## インストール
 
@@ -20,15 +20,9 @@ Worked for 1m 19.1s · TPS 227.8 tok/s · TTFT 2.0s · in 12.2K · out 1.7K · c
 pi install npm:@yuru7/pi-metrics
 ```
 
-開発中に直接読み込む場合:
-
-```bash
-pi --extension ./extensions/index.ts
-```
-
 ## 設定
 
-Pi のエージェントディレクトリ（既定では `~/.pi/agent/pi-metrics.json`。`PI_CODING_AGENT_DIR` やカスタマイズした設定ディレクトリも考慮されます）に `pi-metrics.json` を作成します。ファイルは省略可能で、なければ上記の既定フォーマットが使われます。
+Pi のエージェントディレクトリ（既定では `~/.pi/agent/pi-metrics.json`。`PI_CODING_AGENT_DIR` やカスタマイズした設定ディレクトリも考慮されます）に `pi-metrics.json` を作成します。ファイルは省略可能で、なければ下記の既定フォーマットが使われます。
 
 ```json
 {
