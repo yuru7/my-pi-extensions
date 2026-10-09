@@ -204,6 +204,10 @@ cd <writable project dir> && PI_CODING_AGENT_DIR="$AG" pi
 
 観察結果および検証記録は `docs/superpowers/specs/2026-09-30-escalation-approval-forwarding-design.md` §11 に記載されています。
 
+## 謝辞
+
+この拡張は [yandy/pi-packages](https://github.com/yandy/pi-packages) の [`pi-sandbox`](https://github.com/yandy/pi-packages/tree/main/pi-sandbox) にインスパイアされて作成しました。
+
 ## ライセンス
 
 MIT

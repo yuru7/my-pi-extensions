@@ -204,6 +204,12 @@ cd <writable project dir> && PI_CODING_AGENT_DIR="$AG" pi
 
 Observations and the verification record live in `docs/superpowers/specs/2026-09-30-escalation-approval-forwarding-design.md` §11.
 
+## Acknowledgements
+
+This extension was inspired by
+[`pi-sandbox`](https://github.com/yandy/pi-packages/tree/main/pi-sandbox)
+in [yandy/pi-packages](https://github.com/yandy/pi-packages).
+
 ## License
 
 MIT
