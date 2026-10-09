@@ -4,7 +4,7 @@
 		"access": "public"
 	},
 	"version": "0.1.0",
-	"description": "pi coding-agent extension: process-level sandbox (bwrap / landlock / seatbelt / windows-acl) — workspace writable, everything else readable, fail-closed",
+	"description": "Process-level, path-transparent sandbox for Pi coding agent with fail-closed workspace protection (bwrap, landlock, seatbelt, windows-acl) and denial-first AI auto-review escalation",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
@@ -13,7 +13,11 @@
 	},
 	"type": "module",
 	"keywords": [
-		"pi-package"
+		"pi-package",
+		"pi-coding-agent",
+		"pi-extension",
+		"sandbox",
+		"auto-review"
 	],
 	"files": [
 		"index.ts",
