@@ -68,11 +68,36 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
 	globalApproval: DEFAULT_APPROVAL,
 };
 
+/**
+ * `/pi-sandbox init` が書き出す既定設定。未設定時の組み込み既定値と同じ内容。
+ */
+export function buildDefaultConfigFile(): Record<string, unknown> {
+	return {
+		mode: DEFAULT_SANDBOX_CONFIG.mode,
+		runnerCommand: DEFAULT_SANDBOX_CONFIG.runnerCommand,
+		runnerFailureSignatures: DEFAULT_SANDBOX_CONFIG.runnerFailureSignatures,
+		probeTimeoutMs: DEFAULT_SANDBOX_CONFIG.probeTimeoutMs,
+		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
+		autoReview: {
+			model: DEFAULT_SANDBOX_CONFIG.autoReview.model,
+			thinkingLevel: DEFAULT_SANDBOX_CONFIG.autoReview.thinkingLevel,
+		},
+	};
+}
+
 const APPROVAL_MODES = ["human", "auto-review", "allow-all"] as const;
 const LEGACY_GROUPS = ["image", "runtime", "host"] as const;
 const SANDBOX_FIELD_KEYS = ["mode", "runnerCommand", "runnerFailureSignatures", "probeTimeoutMs"] as const;
 const NEW_CONFIG_NAME = "pi-sandbox.json";
 const LEGACY_CONFIG_NAME = "sandbox.json";
+
+/** `pi-sandbox.json` のグローバルとプロジェクトのパス。 */
+export function piSandboxConfigPaths(hostCwd: string, agentDir = getAgentDir()): { globalPath: string; projectPath: string } {
+	return {
+		globalPath: resolvePath(agentDir, NEW_CONFIG_NAME),
+		projectPath: resolvePath(hostCwd, CONFIG_DIR_NAME, NEW_CONFIG_NAME),
+	};
+}
 
 export function isApprovalMode(value: unknown): value is ApprovalMode {
 	return typeof value === "string" && (APPROVAL_MODES as readonly string[]).includes(value);

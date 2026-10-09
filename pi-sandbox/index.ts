@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { approvalStatusLine, getSandboxConfig } from "./src/config";
 import { getDenialLedger } from "./src/denial-ledger";
 import { getEscalationBroker } from "./src/escalation-broker";
+import { createPiSandboxCommand } from "./src/init-command";
 import { createPermissionCommand, processPermissionState } from "./src/permission";
 import { canonicalPath } from "./src/policy";
 import { selectRunner } from "./src/runners";
@@ -163,6 +164,9 @@ export default function (pi: ExtensionAPI) {
 			return lines.join("\n");
 		},
 	}));
+
+	// /pi-sandbox init writes the default pi-sandbox.json (global or project; confirm before overwrite).
+	pi.registerCommand("pi-sandbox", createPiSandboxCommand());
 
 	// 提权审批转发（spec 2026-09-30 §4.5）：子会话 hasUI=false，其提权请求经 broker 路由到父会话弹窗。
 	// broker 挂 globalThis——父子是各自独立的 jiti 实例，模块单例不共享。

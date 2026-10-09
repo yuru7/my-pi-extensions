@@ -71,6 +71,10 @@ PowerShell の言語モードは ACL の境界ではなく、起動時の制約�
 - `/permission` — 現在のステータス（モードとソース、選択されたランナーと適用レベル、ワークスペース）を表示
 - `/permission <read-only|workspace-write|danger-full-access>` — モードを**プロセス全体**で切り替え。親セッションおよびすべてのサブエージェント子セッションにおける次回のツール呼び出しから即座に適用されます
 
+## /pi-sandbox コマンド
+
+- `/pi-sandbox init` — 下記のデフォルト設定で `pi-sandbox.json` を書き出します。保存先はグローバルのエージェントディレクトリか `<project>/.pi/` から選びます。そのファイルが既にある場合は上書き前に確認し、キャンセルするとファイルはそのまま残ります。同じディレクトリのレガシー `sandbox.json` は引き続き読み込まれ、新しいファイルのフィールドが優先されます。`/permission` で切り替えたモードは、ファイルより優先されます
+
 ## エスカレーション承認（モデル主導、拒否先行）
 
 bash/write/edit は2つのオプションパラメータを受け取ります: `sandbox_permissions`（`workspace-write` または `danger-full-access`）+ `justification`（1文の理由）。承認は**拒否先行（denial-first）**です:
@@ -119,7 +123,7 @@ Falling back to the active model "provider/model-B".
 
 グローバル設定ファイルは、`getAgentDir()` で取得される Pi のエージェントディレクトリ（通常は `~/.pi/agent`、環境変数 `$PI_CODING_AGENT_DIR` が設定されている場合はそのパス）に配置されます。本拡張機能に手動で作成した `~/.pi/agent` パスを指定しないでください。現在の Pi では、SDK の `agentDir` オプションは拡張機能のコンテキストから参照できません。プロセスで別のエージェントディレクトリを使用する場合は、`PI_CODING_AGENT_DIR` も設定してください。
 
-プロジェクト設定ファイルは `<project>/.pi/` に配置されます。設定ファイルが自動生成されることはなく、既存の古いファイルもそのまま残されます。
+プロジェクト設定ファイルは `<project>/.pi/` に配置されます。起動時に設定ファイルが自動生成されることはありません。`/pi-sandbox init` を実行したときだけ `pi-sandbox.json` を書き出します。レガシーな `sandbox.json` はそのまま残されます。
 
 フィールドごとの優先順位（後ろの方が優先）:
 
@@ -168,7 +172,7 @@ Falling back to the active model "provider/model-B".
 
 ## pi-container-sandbox 1.x からの移行
 
-- 以前の設定ファイル（エージェントディレクトリおよび `<project>/.pi/` 内の `sandbox.json`）は引き続き読み込まれます。新しい設定は同じディレクトリ内の `pi-sandbox.json` に記述してください。従来の `image`/`runtime`/`host` セクションは警告付きで無視されます。必要に応じて上記の設定フィールドに書き直してください。既存のファイルが削除または上書きされることはなく、ファイルが存在しない場合に自動作成されることもありません
+- 以前の設定ファイル（エージェントディレクトリおよび `<project>/.pi/` 内の `sandbox.json`）は引き続き読み込まれます。新しい設定は同じディレクトリ内の `pi-sandbox.json` に記述してください。従来の `image`/`runtime`/`host` セクションは警告付きで無視されます。必要に応じて上記の設定フィールドに書き直してください。既存の `sandbox.json` が削除または上書きされることはありません。`/pi-sandbox init` は `pi-sandbox.json` を新規作成し、そのファイルの上書きは確認のあとだけ行います
 - コンテナランタイム（docker/podman）、イメージビルド、`runtime.mounts`、`/sandbox` コマンド、`--container*` フラグ、および外部パスの承認フローは本パッケージには含まれません
 - コンテナレベルの分離（独立したファイルシステム/ネットワーク名前空間）が必要な場合は、`@yuru7/pi-container-sandbox` をインストールしてください（コンテナ実装が維持されています）
 - `pi-sandbox` と `@yuru7/pi-container-sandbox` は**排他利用**です。両方が `bash`/`write`/`edit` を乗っ取り、両方が `sandbox.json` を読み込みます（スキーマに互換性はありません）。同時に有効化せず、切り替える前に一方をアンインストールまたは無効化してください。なお、本パッケージはコンテナパッケージが読み込まない `pi-sandbox.json` も読み込みます

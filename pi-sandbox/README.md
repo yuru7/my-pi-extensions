@@ -71,6 +71,10 @@ Network is always allowed (no network isolation).
 - `/permission` — show the current status (mode and source, selected runner and enforcement, workspace)
 - `/permission <read-only|workspace-write|danger-full-access>` — switch mode, **process-wide**: the next tool call in the parent session and in every subagent child session adopts it immediately
 
+## /pi-sandbox command
+
+- `/pi-sandbox init` — write `pi-sandbox.json` with the default settings shown below. Choose the global agent directory or `<project>/.pi/`. If that file already exists, the command asks before overwriting; cancelling leaves it unchanged. Legacy `sandbox.json` in the same directory is still read, and fields in the new file override it. A `/permission` override still takes precedence over the file
+
 ## Escalation approval (model-initiated, denial-first)
 
 bash/write/edit take two optional parameters: `sandbox_permissions` (`workspace-write` or `danger-full-access`) + `justification` (a one-sentence reason). Approval is **denial-first**:
@@ -119,7 +123,7 @@ This is a risk judgment, not a guarantee. `danger-full-access` removes the sandb
 
 Global files live in Pi's agent directory from `getAgentDir()` (usually `~/.pi/agent`, or `$PI_CODING_AGENT_DIR` when that variable is set). Do not point this extension at a hand-built `~/.pi/agent` path. The SDK `agentDir` option is not visible on the extension context in current Pi; set `PI_CODING_AGENT_DIR` as well when a process should use a different agent directory.
 
-Project files live in `<project>/.pi/`. Nothing here creates a config file for you, and old files are left in place.
+Project files live in `<project>/.pi/`. The extension does not create a config file on startup. `/pi-sandbox init` writes `pi-sandbox.json` when you ask it to. Legacy `sandbox.json` files are left in place.
 
 Priority, per field (later wins):
 
@@ -168,7 +172,7 @@ Priority, per field (later wins):
 
 ## Migrating from pi-container-sandbox 1.x
 
-- Legacy config files (`sandbox.json` in the agent directory and in `<project>/.pi/`) are still read. New settings belong in `pi-sandbox.json` in those same directories. Legacy `image`/`runtime`/`host` sections are ignored with a warning — rewrite them as the fields above as needed. Existing files are not deleted or rewritten, and a missing file is not created for you
+- Legacy config files (`sandbox.json` in the agent directory and in `<project>/.pi/`) are still read. New settings belong in `pi-sandbox.json` in those same directories. Legacy `image`/`runtime`/`host` sections are ignored with a warning — rewrite them as the fields above as needed. Existing `sandbox.json` files are not deleted or rewritten. `/pi-sandbox init` creates `pi-sandbox.json`, and overwrites that file only after you confirm
 - The container runtime (docker/podman), image builds, `runtime.mounts`, the `/sandbox` command, `--container*` flags, and the external-path approval flow are not part of this package
 - Need container-grade isolation (separate filesystem/network namespaces)? Install `@yuru7/pi-container-sandbox` — it keeps the container implementation
 - `pi-sandbox` and `@yuru7/pi-container-sandbox` are **mutually exclusive**: both take over `bash`/`write`/`edit` and both read `sandbox.json` (with incompatible schemas) — enable only one at a time, and uninstall or disable the other before switching. This package also reads `pi-sandbox.json`, which the container package does not

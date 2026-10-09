@@ -90,7 +90,7 @@ describe("extension activate", () => {
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
 		expect(tools.sort()).toEqual(["bash", "edit", "write"]);
-		expect(commands).toEqual(["permission"]);
+		expect(commands).toEqual(["permission", "pi-sandbox"]);
 		// T15 起多一个 resources_discover（技能平台门控）；其余注册面不变。
 		expect(Object.keys(hooks).sort()).toEqual(["resources_discover", "session_shutdown", "session_start"]);
 		expect(Object.keys(channels).sort()).toEqual(["subagents:child:disposed", "subagents:child:session-created"]);
@@ -133,7 +133,7 @@ describe("extension activate", () => {
 			const activate = (await import("../index")).default;
 			expect(() => activate(fakePi as never)).not.toThrow();
 			expect(tools.sort()).toEqual(["bash", "edit", "write"]);
-			expect(commands).toEqual(["permission"]);
+			expect(commands).toEqual(["permission", "pi-sandbox"]);
 			expect(warn.mock.calls.flat().join(" ")).toMatch(/falling back to defaults/u);
 		} finally {
 			process.chdir(prevCwd);
