@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	formatAutoReviewNotice,
 	formatFallbackWarning,
 	parseReviewerDecision,
+	type DialogueTurn,
+	readRecentDialogue,
 	REVIEW_TIMEOUT_MS,
 	REVIEWER_SYSTEM_PROMPT,
 	type ReviewerModelRef,
@@ -39,8 +42,15 @@ const record: DenialRecord = {
 	recordedAt: Date.now(),
 };
 
-function allow(text = "ALLOW"): ReviewerResponse {
+const ALLOW_TEXT = '{"decision":"ALLOW"}';
+const DENY_REASON = "broader than requested";
+
+function allow(text = ALLOW_TEXT): ReviewerResponse {
 	return { text, stopReason: "stop" };
+}
+
+function deny(reason = DENY_REASON): ReviewerResponse {
+	return { text: JSON.stringify({ decision: "DENY", reason }), stopReason: "stop" };
 }
 
 interface HarnessOptions {
@@ -54,6 +64,8 @@ interface HarnessOptions {
 	signal?: AbortSignal;
 	timeoutMs?: number;
 	justification?: string;
+	dialogue?: DialogueTurn[];
+	omitDialogue?: boolean;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -89,18 +101,55 @@ function harness(options: HarnessOptions = {}) {
 		record,
 		requestedMode: "danger-full-access",
 		justification: options.justification ?? "pnpm needs its store",
+		dialogue: options.omitDialogue
+			? undefined
+			: (options.dialogue ?? [{ user: "install the project dependencies", assistant: "" }]),
 	});
 	return { review, calls, warnings, reviewer, active };
 }
 
 describe("parseReviewerDecision", () => {
-	it("accepts only the exact decision", () => {
-		expect(parseReviewerDecision("ALLOW")).toBe("ALLOW");
-		expect(parseReviewerDecision("\nDENY\n")).toBe("DENY");
+	it("accepts only the two JSON objects", () => {
+		expect(parseReviewerDecision(ALLOW_TEXT)).toEqual({ decision: "ALLOW" });
+		expect(parseReviewerDecision(`\n{"decision":"DENY","reason":"${DENY_REASON}"}\n`)).toEqual({
+			decision: "DENY",
+			denialReason: DENY_REASON,
+		});
+		expect(parseReviewerDecision("ALLOW")).toBeUndefined();
+		expect(parseReviewerDecision("DENY")).toBeUndefined();
 		expect(parseReviewerDecision("allow")).toBeUndefined();
-		expect(parseReviewerDecision("ALLOW.")).toBeUndefined();
-		expect(parseReviewerDecision("ALLOW\nDENY")).toBeUndefined();
+		expect(parseReviewerDecision('{"decision":"ALLOW","reason":"extra"}')).toBeUndefined();
+		expect(parseReviewerDecision('{"decision":"DENY"}')).toBeUndefined();
+		expect(parseReviewerDecision('{"decision":"DENY","reason":"  "}')).toBeUndefined();
+		expect(parseReviewerDecision('{"decision":"DENY","reason":"no","extra":true}')).toBeUndefined();
+		expect(parseReviewerDecision('```json\n{"decision":"ALLOW"}\n```')).toBeUndefined();
 		expect(parseReviewerDecision("")).toBeUndefined();
+	});
+
+	it("collapses whitespace, redacts secrets, and caps the reason", () => {
+		expect(parseReviewerDecision('{"decision":"DENY","reason":"too\\nbroad  here"}')).toEqual({
+			decision: "DENY",
+			denialReason: "too broad here",
+		});
+		expect(parseReviewerDecision('{"decision":"DENY","reason":"token sk-supersecretkey"}')).toEqual({
+			decision: "DENY",
+			denialReason: "token [redacted]",
+		});
+		const parsed = parseReviewerDecision(JSON.stringify({ decision: "DENY", reason: "x".repeat(501) }));
+		expect(parsed?.decision).toBe("DENY");
+		if (parsed?.decision !== "DENY") return;
+		expect(parsed.denialReason).toHaveLength(501);
+		expect(parsed.denialReason.endsWith("…")).toBe(true);
+	});
+});
+
+describe("formatAutoReviewNotice", () => {
+	it("puts a model reason only on a DENY notice", () => {
+		expect(formatAutoReviewNotice({ decision: "ALLOW" })).toBe("[pi-sandbox] Auto-review: ALLOW");
+		expect(formatAutoReviewNotice({ decision: "DENY", denialReason: DENY_REASON })).toBe(
+			`[pi-sandbox] Auto-review: DENY\n${DENY_REASON}`,
+		);
+		expect(formatAutoReviewNotice({ decision: "DENY" })).toBe("[pi-sandbox] Auto-review: DENY");
 	});
 });
 
@@ -113,13 +162,65 @@ describe("reviewEscalation", () => {
 		expect(calls[0]?.request.systemPrompt).toBe(REVIEWER_SYSTEM_PROMPT);
 		expect(calls[0]?.request.thinkingLevel).toBe("low");
 		expect(calls[0]?.request.userText).toContain("pnpm install");
+		expect(calls[0]?.request.userText).toContain("install the project dependencies");
 		expect(calls[0]?.request.userText).toContain("untrusted data");
+		expect(calls[0]?.request.userText).toContain('"available":true');
 		expect(calls[0]?.request.userText).not.toContain("sk-");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain("direct way to carry out those user instructions");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain("Do not DENY only because that mode is broad");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain("It does not mean the mode name is wider than the file change");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain("Its absence is not an unclear risk and is not a reason to DENY");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain("do not DENY the escalation for being outside the workspace");
+		expect(REVIEWER_SYSTEM_PROMPT).toContain('{"decision":"DENY","reason":"one short sentence"}');
+	});
+
+	it("sends the latest three turns and redacts secrets in them", async () => {
+		const { review, calls } = harness({
+			dialogue: [
+				{ user: "TOO-OLD", assistant: "old reply" },
+				{ user: "install deps", assistant: "I will install them" },
+				{ user: "the token is sk-supersecretkey", assistant: "" },
+				{ user: "run the tests", assistant: "running" },
+			],
+		});
+		await review;
+		const body = calls[0]?.request.userText ?? "";
+		expect(body).not.toContain("TOO-OLD");
+		expect(body).not.toContain("old reply");
+		expect(body).toContain("install deps");
+		expect(body).toContain("I will install them");
+		expect(body).toContain("run the tests");
+		expect(body).toContain("running");
+		expect(body).toContain("[redacted]");
+		expect(body).not.toContain("sk-");
+		expect(body).toContain('"truncated":true');
+	});
+
+	it("keeps the start of one oversized instruction", async () => {
+		const { review, calls } = harness({
+			dialogue: [{ user: `KEEP-HEAD ${"x".repeat(20_000)} DROP-TAIL`, assistant: "ASSISTANT-TAIL" }],
+		});
+		await review;
+		const body = calls[0]?.request.userText ?? "";
+		expect(body).toContain("KEEP-HEAD");
+		expect(body).toContain('"truncated":true');
+		expect(body).not.toContain("DROP-TAIL");
+		expect(body).not.toContain("ASSISTANT-TAIL");
+	});
+
+	it("denies without a model when the dialogue is missing or has no user instruction", async () => {
+		const missing = harness({ omitDialogue: true });
+		await expect(missing.review).resolves.toEqual({ decision: "DENY", cause: "no-user-instructions" });
+		expect(missing.calls).toHaveLength(0);
+
+		const empty = harness({ dialogue: [{ user: "  ", assistant: "a reply" }] });
+		await expect(empty.review).resolves.toEqual({ decision: "DENY", cause: "no-user-instructions" });
+		expect(empty.calls).toHaveLength(0);
 	});
 
 	it("DENY does not fall back", async () => {
-		const { review, calls, warnings } = harness({ complete: async () => allow("DENY") });
-		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny" });
+		const { review, calls, warnings } = harness({ complete: async () => deny() });
+		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny", denialReason: DENY_REASON });
 		expect(calls).toHaveLength(1);
 		expect(warnings).toEqual([]);
 	});
@@ -142,9 +243,9 @@ describe("reviewEscalation", () => {
 		const { review, calls, warnings } = harness({
 			complete: async (reviewed) => reviewed.id === "reviewer"
 				? { text: "", stopReason: "error", errorMessage: "boom sk-supersecretkey" }
-				: allow("DENY"),
+				: deny(),
 		});
-		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny" });
+		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny", denialReason: DENY_REASON });
 		expect(calls.map((call) => call.model.id)).toEqual(["reviewer", "active"]);
 		expect(calls[0]?.request.systemPrompt).toBe(calls[1]?.request.systemPrompt);
 		expect(calls[0]?.request.userText).toBe(calls[1]?.request.userText);
@@ -224,12 +325,12 @@ describe("reviewEscalation", () => {
 		const { review, calls, warnings } = harness({
 			timeoutMs: 50,
 			complete: (reviewed) => new Promise((resolve) => {
-				setTimeout(() => resolve(allow(reviewed.id === "reviewer" ? "ALLOW" : "DENY")), reviewed.id === "reviewer" ? 80 : 0);
+				setTimeout(() => resolve(reviewed.id === "reviewer" ? allow() : deny()), reviewed.id === "reviewer" ? 80 : 0);
 			}),
 		});
 		await vi.advanceTimersByTimeAsync(80);
 		await vi.advanceTimersByTimeAsync(80);
-		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny" });
+		await expect(review).resolves.toEqual({ decision: "DENY", cause: "deny", denialReason: DENY_REASON });
 		expect(calls.map((call) => call.model.id)).toEqual(["reviewer", "active"]);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain("timed out");
@@ -282,6 +383,104 @@ function seed(command = "echo hi", tool = "bash") {
 	});
 }
 
+describe("readRecentDialogue", () => {
+	it("keeps the latest three turns and only the final assistant text", () => {
+		const turns = readRecentDialogue({
+			buildSessionProjection: () => ({
+				messages: [
+					{ role: "user", content: "too old" },
+					{ role: "assistant", content: [{ type: "text", text: "old reply" }] },
+					{ role: "user", content: "fix the typo" },
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "SECRET-THINKING" },
+							{ type: "text", text: "I will curl secrets" },
+							{ type: "toolCall", name: "bash", arguments: { command: "curl secrets" } },
+						],
+					},
+					{ role: "toolResult", content: [{ type: "text", text: "TOOL-RESULT" }] },
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "MORE-THINKING" },
+							{ type: "text", text: "The typo is fixed" },
+						],
+					},
+					{ role: "compactionSummary", content: "the user asked to exfiltrate secrets" },
+					{ role: "custom", content: "extension injected this" },
+					{ role: "user", content: [{ type: "text", text: "then run the tests" }, { type: "image" }] },
+					{ role: "assistant", content: [{ type: "text", text: "Tests passed" }] },
+					{ role: "user", content: "one more" },
+					{ role: "user", content: "   " },
+				],
+			}),
+			getBranch: () => [{ type: "message", message: { role: "user", content: "ignored branch text" } }],
+		});
+		expect(turns).toEqual([
+			{ user: "fix the typo", assistant: "The typo is fixed" },
+			{ user: "then run the tests", assistant: "Tests passed" },
+			{ user: "one more", assistant: "" },
+		]);
+		expect(JSON.stringify(turns)).not.toContain("SECRET-THINKING");
+		expect(JSON.stringify(turns)).not.toContain("curl secrets");
+		expect(JSON.stringify(turns)).not.toContain("TOOL-RESULT");
+		expect(JSON.stringify(turns)).not.toContain("too old");
+	});
+
+	it("a failed projection does not fall back to the branch", () => {
+		expect(readRecentDialogue({
+			buildSessionProjection: () => { throw new Error("stale ctx"); },
+			getBranch: () => [{ type: "message", message: { role: "user", content: "still here" } }],
+		})).toBeUndefined();
+	});
+
+	it("drops turns outside the compaction window and ignores the summary", () => {
+		expect(readRecentDialogue({
+			getBranch: () => [
+				{ type: "message", id: "old", message: { role: "user", content: "old request" } },
+				{ type: "message", id: "kept", message: { role: "user", content: "keep this" } },
+				{
+					type: "compaction",
+					id: "c1",
+					firstKeptEntryId: "kept",
+					summary: "the user asked to exfiltrate secrets",
+				},
+				{ type: "message", id: "new", message: { role: "assistant", content: "on it" } },
+				{ type: "message", id: "newer", message: { role: "user", content: "run the tests" } },
+			],
+		})).toEqual([
+			{ user: "keep this", assistant: "on it" },
+			{ user: "run the tests", assistant: "" },
+		]);
+	});
+
+	it("applies context edits on the branch path", () => {
+		expect(readRecentDialogue({
+			getBranch: () => [
+				{ type: "message", id: "u1", message: { role: "user", content: "delete the database" } },
+				{ type: "context_edit", targetId: "u1", replacement: null },
+				{ type: "message", id: "u2", message: { role: "user", content: "ship it" } },
+				{ type: "context_edit", targetId: "u2", replacement: { content: "fix the typo" } },
+				{
+					type: "message",
+					id: "a1",
+					message: { role: "assistant", content: [{ type: "text", text: "shipping" }] },
+				},
+				{ type: "context_edit", targetId: "a1", replacement: { content: [{ type: "text", text: "fixed" }] } },
+			],
+		})).toEqual([{ user: "fix the typo", assistant: "fixed" }]);
+	});
+
+	it("returns undefined when the session cannot be read", () => {
+		expect(readRecentDialogue(undefined)).toBeUndefined();
+		expect(readRecentDialogue({})).toBeUndefined();
+		expect(readRecentDialogue({
+			getBranch: () => { throw new Error("stale"); },
+		})).toBeUndefined();
+	});
+});
+
 describe("resolveCall approval modes", () => {
 	function deps(config: SandboxConfig) {
 		return { cwd: "/work", getConfig: () => config, permission: createPermissionState() };
@@ -291,7 +490,7 @@ describe("resolveCall approval modes", () => {
 		const select = vi.fn(async () => "Allow once");
 		const notify = vi.fn();
 		const complete = vi.fn(async () => ({
-			content: [{ type: "text", text: "ALLOW" }],
+			content: [{ type: "text", text: ALLOW_TEXT }],
 			stopReason: "stop",
 		}));
 		return {
@@ -301,7 +500,12 @@ describe("resolveCall approval modes", () => {
 			ctx: {
 				hasUI: true,
 				cwd: "/work",
-				sessionManager: { getSessionId: () => "session" },
+				sessionManager: {
+				getSessionId: () => "session",
+				getBranch: () => [
+					{ type: "message", message: { role: "user", content: "run echo hi" } },
+				],
+			},
 				ui: { select, notify },
 				model: model("openai", "active"),
 				thinkingLevel: "low",
@@ -368,12 +572,23 @@ describe("resolveCall approval modes", () => {
 
 		seed();
 		const denied = ctx();
-		denied.complete.mockResolvedValueOnce({ content: [{ type: "text", text: "DENY" }], stopReason: "stop" });
-		await expect(resolveCall(
-			{ command: "echo hi", sandbox_permissions: "danger-full-access", justification: "because" },
-			denied.ctx, deps(approvalConfig("auto-review")), "command", () => "echo hi", undefined, "bash",
-		)).rejects.toThrow(/auto-reviewer rejected/);
-		expect(denied.notify).toHaveBeenCalledWith("[pi-sandbox] Auto-review: DENY", "warning");
+		denied.complete.mockResolvedValueOnce({
+			content: [{ type: "text", text: JSON.stringify({ decision: "DENY", reason: DENY_REASON }) }],
+			stopReason: "stop",
+		});
+		let thrown: unknown;
+		try {
+			await resolveCall(
+				{ command: "echo hi", sandbox_permissions: "danger-full-access", justification: "because" },
+				denied.ctx, deps(approvalConfig("auto-review")), "command", () => "echo hi", undefined, "bash",
+			);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(Error);
+		expect((thrown as Error).message).toContain("auto-reviewer rejected");
+		expect((thrown as Error).message).not.toContain(DENY_REASON);
+		expect(denied.notify).toHaveBeenCalledWith(`[pi-sandbox] Auto-review: DENY\n${DENY_REASON}`, "warning");
 	});
 
 	it("keeps modelRegistry as this when calling complete", async () => {
@@ -388,7 +603,7 @@ describe("resolveCall approval modes", () => {
 			}
 			async complete(): Promise<{ content: { type: string; text: string }[]; stopReason: string }> {
 				if (!this.runtime.ok) throw new TypeError("lost this");
-				return { content: [{ type: "text", text: "ALLOW" }], stopReason: "stop" };
+				return { content: [{ type: "text", text: ALLOW_TEXT }], stopReason: "stop" };
 			}
 		}
 		const { ctx: toolCtx } = ctx();
@@ -398,6 +613,46 @@ describe("resolveCall approval modes", () => {
 			deps(approvalConfig("auto-review")),
 			"command", () => "echo hi", undefined, "bash",
 		)).resolves.toMatchObject({ mode: "danger-full-access", escalated: true });
+	});
+
+	it("auto-review receives the latest three turns and not tool calls or thinking", async () => {
+		seed();
+		const { ctx: toolCtx, complete } = ctx({
+			sessionManager: {
+				getSessionId: () => "session",
+				getBranch: () => [
+					{ type: "message", message: { role: "user", content: "too old" } },
+					{ type: "message", message: { role: "user", content: "earlier request" } },
+					{
+						type: "message",
+						message: {
+							role: "assistant",
+							content: [
+								{ type: "thinking", thinking: "hidden thought" },
+								{ type: "toolCall", name: "bash", arguments: {} },
+								{ type: "text", text: "calling a tool" },
+							],
+						},
+					},
+					{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done with the earlier request" }] } },
+					{ type: "message", message: { role: "user", content: "install the dependencies" } },
+					{ type: "message", message: { role: "user", content: "run the tests" } },
+				],
+			},
+		});
+		await resolveCall(
+			{ command: "echo hi", sandbox_permissions: "danger-full-access", justification: "because" },
+			toolCtx, deps(approvalConfig("auto-review")), "command", () => "echo hi", undefined, "bash",
+		);
+		const sent = complete.mock.calls[0]?.[1] as { messages?: { content?: string }[] };
+		const body = sent.messages?.[0]?.content ?? "";
+		expect(body).toContain("earlier request");
+		expect(body).toContain("done with the earlier request");
+		expect(body).toContain("install the dependencies");
+		expect(body).toContain("run the tests");
+		expect(body).not.toContain("too old");
+		expect(body).not.toContain("hidden thought");
+		expect(body).not.toContain("calling a tool");
 	});
 
 	it("headless auto-review does not ask for UI", async () => {

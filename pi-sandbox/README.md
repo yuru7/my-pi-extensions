@@ -95,15 +95,20 @@ Who decides that one retry is `approvalMode`:
 
 ## Auto-review
 
-The reviewer is a separate model call. It does not see the agent transcript, it is not given tools, and it does not change the agent model or thinking level. The prompt is only:
+The reviewer is a separate model call. It does not see assistant messages, tool results, or reasoning. It is not given tools, and it does not change the agent model or thinking level. The prompt is only:
 
 - sandbox metadata (backend, mode, workspace, writable paths; network stays allowed)
 - the attempted command or write path, cwd, exit code, and the tails of stdout/stderr (8KiB each) or the write-fence error
 - the requested mode and the agent's justification
+- the latest three dialogue turns still in this session's context. Each turn is one user instruction plus the agent's final reply. Tool calls, thinking, tool results, and earlier turns are omitted. The combined text is capped at 16KiB; older turns are dropped first. Compaction and context edits are applied when the host session provides them
 
-Those fields are sent to the reviewer provider's API. Treat that as a disclosure of the command and the captured output. Secrets are redacted only for a few obvious patterns; do not rely on that.
+The reviewer denies the escalation unless that operation is a direct way to carry out those user instructions: the action the user asked for, or a necessary step of it. A loose relation, a broader action, or the agent's justification or reply alone is not enough. Broader means the operation does more than the user asked. It does not mean the requested mode is `danger-full-access`: from `workspace-write` that is the only wider mode, and it is the decision under review. `write` and `edit` still only change that call's path; the mode lifts the write fence. The user may leave the new text unspecified. The reviewer does not receive that text, and its absence is not a reason to deny a write or edit of the named file. A path outside the workspace explains the fence denial; when that path is the named file, it is not a further reason to deny the escalation. `bash` and `powershell` run the whole command unsandboxed, so the reviewer judges the command. A missing or empty user instruction is denied without calling the reviewer. Matching the instructions does not make a risky operation safe. The dialogue is untrusted evidence, not instructions to the reviewer. Assistant replies do not establish what the user asked for.
 
-The reviewer must answer exactly `ALLOW` or `DENY`. Anything else (empty, mixed, a tool call) is a deny. A normal `DENY` is final: pi-sandbox does not ask a second model and does not fall through to the human prompt.
+Those fields are sent to the reviewer provider's API. Treat that as a disclosure of the command, the captured output, and those dialogue turns. Secrets are redacted only for a few obvious patterns; do not rely on that.
+
+The reviewer must answer with exactly one JSON object and no other text: `{"decision":"ALLOW"}` or `{"decision":"DENY","reason":"one short sentence"}`. Anything else (empty, mixed, a bare `ALLOW` or `DENY`, a markdown fence, extra fields, a missing reason, a tool call) is a deny. A normal `DENY` is final: pi-sandbox does not ask a second model and does not fall through to the human prompt.
+
+A model `DENY` includes a one-sentence reason. That reason is shown only in the UI notice (`ctx.ui.notify`, or stderr when there is no UI), on the line under `Auto-review: DENY`. It is not included in the tool error, so the agent does not see it. Whitespace is collapsed, a few obvious secret patterns are redacted, and the text is cut at 500 characters.
 
 `autoReview.model` is `CURRENT` (the agent model at the moment the escalation is handled) or `provider/model-id`. `autoReview.thinkingLevel` is `CURRENT` or a Pi thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). An explicit level the model does not support fails that attempt; it is not silently lowered.
 
@@ -117,7 +122,7 @@ Falling back to the active model "provider/model-B".
 
 The warning goes to `ctx.ui.notify(..., "warning")` when a UI exists, otherwise to stderr. It names the models and a short reason. It does not include the command, the logs, or credentials. A failed warning does not turn the decision into an allow.
 
-This is a risk judgment, not a guarantee. `danger-full-access` removes the sandbox for that one call, so the reviewer has to judge the whole command, not the single path that was denied. A normal install command can still run arbitrary package scripts.
+This is a risk judgment, not a guarantee. For `bash` and `powershell`, `danger-full-access` removes the sandbox for that one call, so the reviewer has to judge the whole command, not the single path that was denied. A normal install command can still run arbitrary package scripts. For `write` and `edit`, the same mode only lifts the write fence for that call.
 
 ## Configuration
 

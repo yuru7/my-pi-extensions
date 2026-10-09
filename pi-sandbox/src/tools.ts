@@ -15,7 +15,7 @@ import {
 // pi 是 ESM，静态具名导入一个老宿主不存在的导出会在**链接期**硬失败，属性读取最坏只是 undefined。
 import * as piHost from "@earendil-works/pi-coding-agent";
 import { createSandboxBashOps, type SpawnFn } from "./bash-ops";
-import { reviewEscalation, type ReviewerModelRef, type ReviewerResponse } from "./auto-review";
+import { formatAutoReviewNotice, readRecentDialogue, reviewEscalation, type ReviewerModelRef, type ReviewerResponse } from "./auto-review";
 import { getSandboxConfig, readProjectTrusted, selectApprovalSettings, type SandboxConfig } from "./config";
 import { getDenialLedger, operationFingerprint, type DenialRecord } from "./denial-ledger";
 import {
@@ -163,7 +163,11 @@ interface ToolCtxLike {
 	isProjectTrusted?: () => boolean;
 	/** 子会话身份来源。可选：既有测试的窄 ctx 与异常宿主都可能没有它，
 	 *  缺失时按"无法路由"fail-closed，绝不得抛 TypeError（Review Focus #1）。 */
-	sessionManager?: { getSessionId(): string };
+	sessionManager?: {
+		getSessionId(): string;
+		buildSessionProjection?(): { messages?: unknown };
+		getBranch?(): unknown;
+	};
 }
 
 /** 防御性读取会话 id：缺失、非字符串或抛错都归为"无法路由"（fail-closed）。父/子两侧共用。 */
@@ -173,6 +177,15 @@ function readSessionId(ctx: ToolCtxLike): string | null {
 		return typeof sessionId === "string" && sessionId.trim().length > 0 ? sessionId.trim() : null;
 	} catch {
 		return null;
+	}
+}
+
+/** セッションが読めない、または ctx が失効しているときは undefined（判定不能）。 */
+function dialogueFor(ctx: ToolCtxLike) {
+	try {
+		return readRecentDialogue(ctx.sessionManager);
+	} catch {
+		return undefined;
 	}
 }
 
@@ -285,11 +298,13 @@ export async function resolveCall(
 				record: denial,
 				requestedMode: requested,
 				justification: justification as string,
+				dialogue: dialogueFor(ctx),
 			});
-			emitNotice(ctx, `[pi-sandbox] Auto-review: ${outcome.decision}`, outcome.decision === "ALLOW" ? "info" : "warning");
+			emitNotice(ctx, formatAutoReviewNotice(outcome), outcome.decision === "ALLOW" ? "info" : "warning");
 			if (outcome.decision === "ALLOW") {
 				return { mode: requested as SandboxMode, escalated: true, ignoredEscalation: false };
 			}
+			// denialReason は画面通知だけ。ツールエラーに入れるとエージェントが読んでしまう。
 			throw new Error(autoReviewDeniedMessage(subject, requested, outcome.cause));
 		}
 	}
