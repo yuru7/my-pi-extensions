@@ -376,6 +376,30 @@ describe("resolveCall approval modes", () => {
 		expect(denied.notify).toHaveBeenCalledWith("[pi-sandbox] Auto-review: DENY", "warning");
 	});
 
+	it("keeps modelRegistry as this when calling complete", async () => {
+		seed();
+		class Registry {
+			runtime = { ok: true };
+			find(): undefined {
+				return undefined;
+			}
+			hasConfiguredAuth(): boolean {
+				return this.runtime.ok;
+			}
+			async complete(): Promise<{ content: { type: string; text: string }[]; stopReason: string }> {
+				if (!this.runtime.ok) throw new TypeError("lost this");
+				return { content: [{ type: "text", text: "ALLOW" }], stopReason: "stop" };
+			}
+		}
+		const { ctx: toolCtx } = ctx();
+		await expect(resolveCall(
+			{ command: "echo hi", sandbox_permissions: "danger-full-access", justification: "because" },
+			{ ...toolCtx, modelRegistry: new Registry() } as never,
+			deps(approvalConfig("auto-review")),
+			"command", () => "echo hi", undefined, "bash",
+		)).resolves.toMatchObject({ mode: "danger-full-access", escalated: true });
+	});
+
 	it("headless auto-review does not ask for UI", async () => {
 		seed();
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

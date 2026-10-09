@@ -340,9 +340,12 @@ async function completeReview(
 	model: ReviewerModelRef,
 	request: { systemPrompt: string; userText: string; thinkingLevel: string; signal: AbortSignal },
 ): Promise<ReviewerResponse> {
-	const complete = ctx.modelRegistry?.complete;
-	if (typeof complete !== "function") throw new Error("reviewer runtime is unavailable");
-	const message = await complete(model, {
+	// メソッドを取り出して呼ぶと this が外れ、ModelRegistry.complete は即 TypeError になる。
+	const registry = ctx.modelRegistry;
+	if (registry === undefined || typeof registry.complete !== "function") {
+		throw new Error("reviewer runtime is unavailable");
+	}
+	const message = await registry.complete(model, {
 		systemPrompt: request.systemPrompt,
 		messages: [{ role: "user", content: request.userText, timestamp: Date.now() }],
 	}, {
