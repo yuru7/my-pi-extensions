@@ -65,7 +65,7 @@ describe("loadSandboxConfig", () => {
 		const path = join(projectDir, ".pi", "sandbox.json");
 		for (const content of ["5", "[1,2]", '"workspace-write"', "true", "null"]) {
 			writeFileSync(path, content);
-			expect(loadSandboxConfig(projectDir), content).toEqual(DEFAULT_SANDBOX_CONFIG); // 不抛
+			expect(loadSandboxConfig(projectDir), content).toEqual(DEFAULT_SANDBOX_CONFIG); // does not throw
 		}
 	});
 });
@@ -75,7 +75,7 @@ describe("getSandboxConfig (fail-safe + cache)", () => {
 	it("pairing-violation config falls back to DEFAULT with a warn, never throws (I2)", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			writeProject({ runnerCommand: ["myrunner"] }); // 缺 runnerFailureSignatures → validate throw
+			writeProject({ runnerCommand: ["myrunner"] }); // missing runnerFailureSignatures → validate throws
 			expect(getSandboxConfig(projectDir)).toEqual(DEFAULT_SANDBOX_CONFIG);
 			expect(warn.mock.calls.flat().join(" ")).toMatch(/falling back to defaults/u);
 		} finally {
@@ -85,7 +85,7 @@ describe("getSandboxConfig (fail-safe + cache)", () => {
 	it("caches per cwd: second call does not re-warn", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			writeProject({ probeTimeoutMs: 0 }); // 非法 → throw → fail-safe
+			writeProject({ probeTimeoutMs: 0 }); // invalid → throw → fail-safe
 			expect(getSandboxConfig(projectDir)).toEqual(DEFAULT_SANDBOX_CONFIG);
 			expect(getSandboxConfig(projectDir)).toEqual(DEFAULT_SANDBOX_CONFIG);
 			expect(warn).toHaveBeenCalledTimes(1);

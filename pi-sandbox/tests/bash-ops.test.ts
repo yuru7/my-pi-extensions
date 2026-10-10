@@ -22,7 +22,7 @@ function fakeChild() {
 	return child;
 }
 
-/** M4 后 exec 先 await cwd 预检才 spawn/挂监听——等到 close 监听就位再关，避免抢跑。 */
+/** After M4, exec awaits the cwd precheck before spawn and attaching listeners. Wait until the close listener is in place before closing, so we do not race ahead. */
 async function settle(
 	child: ReturnType<typeof fakeChild>,
 	code: number | null,
@@ -38,15 +38,15 @@ const bwrapSelected = {
 };
 
 /**
- * 平台注入（testing.md「参数注入」）：本文件除末尾的 win32 用例外，验证的都是 **POSIX 受限逻辑**
- * （confined argv / profile / env 清洗 / denial 分类 / 超时与 abort）。win32 上 `createSandboxBashOps`
- * 会按 Ruling 2 在任何 spawn 前拒绝 bash，若不注入平台，这些用例在 Windows 上就退化成「测拒绝守卫」。
- * 注入 `platform: "linux"` 让它们在任何宿主上都执行；win32 的 bash 拒绝由本文件末尾的 win32 用例、
- * `tests/confine.test.ts` 与 `tests/win32/*`（`e2e.test.ts`）覆盖。
+ * Platform injection (testing.md "parameter injection"): aside from the win32 cases at the end, this file verifies **POSIX confinement logic**
+ * (confined argv / profile / env scrubbing / denial classification / timeout and abort). On win32, `createSandboxBashOps`
+ * refuses bash before any spawn per Ruling 2. Without a platform injection, these cases degrade on Windows into "testing the refusal guard".
+ * Injecting `platform: "linux"` makes them run on any host. The win32 bash refusal is covered by the win32 cases at the end of this file,
+ * `tests/confine.test.ts`, and `tests/win32/*` (`e2e.test.ts`).
  */
 const posix = { platform: "linux" as const };
 
-// M4：exec 会预检 cwd 存在性——测试用的 exec cwd 必须是真实目录（workspaceRoot 仍可用虚构路径）。
+// M4: exec prechecks that cwd exists. The exec cwd used by tests must be a real directory (workspaceRoot may still be a fictional path).
 const cwd = mkdtempSync(join(tmpdir(), "bash-ops-cwd-"));
 
 afterAll(() => {
@@ -128,7 +128,7 @@ describe("createSandboxBashOps", () => {
 		)[2];
 		expect(options.env.LC_MESSAGES).toBe("C");
 		expect(options.env.LANG).toBe("zh_CN.UTF-8");
-		expect(options.env.LC_ALL).toBeUndefined(); // LC_ALL 覆盖 LC_MESSAGES，必须被移除
+		expect(options.env.LC_ALL).toBeUndefined(); // LC_ALL overrides LC_MESSAGES and must be removed
 	});
 	it("streams stdout and stderr to onData", async () => {
 		const child = fakeChild();
@@ -209,7 +209,7 @@ describe("createSandboxBashOps", () => {
 		);
 		expect(text).not.toContain("call sandbox_grant_write alone");
 	});
-	it("onDenial fires exactly once on classified denial (denial-first 记账)", async () => {
+	it("onDenial fires exactly once on classified denial (denial-first ledger)", async () => {
 		const child = fakeChild();
 		const spawnFn = vi.fn(() => child) as never;
 		const onDenial = vi.fn();
@@ -227,7 +227,7 @@ describe("createSandboxBashOps", () => {
 		await p;
 		expect(onDenial).toHaveBeenCalledTimes(1);
 	});
-	it("onDenial 不因 runner failure 触发（那是沙箱不可用，不是拒绝）", async () => {
+	it("onDenial does not fire on runner failure (that is sandbox unavailable, not a denial)", async () => {
 		const child = fakeChild();
 		const spawnFn = vi.fn(() => child) as never;
 		const onDenial = vi.fn();
@@ -255,7 +255,7 @@ describe("createSandboxBashOps", () => {
 			workspaceRoot: "/ws",
 			spawnFn,
 		});
-		// fake child 无 pid → killTree 回退 child.kill，SIGKILL 断言不破
+		// the fake child has no pid, so killTree falls back to child.kill and the SIGKILL assertion still holds
 		await expect(
 			ops.exec("sleep 100", cwd, { onData: () => {}, timeout: 0.01 }),
 		).rejects.toThrow(/timeout:/);
@@ -274,8 +274,8 @@ describe("createSandboxBashOps", () => {
 		await vi.waitFor(() => {
 			expect(spawnFn).toHaveBeenCalled();
 		});
-		// 守卫缺失时 0ms 定时器会在此窗口内 kill（close 走 null）→ reject timeout:0；
-		// 仅靠 settle 抢跑会先于已武装的定时器关流并被 cleanup 清掉，无法稳定检出回归。
+		// If the guard is missing, a 0ms timer kills inside this window (close goes null) and the call rejects with timeout:0.
+		// Racing settle alone closes the stream before the armed timer, and cleanup clears it, so the regression is not detected reliably.
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		await settle(child, 0);
 		const result = await p;
@@ -296,7 +296,7 @@ describe("createSandboxBashOps", () => {
 			onData: () => {},
 			signal: ac.signal,
 		});
-		// M4 预检是 await——等 spawn（同步紧跟的 abort 监听已挂）再 abort，避免抢在监听前
+		// The M4 precheck is an await. Wait for spawn (the abort listener is attached synchronously right after) before aborting, so we do not race ahead of the listener.
 		await vi.waitFor(() => {
 			expect(spawnFn).toHaveBeenCalled();
 		});
@@ -329,7 +329,7 @@ describe("createSandboxBashOps", () => {
 			spawnFn,
 		});
 		const p = ops.exec("sleep 100", cwd, { onData: () => {} });
-		await settle(child, null); // 直接触发 close(null)：既非超时也非 abort
+		await settle(child, null); // fire close(null) directly: neither a timeout nor an abort
 		const result = await p;
 		expect(result.exitCode).toBeNull();
 	});
@@ -374,7 +374,7 @@ describe("createSandboxBashOps", () => {
 		await expect(
 			confined.exec("echo hi", cwd, { onData: () => {} }),
 		).rejects.toThrowError(/bash is not supported on Windows/);
-		expect(confinedSpawn).not.toHaveBeenCalled(); // guard 在 confine/spawn 之前 fail-closed
+		expect(confinedSpawn).not.toHaveBeenCalled(); // the guard fail-closes before confine/spawn
 
 		const child = fakeChild();
 		const dfaSpawn = vi.fn(() => child) as never;
@@ -387,14 +387,14 @@ describe("createSandboxBashOps", () => {
 		const p = dfa.exec("echo hi", cwd, { onData: () => {} });
 		await settle(child, 0);
 		await p;
-		expect(dfaSpawn).toHaveBeenCalledTimes(1); // guard 不得在 danger-full-access 早退后触发
+		expect(dfaSpawn).toHaveBeenCalledTimes(1); // the guard must not fire after the danger-full-access early return
 		const [, args, options] = dfaSpawn.mock.calls[0] as unknown as [
 			string,
 			string[],
 			{ detached: boolean; windowsHide: boolean },
 		];
 		expect(args).toEqual(["-c", "echo hi"]);
-		expect(options.detached).toBe(false); // win32 无进程组
+		expect(options.detached).toBe(false); // win32 has no process group
 		expect(options.windowsHide).toBe(true);
 	});
 });

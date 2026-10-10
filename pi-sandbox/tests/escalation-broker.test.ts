@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getEscalationBroker, type ParentApprovalChannel, resetEscalationBrokerForTests } from "../src/escalation-broker";
 
-/** 造一个父通道假件：hasUI 可切换，select/input 记录调用并返回固定值。 */
+/** Build a parent-channel fake: hasUI can be toggled; select/input record calls and return fixed values. */
 function fakeChannel(sessionId: string, hasUI = true, choice: string | undefined = "Allow once") {
 	const select = vi.fn(async () => choice);
 	const input = vi.fn(async (_title: string, _placeholder?: string) => "because");
@@ -10,12 +10,12 @@ function fakeChannel(sessionId: string, hasUI = true, choice: string | undefined
 }
 
 afterEach(() => {
-	// 模块级全局槽位跨测试复位（testing.md：模块单例必须显式复位）
+	// Reset the module-level global slot across tests (testing.md: module singletons must be reset explicitly)
 	resetEscalationBrokerForTests();
 });
 
 describe("getEscalationBroker", () => {
-	it("globalThis 单例：重复调用同一对象，reset 后换新对象", () => {
+	it("globalThis singleton: repeated calls return the same object, and reset replaces it with a new object", () => {
 		const first = getEscalationBroker();
 		expect(getEscalationBroker()).toBe(first);
 		resetEscalationBrokerForTests();
@@ -23,8 +23,8 @@ describe("getEscalationBroker", () => {
 	});
 });
 
-describe("resolveChannel（严格路由，spec §2 D3）", () => {
-	it("link + 已注册父 → 命中父通道", () => {
+describe("resolveChannel (strict routing, spec §2 D3)", () => {
+	it("link + registered parent → hits the parent channel", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1");
 		broker.registerParent(channel);
@@ -32,14 +32,14 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("child-1")).toBe(channel);
 	});
 
-	it("无 link → null（Review Focus #4：不猜进程内唯一的交互会话）", () => {
+	it("no link → null (Review Focus #4: do not guess the only interactive session in the process)", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1");
 		broker.registerParent(channel);
 		expect(broker.resolveChannel("orphan")).toBeNull();
 	});
 
-	it("父已注销（session_shutdown 后）→ null（Review Focus #4）", () => {
+	it("parent unregistered (after session_shutdown) → null (Review Focus #4)", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1");
 		broker.registerParent(channel);
@@ -48,7 +48,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("child-1")).toBeNull();
 	});
 
-	it("父注册但 hasUI() 为 false → null（Review Focus #4）", () => {
+	it("parent registered but hasUI() is false → null (Review Focus #4)", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1", false);
 		broker.registerParent(channel);
@@ -56,7 +56,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("child-1")).toBeNull();
 	});
 
-	it("child 已 disposed（unlink）→ null", () => {
+	it("child already disposed (unlink) → null", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1");
 		broker.registerParent(channel);
@@ -65,7 +65,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("child-1")).toBeNull();
 	});
 
-	it("depth-2：跳过未注册通道的中间会话，命中顶层父", () => {
+	it("depth-2: skip an intermediate session with no registered channel and hit the top-level parent", () => {
 		const broker = getEscalationBroker();
 		const { channel: top } = fakeChannel("top");
 		broker.registerParent(top);
@@ -74,7 +74,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("leaf")).toBe(top);
 	});
 
-	it("depth-2：中间会话已注册但无 UI → 继续向上", () => {
+	it("depth-2: the intermediate session is registered but has no UI → keep walking up", () => {
 		const broker = getEscalationBroker();
 		const { channel: top } = fakeChannel("top");
 		const { channel: mid } = fakeChannel("mid", false);
@@ -85,20 +85,20 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("leaf")).toBe(top);
 	});
 
-	it("link 成环 → null，不死循环（Review Focus #3）", () => {
+	it("a cyclic link → null, and no infinite loop (Review Focus #3)", () => {
 		const broker = getEscalationBroker();
 		broker.linkChild("a", "b");
 		broker.linkChild("b", "a");
 		expect(broker.resolveChannel("a")).toBeNull();
 	});
 
-	it("自环 → null（Review Focus #3）", () => {
+	it("a self-loop → null (Review Focus #3)", () => {
 		const broker = getEscalationBroker();
 		broker.linkChild("a", "a");
 		expect(broker.resolveChannel("a")).toBeNull();
 	});
 
-	it("超长祖先链（> 32 层）→ null，不死循环（Review Focus #3）", () => {
+	it("an ancestor chain longer than 32 → null, and no infinite loop (Review Focus #3)", () => {
 		const broker = getEscalationBroker();
 		for (let i = 0; i < 40; i++) {
 			broker.linkChild(`s${i}`, `s${i + 1}`);
@@ -106,7 +106,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("s0")).toBeNull();
 	});
 
-	it("linkChild 缺 parentSessionId → 不建立 link", () => {
+	it("linkChild missing parentSessionId → no link is created", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("parent-1");
 		broker.registerParent(channel);
@@ -114,7 +114,7 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 		expect(broker.resolveChannel("child-1")).toBeNull();
 	});
 
-	it("空 sessionId 既不作为父注册，也不作为 link 父端", () => {
+	it("an empty sessionId is neither registered as a parent nor used as the parent end of a link", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("");
 		broker.registerParent(channel);
@@ -123,15 +123,15 @@ describe("resolveChannel（严格路由，spec §2 D3）", () => {
 	});
 });
 
-describe("request（FIFO + abort，spec §4.6）", () => {
-	it("透传 title/options，返回用户选择；无 signal 时第三参为 undefined", async () => {
+describe("request (FIFO + abort, spec §4.6)", () => {
+	it("passes title/options through and returns the user's choice; with no signal the third argument is undefined", async () => {
 		const broker = getEscalationBroker();
 		const { channel, select } = fakeChannel("parent-1");
 		await expect(broker.request(channel, "T", ["Allow once", "Deny"])).resolves.toEqual({ choice: "Allow once" });
 		expect(select).toHaveBeenCalledWith("T", ["Allow once", "Deny"], undefined);
 	});
 
-	it("有 signal 时以 opts.signal 透传（父弹窗可被中断关闭）", async () => {
+	it("when a signal is present it is passed through as opts.signal (the parent dialog can be closed on abort)", async () => {
 		const broker = getEscalationBroker();
 		const ac = new AbortController();
 		let received: AbortSignal | undefined;
@@ -144,7 +144,7 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 		expect(received).toBe(ac.signal);
 	});
 
-	it("FIFO：前一个 settle 前不弹第二个，结果不串（Review Focus #5）", async () => {
+	it("FIFO: the second dialog does not open before the first settles, and results do not get crossed (Review Focus #5)", async () => {
 		const broker = getEscalationBroker();
 		const titles: string[] = [];
 		const releases: ((value: string | undefined) => void)[] = [];
@@ -163,7 +163,7 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 		await expect(second).resolves.toEqual({ choice: "Deny" });
 	});
 
-	it("signal 已 abort → 不调 select，resolve undefined（Review Focus #2：不弹幽灵审批）", async () => {
+	it("signal already aborted → select is not called, resolves undefined (Review Focus #2: no phantom approval dialog)", async () => {
 		const broker = getEscalationBroker();
 		const { channel, select } = fakeChannel("parent-1");
 		const ac = new AbortController();
@@ -172,11 +172,11 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 		expect(select).not.toHaveBeenCalled();
 	});
 
-	it("在飞时 abort → select 收到同一 signal，resolve undefined", async () => {
+	it("abort while in flight → select receives the same signal and resolves undefined", async () => {
 		const broker = getEscalationBroker();
 		const ac = new AbortController();
 		let received: AbortSignal | undefined;
-		// 复刻 pi TUI 的真实行为：abort 时关闭弹窗并 resolve undefined
+		// Reproduce real pi TUI behavior: on abort, close the dialog and resolve undefined
 		const select = vi.fn((_title: string, _options: string[], opts?: { signal?: AbortSignal }) =>
 			new Promise<string | undefined>((resolve) => {
 				received = opts?.signal;
@@ -189,7 +189,7 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 		await expect(pending).resolves.toEqual({ choice: undefined });
 	});
 
-	it("父侧 select 抛错 → resolve undefined（按取消处理，不冒泡打断子代理工具调用）", async () => {
+	it("parent-side select throws → resolve undefined (treat as cancel; do not propagate and interrupt the subagent tool call)", async () => {
 		const broker = getEscalationBroker();
 		const select = vi.fn(async () => {
 			throw new Error("ui exploded");
@@ -198,7 +198,7 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 		await expect(broker.request(channel, "T", ["Allow once"])).resolves.toEqual({ choice: undefined });
 	});
 
-	it("前一个请求抛错不影响后续出队（Review Focus #5）", async () => {
+	it("a throw from the previous request does not affect later dequeue (Review Focus #5)", async () => {
 		const broker = getEscalationBroker();
 		let calls = 0;
 		const select = vi.fn(async () => {
@@ -212,26 +212,26 @@ describe("request（FIFO + abort，spec §4.6）", () => {
 	});
 });
 
-describe("resolveOwnChannel（本会话自己的通道，Ruling 17）", () => {
-	it("已注册且 hasUI() 为真 → 返回自己", () => {
+describe("resolveOwnChannel (this session's own channel, Ruling 17)", () => {
+	it("registered and hasUI() is true → returns itself", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("self");
 		broker.registerParent(channel);
 		expect(broker.resolveOwnChannel("self")).toBe(channel);
 	});
 
-	it("未注册 → null", () => {
+	it("not registered → null", () => {
 		expect(getEscalationBroker().resolveOwnChannel("nobody")).toBeNull();
 	});
 
-	it("已注册但 hasUI() 为假 → null", () => {
+	it("registered but hasUI() is false → null", () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("self", false);
 		broker.registerParent(channel);
 		expect(broker.resolveOwnChannel("self")).toBeNull();
 	});
 
-	it("hasUI() 抛错 → null，不冒泡（fail-closed，Minor 4）", () => {
+	it("hasUI() throws → null, and does not propagate (fail-closed, Minor 4)", () => {
 		const broker = getEscalationBroker();
 		broker.registerParent({
 			sessionId: "boom",
@@ -245,7 +245,7 @@ describe("resolveOwnChannel（本会话自己的通道，Ruling 17）", () => {
 		expect(broker.resolveOwnChannel("boom")).toBeNull();
 	});
 
-	it("不走 link：本会话即使有 link 也只按 sessionId 命中自己", () => {
+	it("does not follow the link: even if this session has a link, it matches only itself by sessionId", () => {
 		const broker = getEscalationBroker();
 		const { channel: parent } = fakeChannel("parent");
 		broker.registerParent(parent);
@@ -255,8 +255,8 @@ describe("resolveOwnChannel（本会话自己的通道，Ruling 17）", () => {
 	});
 });
 
-describe("request 的\"从不 reject\"契约（病态输入，Minor 5）", () => {
-	it("signal 的 aborted getter 抛错 → resolve undefined，不 reject", async () => {
+describe("request's \"never rejects\" contract (pathological input, Minor 5)", () => {
+	it("signal's aborted getter throws → resolve undefined, and do not reject", async () => {
 		const broker = getEscalationBroker();
 		const { channel } = fakeChannel("p");
 		const hostile = {
@@ -268,10 +268,10 @@ describe("request 的\"从不 reject\"契约（病态输入，Minor 5）", () =>
 	});
 });
 
-describe("request：Deny 理由的两步式（select + input 同 FIFO 任务）", () => {
+describe("request: two-step Deny reason (select + input in the same FIFO task)", () => {
 	const reasonPrompt = { title: "Why deny?", placeholder: "optional" };
 
-	it("Deny + denialReason + channel.input → 返回理由", async () => {
+	it("Deny + denialReason + channel.input → returns the reason", async () => {
 		const broker = getEscalationBroker();
 		const { channel, input } = fakeChannel("p", true, "Deny");
 		await expect(broker.request(channel, "T", ["Allow once", "Deny"], undefined, reasonPrompt))
@@ -279,21 +279,21 @@ describe("request：Deny 理由的两步式（select + input 同 FIFO 任务）"
 		expect(input).toHaveBeenCalledWith("Why deny?", "optional", undefined);
 	});
 
-	it("Allow once → 不追问理由（input 零调用）", async () => {
+	it("Allow once → does not prompt for a reason (input is called zero times)", async () => {
 		const broker = getEscalationBroker();
 		const { channel, input } = fakeChannel("p", true, "Allow once");
 		await expect(broker.request(channel, "T", ["Allow once", "Deny"], undefined, reasonPrompt)).resolves.toEqual({ choice: "Allow once" });
 		expect(input).not.toHaveBeenCalled();
 	});
 
-	it("channel 无 input → 返回 { choice: 'Deny' }（理由缺失不阻塞拒绝）", async () => {
+	it("channel has no input → returns { choice: 'Deny' } (a missing reason does not block the denial)", async () => {
 		const broker = getEscalationBroker();
 		const select = vi.fn(async () => "Deny");
 		const channel: ParentApprovalChannel = { sessionId: "p", hasUI: () => true, select };
 		await expect(broker.request(channel, "T", ["Allow once", "Deny"], undefined, reasonPrompt)).resolves.toEqual({ choice: "Deny" });
 	});
 
-	it("input 抛错 → 返回 { choice: 'Deny' }（理由异常不影响拒绝语义，fail-closed）", async () => {
+	it("input throws → returns { choice: 'Deny' } (a reason error does not change denial semantics, fail-closed)", async () => {
 		const broker = getEscalationBroker();
 		const select = vi.fn(async () => "Deny");
 		const input = vi.fn(async () => {
@@ -303,7 +303,7 @@ describe("request：Deny 理由的两步式（select + input 同 FIFO 任务）"
 		await expect(broker.request(channel, "T", ["Allow once", "Deny"], undefined, reasonPrompt)).resolves.toEqual({ choice: "Deny" });
 	});
 
-	it("signal abort 透传到 input（在飞时关闭理由弹窗）", async () => {
+	it("signal abort is passed through to input (closes the reason dialog while in flight)", async () => {
 		const broker = getEscalationBroker();
 		const ac = new AbortController();
 		let inputSignal: AbortSignal | undefined;
@@ -317,7 +317,7 @@ describe("request：Deny 理由的两步式（select + input 同 FIFO 任务）"
 		expect(inputSignal).toBe(ac.signal);
 	});
 
-	it("FIFO 原子性：A 的理由输入未 settle 前，B 不得弹出 select（宿主只有一个对话框槽位）", async () => {
+	it("FIFO atomicity: B must not open select before A's reason input settles (the host has only one dialog slot)", async () => {
 		const broker = getEscalationBroker();
 		const events: string[] = [];
 		let releaseInput: ((value: string | undefined) => void) | undefined;

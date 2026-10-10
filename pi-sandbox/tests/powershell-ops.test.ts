@@ -8,7 +8,7 @@ import { createSandboxPowerShellOps, POWERSHELL_UTF8_PREFIX } from "../src/power
 
 type FakeChild = EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; pid: number; kill: () => void };
 
-/** 假 spawn：只实现 ops 用到的表面。 */
+/** Fake spawn: only the surface the ops actually use. */
 function fakeChild(): FakeChild {
 	const child = new EventEmitter() as FakeChild;
 	child.stdout = new EventEmitter();
@@ -19,14 +19,14 @@ function fakeChild(): FakeChild {
 }
 
 /**
- * close 必须在 microtask 里发：ops 在 spawnFn 返回之后才挂 close/stderr 监听，
- * 同步 emit 会被 EventEmitter 丢弃（stderr 与 close 同 tick 时先 data 再 close，stderrTail 才是新的）。
+ * close must be emitted in a microtask: ops attaches the close/stderr listeners only after spawnFn returns,
+ * so a synchronous emit is dropped by EventEmitter (when stderr and close share a tick, data comes first and then close, which is what makes stderrTail current).
  */
 function closeLater(child: FakeChild, code: number): void {
 	queueMicrotask(() => child.emit("close", code));
 }
 
-/** M4：exec 会先预检 cwd 存在性——测试用的 cwd 必须是真实目录（workspaceRoot 仍可用虚构路径）。 */
+/** M4: exec prechecks that cwd exists first. The cwd used by tests must be a real directory (workspaceRoot may still be a fictional path). */
 const cwd = mkdtempSync(join(tmpdir(), "powershell-ops-cwd-"));
 const missingCwd = join(tmpdir(), "pi-sandbox-powershell-missing-dir");
 
@@ -83,7 +83,7 @@ describe("powershell sandbox ops", () => {
 		const [program, argv] = spawnFn.mock.calls[0] as unknown as [string, string[]];
 		expect(program).toBe("C:\\node.exe");
 		expect(argv.slice(0, 2)).toEqual(["runner.js", "--workspace"]);
-		// UTF-8 前缀必须落在命令串上（`--` 之后的最后一个 pwsh argv），而不是可执行文件上
+		// The UTF-8 prefix must land on the command string (the last pwsh argv after `--`), not on the executable
 		expect(argv.at(-1)).toBe(`${POWERSHELL_UTF8_PREFIX}echo hi`);
 		expect(argv.at(-2)).toBe("-Command");
 	});
@@ -175,14 +175,14 @@ describe("powershell sandbox ops", () => {
 		});
 		await ops.exec("first", cwd, { onData: () => {} });
 		await ops.exec("second", cwd, { onData: () => {} });
-		expect(hostConfig).toHaveBeenCalledTimes(2); // 每 exec 解析一次
+		expect(hostConfig).toHaveBeenCalledTimes(2); // resolved once per exec
 		expect(spawnFn.mock.calls[0]?.[0]).toBe("host-pwsh-a.exe");
 		expect(spawnFn.mock.calls[1]?.[0]).toBe("host-pwsh-b.exe");
 	});
 
 	it("fails closed without spawning when the host has no usable getPowerShellConfig (pi < 1.0.0)", async () => {
-		// 真实 ESM 命名空间缺该导出时属性读取得到 undefined；vitest 的 ESM mock 对「未声明的导出」
-		// 直接抛错，所以这里把导出显式声明成非函数——两条路径都落在同一个 `typeof === "function"` 探测上。
+		// A real ESM namespace yields undefined when the export is missing. vitest's ESM mock throws on an undeclared export,
+		// so declare the export explicitly as a non-function. Both paths land on the same `typeof === "function"` probe.
 		vi.doMock("@earendil-works/pi-coding-agent", () => ({ getPowerShellConfig: undefined }));
 		vi.resetModules();
 		const fresh = await import("../src/powershell-ops");

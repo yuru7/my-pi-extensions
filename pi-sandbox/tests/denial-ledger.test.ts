@@ -38,7 +38,7 @@ function matchOf(record: DenialRecord) {
 }
 
 describe("getDenialLedger", () => {
-	it("globalThis 单例：重复调用同一对象，reset 后换新对象", () => {
+	it("globalThis singleton: repeated calls return the same object, and reset replaces it", () => {
 		const first = getDenialLedger();
 		expect(getDenialLedger()).toBe(first);
 		resetDenialLedgerForTests();
@@ -46,12 +46,12 @@ describe("getDenialLedger", () => {
 	});
 });
 
-describe("record/consume（同一操作、一次性）", () => {
-	it("未记录 → consume undefined", () => {
+describe("record/consume (same operation, one-shot)", () => {
+	it("nothing recorded → consume returns undefined", () => {
 		expect(getDenialLedger().consume(matchOf(entry()))).toBeUndefined();
 	});
 
-	it("记录后 consume 返回该记录，且一次性", () => {
+	it("after record, consume returns that record, and only once", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry();
 		ledger.record(recorded);
@@ -59,7 +59,7 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(recorded), 1_000)).toBeUndefined();
 	});
 
-	it("工具隔离：bash 的拒绝不放行 powershell", () => {
+	it("tool isolation: a bash denial does not authorize powershell", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ tool: "bash" });
 		ledger.record(recorded);
@@ -67,7 +67,7 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(recorded), 1_000)).toEqual(recorded);
 	});
 
-	it("操作隔离：另一条命令的指纹对不上", () => {
+	it("operation isolation: another command's fingerprint does not match", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ fingerprint: operationFingerprint({ command: "echo a" }) });
 		ledger.record(recorded);
@@ -77,21 +77,21 @@ describe("record/consume（同一操作、一次性）", () => {
 		}, 1_000)).toBeUndefined();
 	});
 
-	it("提权字段不进指纹", () => {
+	it("escalation fields are not part of the fingerprint", () => {
 		const plain = operationFingerprint({ command: "pnpm install", sandbox_permissions: "danger-full-access", justification: "store" });
 		const bare = operationFingerprint({ command: "pnpm install" });
 		expect(plain).toBe(bare);
 		expect(plain).not.toContain("justification");
 	});
 
-	it("cwd 不同则不能消费", () => {
+	it("a different cwd cannot be consumed", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ cwd: "/work" });
 		ledger.record(recorded);
 		expect(ledger.consume({ ...matchOf(recorded), cwd: "/other" }, 1_000)).toBeUndefined();
 	});
 
-	it("会话隔离", () => {
+	it("session isolation", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ sessionId: "s1" });
 		ledger.record(recorded);
@@ -99,7 +99,7 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(recorded), 1_000)).toEqual(recorded);
 	});
 
-	it("同一操作重复 record 只消费一次，内容是最新的", () => {
+	it("recording the same operation twice is consumed only once, and the content is the latest", () => {
 		const ledger = getDenialLedger();
 		const first = entry({ stderr: "old", recordedAt: 1_000 });
 		const second = entry({ stderr: "new", recordedAt: 2_000 });
@@ -109,7 +109,7 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(first), 2_000)).toBeUndefined();
 	});
 
-	it("不同操作可以各自消费", () => {
+	it("different operations can each be consumed", () => {
 		const ledger = getDenialLedger();
 		const bash = entry({ tool: "bash" });
 		const write = entry({ tool: "write", fingerprint: operationFingerprint({ path: "/etc/a" }) });
@@ -119,14 +119,14 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(bash), 1_000)?.tool).toBe("bash");
 	});
 
-	it("空 sessionId 不记账", () => {
+	it("an empty sessionId is not recorded", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ sessionId: "" });
 		ledger.record(recorded);
 		expect(ledger.consume(matchOf(recorded), 1_000)).toBeUndefined();
 	});
 
-	it("forget 清掉会话的全部未消费记录", () => {
+	it("forget clears every unconsumed record for the session", () => {
 		const ledger = getDenialLedger();
 		const bash = entry();
 		const write = entry({ tool: "write" });
@@ -137,21 +137,21 @@ describe("record/consume（同一操作、一次性）", () => {
 		expect(ledger.consume(matchOf(write), 1_000)).toBeUndefined();
 	});
 
-	it("过期记录不能消费", () => {
+	it("an expired record cannot be consumed", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ recordedAt: 0 });
 		ledger.record(recorded);
 		expect(ledger.consume(matchOf(recorded), DENIAL_TTL_MS)).toBeUndefined();
 	});
 
-	it("期限内可以消费", () => {
+	it("a record can be consumed within the TTL", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry({ recordedAt: 0 });
 		ledger.record(recorded);
 		expect(ledger.consume(matchOf(recorded), DENIAL_TTL_MS - 1)).toEqual(recorded);
 	});
 
-	it("并行的两次 consume 只有一次成功", () => {
+	it("of two concurrent consumes, only one succeeds", () => {
 		const ledger = getDenialLedger();
 		const recorded = entry();
 		ledger.record(recorded);

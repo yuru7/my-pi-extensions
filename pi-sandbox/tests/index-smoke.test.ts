@@ -24,9 +24,9 @@ beforeEach(() => {
 	vi.stubEnv("PI_CODING_AGENT_DIR", join(dir, "agent"));
 });
 afterEach(() => {
-	processPermissionState.override = null; // C1：模块单例跨测试复位
-	for (const state of freshPermissionStates.splice(0)) state.override = null; // T15 修订：resetModules 后重取的新实例同样复位
-	resetEscalationBrokerForTests(); // 审批通道注册表同为进程级单例，必须复位
+	processPermissionState.override = null; // C1: reset the module singleton across tests
+	for (const state of freshPermissionStates.splice(0)) state.override = null; // T15 revision: the new instance re-fetched after resetModules is reset the same way
+	resetEscalationBrokerForTests(); // the approval-channel registry is also a process-level singleton and must be reset
 	resetWritableGrantsForTests();
 	resetSandboxConfigCache();
 	vi.unstubAllEnvs();
@@ -34,12 +34,12 @@ afterEach(() => {
 });
 
 /**
- * T15 修订（测试隔离）：状态行用例在 `vi.resetModules()` 之后 `await import("../index")` 会重求值
- * 整张模块图，命令处理器读的是**新**模块实例里的 `src/permission` 单例，而文件顶部静态导入的
- * `processPermissionState` 是初始实例的绑定。本仓当前把单例挂 globalThis（`PERMISSION_STATE_KEY`），
- * 两个实例恰好是同一个对象，override 事实上生效；但这层共享是隐式的——若单例改回模块级变量，
- * override 会静默失效，status 退回配置默认模式并触发真实 runner 探测（`selectRunner`）。所以这里显式
- * “resetModules → 重取新单例 → 设 override → 再 import 扩展”，并登记新实例供 afterEach 复位。
+ * T15 revision (test isolation): after `vi.resetModules()`, `await import("../index")` in a status-line case re-evaluates
+ * the whole module graph. The command handler reads the `src/permission` singleton inside the **new** module instance, while the static import at the top of the file
+ * binds `processPermissionState` to the initial instance. This repo currently stores the singleton on globalThis (`PERMISSION_STATE_KEY`),
+ * so the two instances happen to be the same object and the override does take effect; that sharing is implicit — if the singleton moves back to a module-level variable,
+ * the override fails silently, status falls back to the config default mode, and a real runner probe runs (`selectRunner`). So this explicitly does
+ * "resetModules → re-fetch the new singleton → set the override → then import the extension", and registers the new instance for afterEach to reset.
  */
 const freshPermissionStates: PermissionState[] = [];
 async function importIndexWithDangerFullAccessOverride() {
@@ -57,9 +57,9 @@ type CommandHandler = (
 type HookHandler = (event: unknown, ctx: unknown) => void;
 
 /**
- * 造假 pi：记录注册的工具/命令/hook 与事件订阅。
- * 2026-09-30 起 index.ts 会注册生命周期 hook 与两个子会话事件订阅，
- * 所以旧版的「pi.on 一被调用就抛错」断言已作废（registerFlag 的禁令保留）。
+ * Fake pi: records registered tools, commands, hooks, and event subscriptions.
+ * Since 2026-09-30, index.ts registers a lifecycle hook and two child-session event subscriptions,
+ * so the old assertion "throw as soon as pi.on is called" is obsolete (the registerFlag ban stays).
  */
 function makeFakePi() {
 	const tools: string[] = [];
@@ -114,7 +114,7 @@ describe("extension activate", () => {
 			"write",
 		]);
 		expect(commands).toEqual(["permission", "pi-sandbox"]);
-		// T15 起多一个 resources_discover（技能平台门控）；目录授权的生命周期钩子也在这里。
+		// Since T15 there is one more resources_discover (skill platform gate); the directory-grant lifecycle hooks are here too.
 		expect(Object.keys(hooks).sort()).toEqual([
 			"agent_settled",
 			"before_agent_start",
@@ -147,15 +147,15 @@ describe("extension activate", () => {
 	});
 
 	it("/permission override is shared across activates via the module singleton (C1)", async () => {
-		// 背景事实：pi 对每个会话（含 subagent 子会话）重新调用扩展 factory——两次 activate
-		// 模拟父/子两个会话；覆盖必须经模块级 processPermissionState 跨会话可见。
+		// Background: pi calls the extension factory again for every session (including subagent child sessions) — two activate calls
+		// stand in for a parent and a child session; the override must be visible across sessions via the module-level processPermissionState.
 		const first = makeFakePi();
 		const second = makeFakePi();
 		const activate = (await import("../index")).default;
-		activate(first.fakePi as never); // 会话 #1（父）
-		activate(second.fakePi as never); // 会话 #2（子；factory 重新调用）
+		activate(first.fakePi as never); // session #1 (parent)
+		activate(second.fakePi as never); // session #2 (child; the factory is called again)
 
-		// 会话 #1 设覆盖（用 danger-full-access：status 走 bypassed 分支，不触发真实 runner 探测）
+		// Session #1 sets the override (danger-full-access: status takes the bypassed branch and does not probe a real runner)
 		const notify1 = vi.fn();
 		await first.commandHandlers.permission.handler("danger-full-access", {
 			ui: { notify: notify1 },
@@ -165,7 +165,7 @@ describe("extension activate", () => {
 			"info",
 		);
 
-		// 会话 #2 的 status 必须看到该覆盖（无 cwd → describeStatus("") 回落 activate cwd）
+		// Session #2's status must see that override (no cwd → describeStatus("") falls back to the activate cwd)
 		const notify2 = vi.fn();
 		await second.commandHandlers.permission.handler("", {
 			ui: { notify: notify2 },
@@ -177,8 +177,8 @@ describe("extension activate", () => {
 	});
 
 	it("corrupt project config: activate does not throw, falls back to defaults, still registers everything (I2)", async () => {
-		// 违规配置（runnerCommand 无配对 signatures → validateSandboxConfig throw）写在临时项目里，
-		// chdir 过去让 activate 的 process.cwd() 命中它；PI_CODING_AGENT_DIR 已被 beforeEach 隔离。
+		// Invalid config (runnerCommand with no paired signatures → validateSandboxConfig throws) is written into a temp project,
+		// and chdir there so activate's process.cwd() hits it; PI_CODING_AGENT_DIR is already isolated by beforeEach.
 		const projectDir = join(dir, "project");
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 		writeFileSync(
@@ -238,23 +238,23 @@ describe("extension activate", () => {
 });
 
 describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => {
-	it("session_start 注册父审批通道，session_shutdown 注销（Review Focus #4）", async () => {
+	it("session_start registers the parent approval channel, and session_shutdown unregisters it (Review Focus #4)", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
 		const broker = getEscalationBroker();
 		broker.linkChild("child-1", "parent-1");
-		expect(broker.resolveChannel("child-1")).toBeNull(); // 还没 session_start
+		expect(broker.resolveChannel("child-1")).toBeNull(); // session_start has not happened yet
 		hooks.session_start?.({ type: "session_start" }, parentCtx("parent-1"));
 		expect(broker.resolveChannel("child-1")).not.toBeNull();
 		hooks.session_shutdown?.(
 			{ type: "session_shutdown" },
 			parentCtx("parent-1"),
 		);
-		expect(broker.resolveChannel("child-1")).toBeNull(); // 父通道已注销，子会话回到 fail-closed
+		expect(broker.resolveChannel("child-1")).toBeNull(); // parent channel unregistered; the child session is fail-closed again
 	});
 
-	it("hasUI=false 的会话不注册为审批终点（正对照：守卫被删则本判例变红）", async () => {
+	it("a session with hasUI=false is not registered as an approval endpoint (positive control: deleting the guard turns this case red)", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -267,12 +267,12 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		expect(broker.resolveChannel("child-1")).toBeNull();
-		// 正对照：若注册时无视 hasUI，现查会让通道在它翻真后浮现 → 本断言变红
+		// Positive control: if registration ignored hasUI, a live check would surface the channel after it flips to true → this assertion goes red
 		ctx.hasUI = true;
 		expect(broker.resolveChannel("child-1")).toBeNull();
 	});
 
-	it("注册后父会话失去 UI → 通道立即失效（hasUI 现查而非快照）", async () => {
+	it("parent session loses UI after registration → the channel fails immediately (hasUI is checked live, not snapshotted)", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -284,11 +284,11 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		getEscalationBroker().linkChild("c", "p");
 		expect(getEscalationBroker().resolveChannel("c")).not.toBeNull();
-		ctx.hasUI = false; // 例如 reload / 会话替换后失去对话框能力
+		ctx.hasUI = false; // e.g. lost dialog capability after reload / session replacement
 		expect(getEscalationBroker().resolveChannel("c")).toBeNull();
 	});
 
-	it("子会话生命周期事件建立/解除 link；载荷缺字段不得抛错", async () => {
+	it("child-session lifecycle events create and clear the link; a payload missing fields must not throw", async () => {
 		const { fakePi, hooks, channels } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -301,7 +301,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		expect(broker.resolveChannel("c1")).not.toBeNull();
 		channels["subagents:child:disposed"]?.({ sessionId: "c1" });
 		expect(broker.resolveChannel("c1")).toBeNull();
-		// 上游契约漂移（缺字段 / 类型错）→ 不 link、不抛错，子会话保持 fail-closed
+		// Upstream contract drift (missing fields / wrong types) → no link, no throw; the child session stays fail-closed
 		expect(() =>
 			channels["subagents:child:session-created"]?.({}),
 		).not.toThrow();
@@ -311,7 +311,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 				parentSessionId: "p",
 			}),
 		).not.toThrow();
-		// 数字载荷被 typeof 守卫拦下：既没建立 link，也没污染后续合法 link（正对照）
+		// A numeric payload is stopped by the typeof guard: it neither creates a link nor pollutes a later valid link (positive control)
 		channels["subagents:child:session-created"]?.({
 			sessionId: "c2",
 			parentSessionId: "p",
@@ -320,7 +320,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		expect(broker.resolveChannel("42")).toBeNull();
 	});
 
-	it("注册的父通道把 opts 透传给 ctx.ui.select", async () => {
+	it("the registered parent channel passes opts through to ctx.ui.select", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -332,7 +332,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		const channel = getEscalationBroker().resolveChannel("c");
-		expect(channel).toBeNull(); // 还没 link
+		expect(channel).toBeNull(); // no link yet
 		getEscalationBroker().linkChild("c", "p");
 		const resolved = getEscalationBroker().resolveChannel("c");
 		expect(resolved).not.toBeNull();
@@ -343,7 +343,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		});
 	});
 
-	it("注册的父通道把 opts 透传给 ctx.ui.input（Deny 理由两步式的第二步）", async () => {
+	it("the registered parent channel passes opts through to ctx.ui.input (step two of the two-step Deny reason)", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -364,7 +364,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		});
 	});
 
-	it("旧宿主 ctx.ui 无 input → 通道 input 为 undefined（broker 跳过理由追问）", async () => {
+	it("old host ctx.ui has no input → channel input is undefined (the broker skips the reason prompt)", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -380,7 +380,7 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		expect(resolved?.input).toBeUndefined();
 	});
 
-	it("ctx 失效（hasUI 取值器抛错）→ 通道失效并 fail-closed，不冒泡宿主报错", async () => {
+	it("stale ctx (the hasUI getter throws) → the channel fails closed and does not propagate the host error", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -399,11 +399,11 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		getEscalationBroker().linkChild("c", "p");
 		expect(getEscalationBroker().resolveChannel("c")).not.toBeNull();
-		stale = true; // 模拟会话替换 / reload 后宿主 assertActive() 抛错
+		stale = true; // simulate the host assertActive() throwing after session replacement / reload
 		expect(getEscalationBroker().resolveChannel("c")).toBeNull();
 	});
 
-	it("session_shutdown 退订两个事件通道（宿主 reload 复用同一 bus，不退订会累积监听器）", async () => {
+	it("session_shutdown unsubscribes both event channels (a host reload reuses the same bus; without unsubscribe, listeners accumulate)", async () => {
 		const { fakePi, hooks, channels } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
@@ -414,12 +414,12 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 });
 
 /**
- * T15：技能平台门控（Ruling 9）与 pwsh 未激活提示（Ruling 8）。
- * 提示是**每进程一次**的模块级标志，所以每个需要“首次提示”的用例先 `vi.resetModules()`
- * 再 import index；fires-once 用例用两次 activate 钉住跨会话不重复。
+ * T15: the skill platform gate (Ruling 9) and the notice when pwsh is not activated (Ruling 8).
+ * The notice is a module-level flag, **once per process**, so every case that needs a "first notice" calls `vi.resetModules()` first
+ * and then imports index; the fires-once case uses two activate calls to pin that it does not repeat across sessions.
  */
-describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
-	/** Node 上 process.platform 是 configurable 的数据属性：临时改写后按原描述符还原。 */
+describe("T15: platform gate and the pwsh-not-activated notice (Ruling 8/9)", () => {
+	/** On Node, process.platform is a configurable data property: restore the original descriptor after a temporary rewrite. */
 	async function withPlatform<T>(
 		platform: string,
 		run: () => Promise<T> | T,
@@ -433,7 +433,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	}
 
-	/** 带 getActiveTools 的假 pi（Ruling 8 的探测面）；传函数可模拟取值抛错（陈旧宿主）。 */
+	/** Fake pi with getActiveTools (Ruling 8's probe surface); pass a function to simulate a getter that throws (stale host). */
 	function makeFakePiWithActiveTools(active: string[] | (() => string[])) {
 		const made = makeFakePi();
 		(
@@ -504,9 +504,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 	});
 
 	it("registers the powershell tool only when createSandboxTools provides one", async () => {
-		// 宿主 0.80.2 没有 createPowerShellToolDefinition，win32 的正例分支单测里无法自然到达；
-		// 这里 mock 掉 ../src/tools 的返回值，只钉 index.ts 的 `!== undefined` 门控本身。
-		// （缺省分支由本文件首个用例的 tools 精确集合覆盖：undefined 必须跳过注册而不是注册 undefined。）
+		// Host 0.80.2 has no createPowerShellToolDefinition, so the win32 positive branch cannot be reached naturally in a unit test;
+		// mock the return value of ../src/tools here and pin only index.ts's `!== undefined` gate itself.
+		// (The default branch is covered by the exact tools set in this file's first case: undefined must skip registration rather than register undefined.)
 		vi.doMock("../src/tools", () => ({
 			createSandboxTools: () => ({
 				bash: { name: "bash" },
@@ -527,9 +527,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("/permission 状态行在 win32 且 pwsh 未激活时标注 not activated（Ruling 8）", async () => {
+	it("/permission status line marks not activated on win32 when pwsh is inactive (Ruling 8)", async () => {
 		const { fakePi, commandHandlers } = makeFakePiWithActiveTools(["bash"]);
-		// T15 修订：override 必须设在 resetModules 后重取的单例上（bypassed 分支：不触发 runner 探测）
+		// T15 revision: the override must be set on the singleton re-fetched after resetModules (bypassed branch: no runner probe)
 		const activate = await importIndexWithDangerFullAccessOverride();
 		activate(fakePi as never);
 		const notify = vi.fn();
@@ -540,11 +540,11 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const text = String(notify.mock.calls[0]?.[0]);
 		expect(text).toContain(
 			"sandbox mode: danger-full-access (/permission override)",
-		); // 隔离生效：status 确实读到本用例设的 override
+		); // isolation holds: status really read the override set by this case
 		expect(text).toContain("shell: powershell only (not activated)");
 	});
 
-	it("/permission 状态行在 win32 且 pwsh 已激活时只注明 shell 方言", async () => {
+	it("/permission status line on win32 with pwsh active only notes the shell dialect", async () => {
 		const { fakePi, commandHandlers } = makeFakePiWithActiveTools([
 			"bash",
 			"powershell",
@@ -564,13 +564,13 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		expect(text).not.toContain("not activated");
 	});
 
-	it("/permission 状态行在非 win32 上不含 PowerShell 行", async () => {
+	it("/permission status line on non-win32 does not include a PowerShell line", async () => {
 		const { fakePi, commandHandlers } = makeFakePiWithActiveTools(["bash"]);
 		const activate = await importIndexWithDangerFullAccessOverride();
 		activate(fakePi as never);
 		const notify = vi.fn();
-		// 平台门控：本用例断言的是**非 win32** 行为，必须钉住 platform，否则在 Windows 宿主上
-		// process.platform 会把它切到 win32 分支（状态行会带上 PowerShell 行）而假性失败。
+		// Platform gate: this case asserts **non-win32** behavior and must pin platform; otherwise on a Windows host
+		// process.platform takes the win32 branch (the status line gains a PowerShell line) and the case fails spuriously.
 		await withPlatform("linux", async () => {
 			await commandHandlers.permission.handler("", { ui: { notify } });
 		});
@@ -582,10 +582,10 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		expect(text).not.toContain("shell: powershell");
 	});
 
-	it("/permission 状态行在 win32 且无法判断激活状态时标注 activation unknown（T15 修订）", async () => {
-		// 老宿主（含本仓 devDependency 0.80.2 同一形态）没有 getActiveTools：此类宿主上 pwsh
-		// 工具根本不存在，裸 "shell: powershell only" 会被读成“已启用”，必须显式标注未知态。
-		const { fakePi, commandHandlers } = makeFakePi(); // 无 getActiveTools
+	it("/permission status line marks activation unknown on win32 when activation cannot be determined (T15 revision)", async () => {
+		// An old host (the same shape as this repo's devDependency 0.80.2) has no getActiveTools: on such a host the pwsh
+		// tool does not exist at all, and a bare "shell: powershell only" would be read as "enabled", so the unknown state must be marked explicitly.
+		const { fakePi, commandHandlers } = makeFakePi(); // no getActiveTools
 		const activate = await importIndexWithDangerFullAccessOverride();
 		activate(fakePi as never);
 		const notify = vi.fn();
@@ -601,7 +601,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		expect(text).not.toContain("(not activated)");
 	});
 
-	it("Ruling 8: win32 + bash 活动而 pwsh 缺失 → 有 UI 提示一次，消息点名修法", async () => {
+	it("Ruling 8: win32 + bash active and pwsh missing → one UI notice, and the message names the fix", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const first = makeFakePiWithActiveTools(["bash"]);
@@ -617,22 +617,22 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 				first.hooks.session_start?.(
 					{ type: "session_start" },
 					uiCtx("p", notify),
-				); // 同一 activate 内重复 session_start
+				); // a repeated session_start inside the same activate
 			});
 			expect(notify).toHaveBeenCalledTimes(1);
 			expect(notify.mock.calls[0]?.[1]).toBe("warning");
 			const message = String(notify.mock.calls[0]?.[0]);
 			expect(message).toContain("~/.pi/agent/settings.json");
-			expect(message).toContain("requires pi >= 1.0.0"); // T15 修订：宿主前提与 UnsupportedWindowsShellError 同措辞
+			expect(message).toContain("requires pi >= 1.0.0"); // T15 revision: same host-prerequisite wording as UnsupportedWindowsShellError
 			expect(message).toContain('"defaultTools"');
-			// 只给有效方向：pi 在 win32 上默认只激活 powershell，本包 bash 又以 exposure: "hidden" 注册——
-			// `-bash` 既去不掉扩展注册的工具，也不是这里需要的动作。
+			// Only the valid direction: on win32, pi activates only powershell by default, and this package registers bash with exposure: "hidden" —
+			// `-bash` neither removes the tool the extension registered nor is the action needed here.
 			expect(message).toContain('{ "defaultTools": ["+powershell"] }');
 			expect(message).not.toContain("-bash");
 			expect(message).toContain("refused");
 			expect(warn).not.toHaveBeenCalled();
 
-			// 每进程一次：宿主对每个会话重调 factory，第二次 activate / session_start 不得再刷屏
+			// Once per process: the host calls the factory again for every session; a second activate / session_start must not spam the notice again
 			const second = makeFakePiWithActiveTools(["bash"]);
 			activate(second.fakePi as never);
 			const notify2 = vi.fn();
@@ -648,7 +648,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: win32 + 无 UI（hasUI=false）→ 提示写 stderr", async () => {
+	it("Ruling 8: win32 + no UI (hasUI=false) → the notice goes to stderr", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(["bash"]);
@@ -672,7 +672,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: ctx 已失效（hasUI 取值器抛错）→ 回落 console.warn，不冒泡（I2）", async () => {
+	it("Ruling 8: ctx already stale (the hasUI getter throws) → fall back to console.warn and do not propagate (I2)", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(["bash"]);
@@ -699,10 +699,10 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: win32 + 老宿主无 getActiveTools → 无法判断，静默且不抛（I2）", async () => {
+	it("Ruling 8: win32 + old host with no getActiveTools → cannot tell, stay silent, and do not throw (I2)", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
-		const { fakePi, hooks } = makeFakePi(); // 无 getActiveTools
+		const { fakePi, hooks } = makeFakePi(); // no getActiveTools
 		activate(fakePi as never);
 		const notify = vi.fn();
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -719,7 +719,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: win32 + getActiveTools 抛错（陈旧宿主 ctx）→ 静默且不抛（I2）", async () => {
+	it("Ruling 8: win32 + getActiveTools throws (stale host ctx) → stay silent and do not throw (I2)", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(() => {
@@ -741,7 +741,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: win32 + pwsh 已在活动列表 → 静默", async () => {
+	it("Ruling 8: win32 + pwsh already on the active list → stay silent", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(["bash", "powershell"]);
@@ -759,7 +759,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: win32 + bash 本就不活动 → 静默（不该催装 pwsh）", async () => {
+	it("Ruling 8: win32 + bash was never active → stay silent (do not nag to install pwsh)", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(["read"]);
@@ -777,7 +777,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		}
 	});
 
-	it("Ruling 8: 非 win32 → 即使 bash 活动、pwsh 缺失也不提示", async () => {
+	it("Ruling 8: non-win32 → no notice even if bash is active and pwsh is missing", async () => {
 		vi.resetModules();
 		const activate = (await import("../index")).default;
 		const { fakePi, hooks } = makeFakePiWithActiveTools(["bash"]);
@@ -785,7 +785,7 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const notify = vi.fn();
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			// 平台门控：本用例断言的是**非 win32** 分支（不该催装 pwsh），不钉 platform 在 Windows 上会走 win32 提示分支。
+			// Platform gate: this case asserts the **non-win32** branch (do not nag to install pwsh); without pinning platform, Windows would take the win32 notice branch.
 			await withPlatform("linux", async () => {
 				hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify));
 				expect(notify).not.toHaveBeenCalled();

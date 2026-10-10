@@ -24,13 +24,13 @@ export type SpawnFn = (
 	options: SpawnOptions,
 ) => ChildProcess;
 
-/** I3：杀整个进程组（detached spawn → 子进程是组长）；失败（无 pid/组不存在）回退杀直接子进程。 */
+/** I3: kill the whole process group (detached spawn makes the child the group leader); on failure (no pid / group gone) fall back to killing the direct child. */
 function killTree(
 	child: ChildProcess,
 	signal: NodeJS.Signals,
 	platform: string,
 ): void {
-	// win32 没有进程组：杀 runner 即关闭 Job，受限子孙随之灭亡（spec §4.7）
+	// win32 has no process groups: killing the runner closes the Job, and confined descendants die with it (spec §4.7)
 	if (platform !== "win32" && child.pid !== undefined) {
 		try {
 			process.kill(-child.pid, signal);
@@ -43,27 +43,27 @@ function killTree(
 export interface ShellOpsOptions extends ConfineOptions {
 	mode: SandboxMode;
 	workspaceRoot: string;
-	/** 把原始命令翻译成 shell 的 argv（bash: `["bash","-c",command]`；pwsh 见 powershell-ops）。 */
+	/** Translate the raw command into the shell's argv (bash: `["bash","-c",command]`; pwsh: see powershell-ops). */
 	shell: (command: string) => readonly string[];
-	/** 宿平台注入点（默认 process.platform）：决定 kill 策略与 spawn 选项（detached）。 */
+	/** Host-platform injection point (default process.platform): chooses the kill strategy and spawn options (detached). */
 	platform?: string;
-	/** 测试注入点；生产用 node:child_process spawn。 */
+	/** Test injection point; production uses node:child_process spawn. */
 	spawnFn?: SpawnFn;
-	/** 沙箱拒绝（classifyDenial 命中）时的记账回调：denial-first 门禁据此放行一次提权重试。 */
+	/** Accounting callback when the sandbox denies (classifyDenial matches): the denial-first gate uses it to allow one escalation retry. */
 	onDenial?: (details: ShellDenialDetails) => void;
 	/**
-	 * 受限模式（非 danger-full-access）的前置守卫（同步）：抛错即 reject 且不 spawn。
-	 * 在 danger-full-access 早退之后、confine 之前调用；该模式不经过 guard。
+	 * Synchronous pre-guard for confined modes (not danger-full-access): a throw rejects and does not spawn.
+	 * Called after the danger-full-access early return and before confine; that mode does not pass through the guard.
 	 */
 	guard?: (mode: SandboxMode) => void;
 	/**
-	 * cwd 不存在时报错的第二行；缺省保持 bash 文案逐字不变（bash-ops 的既有断言依赖它），
-	 * pwsh 经 powershell-ops 传入 PowerShell 文案。
+	 * Second line of the error when cwd does not exist. The default keeps the bash wording verbatim
+	 * (existing bash-ops assertions depend on it); pwsh passes the PowerShell wording via powershell-ops.
 	 */
 	cwdErrorMessage?: string;
 }
 
-/** stdout/stderr 分类与 Reviewer 输入窗口：只保留尾部 8KiB（拒绝/失败信息总在末尾附近）。 */
+/** Tail kept for stdout/stderr classification and the reviewer input window: last 8KiB (denial/failure text is always near the end). */
 const OUTPUT_TAIL_CHARS = 8192;
 
 export interface ShellDenialDetails {
@@ -73,15 +73,17 @@ export interface ShellDenialDetails {
 }
 
 /**
- * 受限 shell 的公共执行路径（spec §2）：shell 翻译 argv → guard（受限模式）→ confine →
- * 本地 spawn，路径透明（cwd 用宿主路径原样）；流式输出并分类 runner failure / denial，
- * 守住 timeout/abort 契约。timeout 单位为秒（pi 约定）。bash 与 pwsh 共用本工厂。
+ * Shared execution path for a confined shell (spec §2): shell-translate argv, then guard
+ * (confined modes), then confine, then a local spawn with transparent paths (cwd is the
+ * host path as-is). Stream output and classify runner failure / denial, and keep the
+ * timeout/abort contract. timeout is in seconds (pi's convention). bash and pwsh share this factory.
  */
 export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 	return {
 		exec: async (command, cwd, execOpts) => {
-			// M4：cwd 存在性预检，逐字镜像 pi 本地 ops（dist/core/tools/bash.js:29-34）的友好报错，
-			// 且与其同序放在 abort 早退之前；三档模式一致（否则模型只见到裸 spawn ENOENT）。
+			// M4: cwd existence pre-check, mirroring pi's local ops (dist/core/tools/bash.js:29-34)
+			// friendly error verbatim and in the same order, before the abort early return.
+			// Same for all three modes (otherwise the model only sees a raw spawn ENOENT).
 			try {
 				await fsAccess(cwd, constants.F_OK);
 			} catch {
@@ -91,14 +93,15 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 			}
 			return new Promise<{ exitCode: number | null }>((resolve, reject) => {
 				if (execOpts.signal?.aborted) {
-					// Ruling 9 + I1：已中止的信号——不 spawn，按 pi 本地 ops 契约 reject "aborted"
+					// Ruling 9 + I1: signal already aborted — do not spawn; reject "aborted" per pi's local ops contract
 					reject(new Error("aborted"));
 					return;
 				}
 				const platform = opts.platform ?? process.platform;
 				const rawArgv = opts.shell(command);
-				// Review Focus #3 + Ruling 10：钉消息翻译（LC_MESSAGES）；移除 LC_ALL（POSIX 中它覆盖 LC_MESSAGES，
-				// 保留会使中文环境下 denial 签名全 miss）；不动 LANG/LC_CTYPE（编码/排序行为不变）
+				// Review Focus #3 + Ruling 10: pin message translation (LC_MESSAGES). Remove LC_ALL
+				// (on POSIX it overrides LC_MESSAGES; leaving it makes every denial signature miss
+				// in a non-English locale). Leave LANG/LC_CTYPE alone (encoding/collation stay the same).
 				const env: NodeJS.ProcessEnv = {
 					...process.env,
 					...execOpts.env,
@@ -112,8 +115,8 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 					if (opts.mode === "danger-full-access") {
 						argv = rawArgv;
 					} else {
-						// win32 bash 拒绝（Ruling 2）等前置守卫：必须在 danger-full-access 早退之后，
-						// 抛错即 fail-closed（不 spawn）。
+						// Pre-guards such as the win32 bash refusal (Ruling 2) must run after the
+						// danger-full-access early return. A throw is fail-closed (no spawn).
 						opts.guard?.(opts.mode);
 						confined = confine(
 							rawArgv,
@@ -124,7 +127,7 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 						argv = confined.argv;
 					}
 				} catch (err) {
-					reject(err); // SandboxUnavailableError / UnsupportedWindowsShellError：fail-closed，未 spawn
+					reject(err); // SandboxUnavailableError / UnsupportedWindowsShellError: fail-closed, not spawned
 					return;
 				}
 
@@ -133,8 +136,8 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 					cwd,
 					env,
 					stdio: ["ignore", "pipe", "pipe"],
-					detached: platform !== "win32", // I3：独立进程组，使 killTree 能连带孙进程一起杀；win32 无进程组
-					windowsHide: true, // win32：不弹控制台窗口
+					detached: platform !== "win32", // I3: own process group so killTree can also kill grandchildren; win32 has no process groups
+					windowsHide: true, // win32: do not pop a console window
 				});
 
 				let stdoutTail = "";
@@ -154,8 +157,8 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 
 				let timer: NodeJS.Timeout | undefined;
 				let timedOut = false;
-				// Ruling 20：对齐 pi 本地 ops 的 `timeout > 0` 守卫（dist/core/tools/bash.js:60）——
-				// timeout 为 0/负数表示无超时，不武装定时器，也不得 reject "timeout:0"。
+				// Ruling 20: match pi local ops' `timeout > 0` guard (dist/core/tools/bash.js:60).
+				// A timeout of 0 or negative means no timeout: do not arm a timer, and do not reject "timeout:0".
 				if (execOpts.timeout !== undefined && execOpts.timeout > 0) {
 					timer = setTimeout(() => {
 						timedOut = true;
@@ -210,8 +213,9 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 							);
 						}
 					}
-					// I1：对齐 pi 本地 ops 契约（dist bash.js：throw Error("aborted") / throw Error(`timeout:${timeout}`)）——
-					// 否则 pi 把 null 当成功分支，超时/中止命令以“正常完成+截断输出”返回模型。
+					// I1: match pi local ops (dist bash.js: throw Error("aborted") / throw Error(`timeout:${timeout}`)).
+					// Otherwise pi treats null as the success branch and returns a timed-out or aborted
+					// command to the model as "completed normally, with truncated output".
 					if (code === null) {
 						if (timedOut) {
 							reject(new Error(`timeout:${execOpts.timeout}`));
@@ -222,7 +226,7 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 							return;
 						}
 					}
-					resolve({ exitCode: code }); // 外部杀（无 timer 无 abort）：保留 null 语义
+					resolve({ exitCode: code }); // External kill (no timer, no abort): keep the null semantics
 				});
 			});
 		},

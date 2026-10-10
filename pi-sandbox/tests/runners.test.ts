@@ -102,7 +102,7 @@ describe("seatbeltProfileArgs", () => {
 			workspaceRoot: `/tmp/q"uo\\te`,
 		};
 		const profile = seatbeltProfileArgs(policy)[1];
-		// SBPL 字面量转义：\ → \\ ，" → \"
+		// SBPL literal escaping: \ → \\ , " → \"
 		expect(profile).toContain(`(subpath "/tmp/q\\"uo\\\\te")`);
 	});
 });
@@ -148,8 +148,8 @@ describe("selectRunner", () => {
 	});
 	it("unknown platform: unavailable", () => {
 		resetRunnerCache();
-		// win32 不再是“未知平台”：真实前置检查依赖宿主上的 koffi / src/win32/runner.js，无法用缺省值跨平台断言；
-		// win32 的可解析与不可解析两条路径见下方 "windows-acl rung"（注入 hook）。
+		// win32 is no longer an "unknown platform": the real precondition check depends on host koffi / src/win32/runner.js and cannot be asserted cross-platform with defaults.
+		// The resolvable and unresolvable win32 paths are in "windows-acl rung" below (injected hook).
 		expect(selectRunner(100, { platform: "freebsd" })).toEqual({
 			runner: "unavailable",
 		});

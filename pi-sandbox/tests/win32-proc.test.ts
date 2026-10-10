@@ -9,7 +9,7 @@ describe("win32 command line quoting", () => {
 		expect(quoteArg("plain")).toBe("plain");
 		expect(quoteArg("C:\\Program Files\\Git\\bin\\bash.exe")).toBe('"C:\\Program Files\\Git\\bin\\bash.exe"');
 		expect(quoteArg('say "hi"')).toBe('"say \\"hi\\""');
-		expect(quoteArg("back\\slash\\")).toBe('"back\\slash\\\\"'); // 结尾反斜杠必须翻倍
+		expect(quoteArg("back\\slash\\")).toBe('"back\\slash\\\\"'); // a trailing backslash must be doubled
 		expect(quoteArg("")).toBe('""');
 		expect(quoteArg("中文 参数")).toBe('"中文 参数"');
 	});
@@ -23,7 +23,7 @@ import koffi from "koffi";
 
 const PVOID = koffi.pointer("void");
 
-/** 把 PROCESS_INFORMATION 的三个字段写进 Win32 出参（布局由 abi 定死：hProcess@0、hThread@8、dwProcessId@16）。 */
+/** Write the three PROCESS_INFORMATION fields into the Win32 out-parameter (layout fixed by abi: hProcess@0, hThread@8, dwProcessId@16). */
 function writeProcessInformation(pointer: unknown, pid = 4242): void {
 	const bytes = Buffer.alloc(abi.PROCESS_INFORMATION_SIZE);
 	bytes.writeBigUInt64LE(0x7000n, 0); // hProcess
@@ -49,7 +49,7 @@ function makeApi(overrides: Record<string, unknown> = {}) {
 		setInformationJobObject: rec("setInformationJobObject", 1),
 		createProcessAsUserW: (...args: unknown[]) => {
 			calls.push({ name: "createProcessAsUserW", args });
-			writeProcessInformation(args[args.length - 1]); // 最后一个参数是 PROCESS_INFORMATION*
+			writeProcessInformation(args[args.length - 1]); // the last argument is PROCESS_INFORMATION*
 			return 1;
 		},
 		assignProcessToJobObject: rec("assignProcessToJobObject", 1),
@@ -68,13 +68,13 @@ describe("win32 job-confined spawn", () => {
 		const api = makeApi({
 			createProcessAsUserW: (...args: unknown[]) => {
 				api.calls.push({ name: "createProcessAsUserW", args });
-				// STARTUPINFOW 由 proc.js 用 koffi struct（startupInfoType()）真实分配并编码；
-				// stub 内按同一类型解码回来直接断言字段值，而不是只检查「最后两个参数是指针」。
+				// STARTUPINFOW is really allocated and encoded by proc.js with a koffi struct (startupInfoType()).
+				// The stub decodes it with the same type and asserts the field values directly, rather than only checking that the last two arguments are pointers.
 				capturedStartupInfo = koffi.decode(args[args.length - 2] as never, startupInfoType()) as {
 					dwFlags: number;
 					wShowWindow: number;
 				};
-				writeProcessInformation(args[args.length - 1]); // 最后一个参数是 PROCESS_INFORMATION*
+				writeProcessInformation(args[args.length - 1]); // the last argument is PROCESS_INFORMATION*
 				return 1;
 			},
 		});
@@ -83,8 +83,8 @@ describe("win32 job-confined spawn", () => {
 		expect(create).toBeDefined();
 		const suspend = create?.args.find((a) => typeof a === "number" && a === abi.CREATE_SUSPENDED);
 		expect(suspend).toBe(abi.CREATE_SUSPENDED);
-		// dwFlags 必须同时携带 USESTDHANDLES（继承 stdio）与 USESHOWWINDOW，且 wShowWindow=SW_HIDE；
-		// 字段漏设/漂移在这里直接失败，而不再依赖「指针存在」这类恒真观察。
+		// dwFlags must carry both USESTDHANDLES (inherit stdio) and USESHOWWINDOW, and wShowWindow=SW_HIDE.
+		// A missing or drifted field fails here directly, instead of relying on a vacuously true observation such as "the pointer exists".
 		expect(capturedStartupInfo?.dwFlags).toBe(abi.STARTF_USESTDHANDLES | abi.STARTF_USESHOWWINDOW);
 		expect(capturedStartupInfo?.wShowWindow).toBe(abi.SW_HIDE);
 		const order = api.calls.map((c) => c.name);

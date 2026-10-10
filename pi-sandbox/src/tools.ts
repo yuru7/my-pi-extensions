@@ -5,8 +5,8 @@ import {
 	readFile as fsReadFile,
 	writeFile as fsWriteFile,
 } from "node:fs/promises";
-// 命名空间导入只用于版本门控探测（createPowerShellToolDefinition 是 pi ≥1.0.0 才有的导出）：
-// pi 是 ESM，静态具名导入一个老宿主不存在的导出会在**链接期**硬失败，属性读取最坏只是 undefined。
+// Namespace import used only for the version-gate probe (createPowerShellToolDefinition is an export that exists only on pi ≥1.0.0):
+// pi is ESM, so a static named import of an export an old host does not have fails hard at **link time**; a property read is at worst undefined.
 import * as piHost from "@earendil-works/pi-coding-agent";
 import {
 	type AgentToolResult,
@@ -83,9 +83,9 @@ import { type RunnerHooks, selectRunner } from "./runners";
 import { getWritableGrants } from "./writable-grants";
 
 /**
- * 宿主 pwsh 工具工厂的结构类型（pi ≥1.0.0 导出 `createPowerShellToolDefinition(cwd, options)`）。
- * 本仓 pin 的 devDependency（0.80.2）没有该导出，所以这里不引用其类型、也不静态具名导入；
- * `ToolDefinition` 本身 0.80.2 就有，可以安全用作返回面。
+ * Structural type of the host pwsh tool factory (pi ≥1.0.0 exports `createPowerShellToolDefinition(cwd, options)`).
+ * This repo's pinned devDependency (0.80.2) does not have that export, so this file neither references its type nor statically name-imports it;
+ * `ToolDefinition` itself exists on 0.80.2 and is safe to use as the return surface.
  */
 type HostPowerShellToolDefinition = ToolDefinition<TSchema, unknown, unknown>;
 type HostCreatePowerShellToolDefinition = (
@@ -94,9 +94,9 @@ type HostCreatePowerShellToolDefinition = (
 ) => HostPowerShellToolDefinition;
 
 /**
- * 宿主探测（lazy + 命名空间 + `typeof === "function"`）：只在 win32 装配时读一次属性。
- * 老宿主（<1.0.0，含本仓 devDependency 0.80.2）上是 undefined——那时 pi 本来就没有 powershell
- * 工具，缺省即“不注册、不报错、不阻断”。
+ * Host probe (lazy + namespace + `typeof === "function"`): read the property once, and only when assembling on win32.
+ * On an old host (<1.0.0, including this repo's devDependency 0.80.2) it is undefined—pi has no powershell
+ * tool then, and the default is "do not register, do not error, do not block".
  */
 function hostCreatePowerShellToolDefinition():
 	| HostCreatePowerShellToolDefinition
@@ -109,10 +109,10 @@ function hostCreatePowerShellToolDefinition():
 }
 
 /**
- * I2 fail-safe：宿主 builder 在**构造期**抛错时降级为“无 pwsh 覆盖”（undefined，与老宿主同一路径）。
- * `createSandboxTools` 绝不能因此抛出——pi 会把整个扩展置 null，bash/write/edit 随即无沙箱裸跑
- * （fail-open，见 index.ts 的 I2）。execute 期的 builder 抛错是另一回事：只影响那一次 pwsh 调用，
- * 不涉及扩展装配。
+ * I2 fail-safe: if the host builder throws during **construction**, degrade to "no pwsh override" (undefined, the same path as an old host).
+ * `createSandboxTools` must not throw because of this—pi would null out the whole extension, and bash/write/edit would then run unsandboxed
+ * (fail-open, see I2 in index.ts). A builder throw during execute is a different matter: it affects only that one pwsh call,
+ * and does not involve extension assembly.
  */
 function buildHostPowerShellBase(
 	builder: HostCreatePowerShellToolDefinition | undefined,
@@ -128,32 +128,32 @@ function buildHostPowerShellBase(
 
 export interface SandboxToolDeps {
 	cwd: string;
-	/** 测试注入用；生产缺省逐调用 getSandboxConfig(ctx.cwd)（C2）。 */
+	/** For test injection; production defaults to getSandboxConfig(ctx.cwd) per call (C2). */
 	getConfig?(): SandboxConfig;
 	permission: PermissionState;
 	hooks?: RunnerHooks;
 	spawnFn?: SpawnFn;
-	/** 测试注入的预解析 runner；生产缺省走 selectRunner 缓存。 */
+	/** Pre-resolved runner injected by tests; production defaults to the selectRunner cache. */
 	selected?: ReturnType<typeof selectRunner>;
-	/** 宿平台（默认 process.platform）：决定 pwsh 工具是否注册、bash 是否标记为默认不激活（win32），
-	 *  并透传给 shell ops——bash 在 win32 上的拒绝由 bash-ops 的 guard（assertShellAllowed）实现，
-	 *  本文件只负责把 platform 送到。 */
+	/** Host platform (default process.platform): decides whether the pwsh tool is registered and whether bash is marked inactive by default (win32),
+	 *  and is passed through to shell ops—bash denial on win32 is implemented by the bash-ops guard (assertShellAllowed);
+	 *  this file only delivers platform. */
 	platform?: string;
-	/** 测试注入（testing.md「参数注入」）：替换缺省的 createSandboxBashOps；生产不传。 */
+	/** Test injection (testing.md "parameter injection"): replace the default createSandboxBashOps; production omits it. */
 	_buildBashOps?: typeof createSandboxBashOps;
-	/** 测试注入（testing.md「参数注入」）：替换宿主命名空间探测结果；生产不传。
-	 *  需要它是因为本仓 devDependency（0.80.2）的宿主没有 createPowerShellToolDefinition，
-	 *  win32 注册的正例路径在单测里无法自然到达。注入值走与探测同一条 `typeof === "function"` 口径，
-	 *  传非函数值（如 false）即模拟“老宿主无该导出”；传 undefined 则回落真实探测。 */
+	/** Test injection (testing.md "parameter injection"): replace the host namespace probe result; production omits it.
+	 *  It is needed because the host in this repo's devDependency (0.80.2) has no createPowerShellToolDefinition,
+	 *  so the positive win32-registration path cannot be reached naturally in unit tests. The injected value uses the same `typeof === "function"` criterion as the probe;
+	 *  a non-function (such as false) simulates "an old host with no such export"; undefined falls back to the real probe. */
 	_hostCreatePowerShellToolDefinition?: unknown;
-	/** 测试注入（testing.md「参数注入」）：替换缺省的 "/tmp" + os.tmpdir() tmp 根；生产不传。 */
+	/** Test injection (testing.md "parameter injection"): replace the default "/tmp" + os.tmpdir() tmp roots; production omits it. */
 	_tmpRoots?: readonly string[];
 }
 
 const workspaceRootCache = new Map<string, string>();
 
-/** C2（spec §9）：pi 从不 chdir，会话 cwd 只经 execute 的 ctx.cwd 可达——
- *  围栏根逐调用从它派生（模块级缓存，进程内共享），不再冻结在 activate 时的 process.cwd()。 */
+/** C2 (spec §9): pi never chdirs, so the session cwd is reachable only via execute's ctx.cwd—
+ *  the fence root is derived from it per call (module-level cache, shared in-process), and is no longer frozen to process.cwd() at activate time. */
 function workspaceRootFor(rawCwd: string): string {
 	let root = workspaceRootCache.get(rawCwd);
 	if (root === undefined) {
@@ -163,7 +163,7 @@ function workspaceRootFor(rawCwd: string): string {
 	return root;
 }
 
-/** 逐调用配置（C2）：测试注入优先，否则按会话 cwd 惰性加载（getSandboxConfig 自带缓存）。 */
+/** Per-call config (C2): test injection wins; otherwise load lazily from the session cwd (getSandboxConfig caches on its own). */
 function configForCall(
 	deps: SandboxToolDeps,
 	sessionCwd: string,
@@ -171,15 +171,15 @@ function configForCall(
 	return deps.getConfig?.() ?? getSandboxConfig(sessionCwd);
 }
 
-/** 提权参数对（三个工具共用）。
- *  `Type.Null()` 是刻意的：strict 提供商（pi 的 `constrainedSampling: {type:"json_schema"}` + `compat.supportsStrictMode`）
- *  会把所有 property 塞进 `required`，并对“不允许 null”的字段补 `anyOf[X,{type:"null"}]`——模型于是必须给值。
- *  显式声明 null 后，“不提权”有一个 schema 认可、文案也认可的取值，而不是靠模型去猜字符串 `"null"`；
- *  同时 pi 的 strict 转换不再补包裹层（`schemaAllowsNull` 递归识别），JSON null 也不会被
- *  `normalizeOptionalNulls` 剥掉，而是原样送达 execute 的归一化。后两条是宿主（pi ≥1.0.0）行为：
- *  本仓 devDependency 是 0.80.2（无严格转换、无 `normalizeOptionalNulls`，但**有** declared-schema 参数校验
- *  ——实测字符串 `"null"` 在 0.80.2 上同样被硬拒），单测只能钉 declared schema——
- *  宿主链路的可复现验证配方与实测记录见 docs/superpowers/specs/2026-10-02-denial-first-escalation-design.md §4.3。 */
+/** Escalation argument pair (shared by the three tools).
+ *  `Type.Null()` is deliberate: a strict provider (pi's `constrainedSampling: {type:"json_schema"}` + `compat.supportsStrictMode`)
+ *  stuffs every property into `required`, and wraps a field that "does not allow null" in `anyOf[X,{type:"null"}]`—so the model must supply a value.
+ *  After null is declared explicitly, "do not escalate" has a value the schema accepts and the copy accepts, instead of the model guessing the string `"null"`;
+ *  pi's strict transform also stops adding a wrapper (`schemaAllowsNull` recognizes it recursively), and JSON null is not stripped by
+ *  `normalizeOptionalNulls` but is delivered as-is to execute's normalization. The last two are host behavior (pi ≥1.0.0):
+ *  this repo's devDependency is 0.80.2 (no strict transform, no `normalizeOptionalNulls`, but it **does** have declared-schema argument validation
+ *  —measured: the string `"null"` is hard-rejected on 0.80.2 too), so unit tests can only pin the declared schema—
+ *  the reproducible host-path recipe and the measured record are in docs/superpowers/specs/2026-10-02-denial-first-escalation-design.md §4.3. */
 export const ESCALATION_PROPS = {
 	sandbox_permissions: Type.Optional(
 		Type.Union([
@@ -192,7 +192,7 @@ export const ESCALATION_PROPS = {
 };
 
 interface EscalationParams {
-	/** JSON null = “不提权”（schema 显式声明，strict 提供商会原样送达）。 */
+	/** JSON null = "do not escalate" (declared explicitly by the schema; a strict provider delivers it as-is). */
 	sandbox_permissions?: string | null;
 	justification?: string | null;
 }
@@ -206,7 +206,7 @@ interface ToolCtxLike {
 			options: string[],
 			opts?: { signal?: AbortSignal },
 		): Promise<string | undefined>;
-		/** 可选：Deny 后的理由输入（两步式第二步）。缺失时仅跳过一次理由追问。 */
+		/** Optional: reason input after Deny (second step of the two-step flow). When missing, skip the reason follow-up once. */
 		input?(
 			title: string,
 			placeholder?: string,
@@ -233,8 +233,8 @@ interface ToolCtxLike {
 		}>;
 	};
 	isProjectTrusted?: () => boolean;
-	/** 子会话身份来源。可选：既有测试的窄 ctx 与异常宿主都可能没有它，
-	 *  缺失时按"无法路由"fail-closed，绝不得抛 TypeError（Review Focus #1）。 */
+	/** Source of the child-session identity. Optional: both existing tests' narrow ctx and an abnormal host may lack it,
+	 *  and a missing one is fail-closed as "cannot route"; it must never throw TypeError (Review Focus #1). */
 	sessionManager?: {
 		getSessionId(): string;
 		buildSessionProjection?(): { messages?: unknown };
@@ -242,7 +242,7 @@ interface ToolCtxLike {
 	};
 }
 
-/** 防御性读取会话 id：缺失、非字符串或抛错都归为"无法路由"（fail-closed）。父/子两侧共用。 */
+/** Defensive session-id read: missing, non-string, or a throw all count as "cannot route" (fail-closed). Shared by the parent and child sides. */
 function readSessionId(ctx: ToolCtxLike): string | null {
 	try {
 		const sessionId = ctx.sessionManager?.getSessionId();
@@ -264,15 +264,15 @@ function dialogueFor(ctx: ToolCtxLike) {
 }
 
 /**
- * 审批通道解析（spec 2026-09-30 §4.3）：
- * - 本会话有 UI：优先用它自己注册的通道，经 broker 的同一条 FIFO 车道弹窗（Ruling 17）——宿主的
- *   对话框只有一个槽位且不排队，第二次调用会让前一个弹窗收不到按键、其 promise 变成孤儿。
- *   解析不到自己的通道（宿主未发 session_start、拿不到会话 id）才回落直连，回落行为与改动前逐字一致。
- * - 本会话无 UI（子会话）：沿 link 严格解析父通道（D3），解析不到就返回哑通道。
- * 哑通道让 approveEscalation 抛出既有 fail-closed 文案——不新增错误分支、不改变校验顺序。
- * 两条通道的 ask 都是两步式（select → Deny 时 input 收理由）：直连串行 await，broker 在同一个
- * FIFO 任务内完成，理由输入不会被排队中的下一个审批弹窗顶掉。signal 两条路径都透传（D6）：
- * 中断既能关掉在飞的弹窗，也能让排队中的请求根本不弹。
+ * Approval-channel resolution (spec 2026-09-30 §4.3):
+ * - This session has a UI: prefer the channel it registered itself, and open the dialog on the broker's same FIFO lane (Ruling 17)—the host's
+ *   dialog has a single slot and does not queue, so a second call leaves the previous dialog unable to receive keys and its promise orphaned.
+ *   Fall back to a direct connection only when its own channel cannot be resolved (the host never sent session_start, or the session id cannot be read); the fallback matches the pre-change behavior verbatim.
+ * - This session has no UI (a child session): strictly resolve the parent channel along the link (D3); if it cannot be resolved, return a dummy channel.
+ * The dummy channel makes approveEscalation throw the existing fail-closed copy—no new error branch, and the validation order does not change.
+ * ask on both channels is two-step (select → input for the reason on Deny): the direct path serially awaits, and the broker finishes both inside the same
+ * FIFO task, so the reason input is not displaced by the next queued approval dialog. signal is forwarded on both paths (D6):
+ * an interrupt can both close an in-flight dialog and keep a queued request from opening one at all.
  */
 function approvalChannelFor(
 	ctx: ToolCtxLike,
@@ -281,7 +281,7 @@ function approvalChannelFor(
 	const opts = signal === undefined ? undefined : { signal };
 	const broker = getEscalationBroker();
 	const sessionId = readSessionId(ctx);
-	// 直连通道的两步式：select →（Deny 时）input，在同一条异步链上串行 await，天然原子。
+	// Two-step flow of the direct channel: select → input (on Deny), serially awaited on the same async chain, so it is atomic by construction.
 	const directAsk = async (
 		title: string,
 		options: string[],
@@ -302,7 +302,7 @@ function approvalChannelFor(
 			);
 			return { choice, reason };
 		} catch {
-			return { choice }; // 理由输入异常不影响拒绝语义（fail-closed）
+			return { choice }; // a failure in the reason input does not change the denial (fail-closed)
 		}
 	};
 	if (ctx.hasUI) {
@@ -328,14 +328,14 @@ function approvalChannelFor(
 }
 
 /**
- * 解析一次调用的生效模式（spec §4/§7）：
- * malformed 校验 → effective（/permission 覆盖 > config）→ 可选的已批准提权。
- * escalated 为真仅当本次真的经审批提了权（请求档位 == effective 时免审批，不是提权）。
+ * Resolve the effective mode of one call (spec §4/§7):
+ * malformed check → effective (/permission override > config) → an optional approved escalation.
+ * escalated is true only when this call really escalated through approval (a requested mode == effective skips approval and is not an escalation).
  */
 export interface ResolvedCall {
 	mode: SandboxMode;
 	escalated: boolean;
-	/** denial-first 门禁忽略了本次提权参数：按 effective 档位执行，不是提权。 */
+	/** The denial-first gate ignored this call's escalation arguments: run at the effective mode; this is not an escalation. */
 	ignoredEscalation: boolean;
 }
 
@@ -348,8 +348,8 @@ export async function resolveCall(
 	signal?: AbortSignal,
 	tool: string = subject,
 ): Promise<ResolvedCall> {
-	// 占位符归一化先于校验：null / "null" / 空白是"没填"而不是畸形提权（normalizeEscalationValue）。
-	// 直接报 MALFORMED 会让模型误判为沙箱拒绝，转而升级成真正的最大档提权。
+	// Normalize placeholders before validation: null / "null" / whitespace means "left blank", not a malformed escalation (normalizeEscalationValue).
+	// Reporting MALFORMED directly makes the model misread it as a sandbox denial and escalate for real to the maximum mode.
 	const requested = normalizeEscalationValue(params.sandbox_permissions);
 	const justification = normalizeEscalationValue(params.justification);
 	validateEscalationArgs(requested, justification);
@@ -357,8 +357,8 @@ export async function resolveCall(
 	const effective = resolveEffectiveMode(deps.permission.override, config.mode);
 	if (requested === undefined)
 		return { mode: effective, escalated: false, ignoredEscalation: false };
-	// denial-first 硬门禁：严格更宽的请求必须命中本会话、同一工具、同一操作的未消费拒绝。
-	// 同档请求与非法请求不进门禁：前者免审批，后者由 approveEscalation 报既有 "not strictly wider"。
+	// denial-first hard gate: a strictly wider request must hit an unconsumed denial for this session, the same tool, and the same operation.
+	// A same-mode request and an illegal request do not enter the gate: the former skips approval, and the latter is reported by approveEscalation with the existing "not strictly wider".
 	let denial: DenialRecord | undefined;
 	if (isStrictlyWider(effective, requested)) {
 		const sessionId = readSessionId(ctx);
@@ -523,7 +523,7 @@ async function completeReview(
 	};
 }
 
-/** 兼容包装：既有调用方与判例按裸 mode 断言（一次性提权语义不变，Review Focus #5）。 */
+/** Compatibility wrapper: existing callers and rulings assert the bare mode (one-shot escalation semantics unchanged, Review Focus #5). */
 export async function resolveCallMode(
 	params: EscalationParams,
 	ctx: ToolCtxLike,
@@ -537,7 +537,7 @@ export async function resolveCallMode(
 		.mode;
 }
 
-/** Ruling 15：对象 spread 保留 base schema 的自有 options（如 editSchema 的 additionalProperties:false）。 */
+/** Ruling 15: object spread keeps the base schema's own options (such as additionalProperties:false on editSchema). */
 function extendParams(base: TSchema): TSchema {
 	const b = base as unknown as { properties: Record<string, unknown> };
 	return {
@@ -547,12 +547,12 @@ function extendParams(base: TSchema): TSchema {
 }
 
 /**
- * `prepareArguments` 串联：base 钩子在前，占位符剥离在后。
- * base 侧不能丢——pi 内置 edit 的 `prepareEditArguments` 负责 legacy `oldText`/`newText` → `edits` 的规整，
- * 直接写自己的 `prepareArguments` 会把它静默覆盖（旧式输入兼容回归）；bash/write 在 pi 侧暂无钩子，
- * 写成串联后未来 base 新增钩子也自动生效。
- * 宿主契约（与 src/escalation.ts 的 stripEscalationPlaceholders 注释互为补充）：pi 的
- * `prepareToolCallArguments` 在 `validateToolArguments` 之前执行（0.80.2 与 1.0.0 均如此），剥离因此在校验前生效。
+ * `prepareArguments` chain: the base hook runs first, placeholder stripping after.
+ * The base side must not be dropped—pi's built-in edit `prepareEditArguments` normalizes legacy `oldText`/`newText` → `edits`,
+ * and writing our own `prepareArguments` directly would silently override it (a regression in legacy input compatibility); bash/write have no hook on the pi side yet,
+ * and once it is a chain, a future base hook takes effect automatically.
+ * Host contract (complements the stripEscalationPlaceholders comment in src/escalation.ts): pi's
+ * `prepareToolCallArguments` runs before `validateToolArguments` (true on both 0.80.2 and 1.0.0), so stripping takes effect before validation.
  */
 function withPlaceholderStripping<T>(
 	base: ((args: unknown) => T) | undefined,
@@ -562,11 +562,11 @@ function withPlaceholderStripping<T>(
 }
 
 /**
- * 提示预算（β′，每请求成本受控）：
- * - `tool.description` 与参数 schema 是**按工具**进请求的 → 同一句话写进 bash/write/edit 就付 3 份；
- * - `promptGuidelines` 进 system prompt 的 rules，pi 按字符串去重（`buildRules` 的 seen 集）→ 只付 1 份。
- * 所以：跨工具规则只留一句（ESCALATION_GUIDELINE + 这一句 SANDBOX_NOTE），协议细节一律放按需面
- * （denial hint / 校验错误 / 批准后标记）。
+ * Prompt budget (β′, cost per request is bounded):
+ * - `tool.description` and the parameter schema enter the request **per tool** → the same sentence written into bash/write/edit is paid for 3 times;
+ * - `promptGuidelines` enter the system prompt's rules, and pi dedupes by string (`buildRules`'s seen set) → paid for once.
+ * So: a cross-tool rule stays as one sentence (ESCALATION_GUIDELINE plus this one SANDBOX_NOTE), and protocol detail always lives on the on-demand surface
+ * (denial hint / validation error / post-approval marker).
  */
 const SANDBOX_NOTE =
 	"Sandbox: confined to the current mode; workspace-write already allows the workspace and /tmp. Unless retrying a denial, omit these fields or send JSON null.";
@@ -575,7 +575,7 @@ function escalationDescription(base: string): string {
 	return [base, "", SANDBOX_NOTE].join("\n");
 }
 
-/** 批准后追加一行按需反馈（其余字段原样保留）。 */
+/** Append one on-demand line of feedback after approval (every other field is kept as-is). */
 function withEscalationNote<T>(
 	result: AgentToolResult<T>,
 	mode: SandboxMode,
@@ -589,9 +589,9 @@ function withEscalationNote<T>(
 	};
 }
 
-/** denial-first 门禁忽略提权时追加的按需反馈（其余字段原样保留）。
- *  已知边界：只随成功结果下发——bash 非零退出会 throw（pi 的错误路径不经过 execute 的返回值），
- *  那种场景下模型仍能按随错误下发的 escalation hint 正确重试（真实拒绝已记账，重试会弹窗）。 */
+/** On-demand feedback appended when the denial-first gate ignores an escalation (every other field is kept as-is).
+ *  Known boundary: it is delivered only with a successful result—a non-zero bash exit throws (pi's error path does not go through execute's return value),
+ *  and in that case the model can still retry correctly from the escalation hint delivered with the error (the real denial was recorded, so the retry opens a dialog). */
 function withIgnoredEscalationNote<T>(
 	result: AgentToolResult<T>,
 	mode: SandboxMode,
@@ -628,7 +628,7 @@ function grantDeniedMessage(directory: string, cause: string): string {
 	return `auto-review denied the directory grant for "${directory}" (${cause}) — nothing was granted. Stop and explain instead of working around it.`;
 }
 
-/** 与档位提权同一套审批模式（human / auto-review / allow-all）。配置坏了就拒绝，不降到 allow-all。 */
+/** The same approval modes as mode escalation (human / auto-review / allow-all). A bad config is a denial, not a drop to allow-all. */
 async function approveDirectoryGrant(args: {
 	ctx: ToolCtxLike;
 	deps: SandboxToolDeps;
@@ -714,9 +714,9 @@ function stripEscalation(params: Record<string, unknown>) {
 	return rest;
 }
 
-/** fence 移到 ops 层（Ruling 14）：pi execute 用 resolveToCwd 解析后把 absolutePath 传给 ops，
- *  围栏检查的就是将被写入的同一字符串——与落盘构造性一致，杜绝 ~/、@/、file:// 解析分歧绕过。
- *  readFile/access 是读操作，不设围栏（所有模式读全放行）。 */
+/** The fence moved to the ops layer (Ruling 14): pi's execute resolves with resolveToCwd and passes absolutePath to ops,
+ *  and the fence checks that same string that will be written—constructively the same as the write, so a ~/ , @/ , or file:// parse disagreement cannot bypass it.
+ *  readFile/access are reads and have no fence (every mode allows all reads). */
 function createFencedWriteOps(
 	policy: FencePolicy,
 	onDenial?: (details: { path: string; message: string }) => void,
@@ -736,8 +736,8 @@ function createFencedWriteOps(
 			guard(path);
 			await fsWriteFile(path, content, "utf-8");
 		},
-		// pi 的 write 会先 mkdir(dirname(file))。那一步被拒时，模型和审查看到的必须仍是文件，
-		// 否则会把「给文件建父目录」当成「改目录本身」而拒绝。
+		// pi's write mkdir's dirname(file) first. When that step is denied, the model and the reviewer must still see the file,
+		// or "create the parent directory for the file" is treated as "change the directory itself" and denied.
 		mkdir: async (dir) => {
 			try {
 				assertWriteAllowed(dir, policy, true);
@@ -785,11 +785,11 @@ function createFencedEditOps(
 }
 
 export function createSandboxTools(deps: SandboxToolDeps) {
-	// 宿平台一次性解析：pwsh 注册门控与 shell ops 的 platform 注入共用同一个值。
+	// Resolve the host platform once: the pwsh registration gate and the platform injected into shell ops share this value.
 	const platform = deps.platform ?? process.platform;
-	// 测试注入优先；生产缺省为真实的 createSandboxBashOps。
+	// Test injection wins; production defaults to the real createSandboxBashOps.
 	const buildBashOps = deps._buildBashOps ?? createSandboxBashOps;
-	// pwsh 覆盖（spec §4.8）：仅 win32 且宿主确实导出工厂时装配；否则 undefined。
+	// pwsh override (spec §4.8): assemble only on win32 and only when the host actually exports the factory; otherwise undefined.
 	let createHostPowerShell: HostCreatePowerShellToolDefinition | undefined;
 	if (platform === "win32") {
 		const candidate =
@@ -798,14 +798,14 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		if (typeof candidate === "function")
 			createHostPowerShell = candidate as HostCreatePowerShellToolDefinition;
 	}
-	// Ruling 15：以 definition 工厂为 base——自带 promptSnippet/promptGuidelines，
-	// execute 第 5 参 ctx 类型正确（ExtensionContext），spread 后注册不丢系统提示元数据。
+	// Ruling 15: the definition factory is the base—it brings promptSnippet/promptGuidelines,
+	// execute's 5th argument ctx is correctly typed (ExtensionContext), and registration after the spread does not drop system-prompt metadata.
 	const baseBash = createBashToolDefinition(deps.cwd);
 	const baseWrite = createWriteToolDefinition(deps.cwd);
 	const baseEdit = createEditToolDefinition(deps.cwd);
-	// pwsh 的 base 只用于元数据（label/description/schema/prepareArguments），execute 会被下面的包装覆盖；
-	// 与 bash 一样，builder 在 execute 时按当次 mode 重新装配受限 ops。
-	// I2 fail-safe：构造抛错降级为“无 pwsh 覆盖”，绝不冒泡出 createSandboxTools（fail-open 防线）。
+	// pwsh's base is used only for metadata (label/description/schema/prepareArguments); execute is replaced by the wrapper below;
+	// as with bash, the builder reassembles confined ops for the current mode at execute time.
+	// I2 fail-safe: a throw during construction degrades to "no pwsh override" and must never bubble out of createSandboxTools (the fail-open guard).
 	const basePowerShell = buildHostPowerShellBase(
 		createHostPowerShell,
 		deps.cwd,
@@ -835,18 +835,18 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			.runner;
 	};
 
-	// Windows 工具装配（spec D3 第三版，pi 1.0.0 源码实证）：win32 上 bash 必须是“注册但模型不可达”。
-	// 机制两代教训：
-	//   ① `defaultActive: false` **无效**（真机证伪）：pi 1.0.0 的 _buildRuntime 把默认激活名写死为
-	//      ["read","bash","edit","write"]（agent-session.js:2889-2893），_refreshToolRegistry 按**名字**
-	//      从注册表取同名工具激活；而 `defaultActive:false` 的语义恰是“被命名即激活”
-	//      （_isActivatedOnRegistration，types.d.ts:471-475）——本包注册的同名 bash 照旧进入激活集。
-	//   ② 正解 `exposure: "hidden"`：_applyToolLoadout 构建声明集合时**丢弃** hidden
-	//      （agent-session.js:1124），_isDeclarable 对 hidden 返回 false → 自动激活与命名激活
-	//      （defaultTools / --tools / setActiveTools）都不生效；pi 文档：hidden = registered but unreachable。
-	// 同时**绝不能**“win32 上不注册 bash”：扩展工具按名覆盖内建定义（registry.set），不注册就会露出
-	// pi 内置的未受限 bash，显式启用即 fail-open。注册 + hidden = 名字被遮蔽、模型不可达，无 fail-open 路径。
-	// 非 win32 不设该键：bash 必须默认激活（既有行为不变）。
+	// Windows tool assembly (spec D3 third revision, confirmed against pi 1.0.0 source): on win32 bash must be "registered but unreachable by the model".
+	// Two generations of lessons about the mechanism:
+	//   (1) `defaultActive: false` is **ineffective** (falsified on a real machine): pi 1.0.0's _buildRuntime hardcodes the default active names as
+	//      ["read","bash","edit","write"] (agent-session.js:2889-2893), and _refreshToolRegistry activates the same-named tool from the registry **by name**;
+	//      the meaning of `defaultActive:false` is exactly "activate when named"
+	//      (_isActivatedOnRegistration, types.d.ts:471-475)—the same-named bash this package registers still enters the active set.
+	//   (2) The correct fix is `exposure: "hidden"`: _applyToolLoadout **drops** hidden when building the declared set
+	//      (agent-session.js:1124), and _isDeclarable returns false for hidden → neither automatic activation nor activation by name
+	//      (defaultTools / --tools / setActiveTools) takes effect; pi's docs: hidden = registered but unreachable.
+	// It is also **never** acceptable to "not register bash on win32": an extension tool overrides the built-in definition by name (registry.set), and not registering would expose
+	// pi's built-in unrestricted bash, so an explicit enable is fail-open. Registering plus hidden hides the name and keeps it unreachable by the model, with no fail-open path.
+	// Off win32 the key is not set: bash must stay active by default (existing behavior unchanged).
 	const bash = {
 		...baseBash,
 		...(platform === "win32" ? { exposure: "hidden" as const } : {}),
@@ -876,7 +876,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"bash",
 			);
-			// M3：配置了自定义 runnerCommand 时跳过链探测（confine 直接用 runnerCommand）。
+			// M3: when a custom runnerCommand is configured, skip chain probing (confine uses runnerCommand directly).
 			const selected =
 				mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
 					? undefined
@@ -951,8 +951,8 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"write",
 			);
-			// fence 拒绝不捕获：FenceDenialError 从 ops 抛出、经 pi execute 原样上抛
-			//（withFileMutationQueue 不吞错）——pi 的 agent 循环会转成 error result。
+			// Do not catch a fence denial: FenceDenialError is thrown from ops and rethrown as-is through pi's execute
+			// (withFileMutationQueue does not swallow errors)—pi's agent loop turns it into an error result.
 			const config = configForCall(deps, sessionCwd);
 			const tool = createWriteToolDefinition(sessionCwd, {
 				operations: createFencedWriteOps(
@@ -1081,8 +1081,8 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 						onUpdate: unknown,
 						ctx: ExtensionContext,
 					) {
-						// 与 bash 完全同路径：同一 sessionCwd 解析、同一 resolveCall（subject 为 command）、同一 ledger 记账、
-						// 同一 prepareArguments/剥参与同档提权标记。
+						// The same path as bash: the same sessionCwd resolution, the same resolveCall (subject is command), the same ledger recording,
+						// and the same prepareArguments / argument stripping and same-mode escalation marker.
 						const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 						const workspaceRoot = workspaceRootFor(sessionCwd);
 						const config = configForCall(deps, sessionCwd);

@@ -1,8 +1,10 @@
 /**
- * 会话级额外可写根。批准后的目录只在本会话的后续工具调用里生效，
- * 不写入 writableRoots 的缺省值，也不传给别的会话（子会话用自己的 id，读到的是空列表）。
- * 父子是各自的 jiti 实例，所以槽位挂在 globalThis 上。
- * clear 时把这次新建且仍为空的目录删掉（因此变空的新建父目录也一起删）。
+ * Session-scoped extra writable roots. An approved directory applies only to later
+ * tool calls in this session. It is not written into the writableRoots default and is
+ * not shared with other sessions (a child session uses its own id and sees an empty list).
+ * Parent and child are separate jiti instances, so the slot lives on globalThis.
+ * clear removes directories created for this grant that are still empty (newly created
+ * parents that become empty are removed too).
  */
 
 import { removeEmptyCreatedDirectories } from "./grant-path";
@@ -63,7 +65,7 @@ export function getWritableGrants(): WritableGrants {
 	return grants;
 }
 
-/** 仅供测试复位全局槽位（生产代码不得调用）。 */
+/** Test-only reset of the global slot (production code must not call this). */
 export function resetWritableGrantsForTests(): void {
 	delete (globalThis as Record<symbol, unknown>)[GRANTS_KEY];
 }

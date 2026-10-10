@@ -17,23 +17,23 @@ import {
 } from "./runners";
 
 export interface RunnerFailureRule {
-	/** 非零 exit code 门控；缺省允许任何非零 exit。 */
+	/** Non-zero exit-code gate; by default any non-zero exit is allowed. */
 	allowedExitCodes?: readonly number[];
-	/** 标识 runner 致命诊断的非空子串（一行内）。 */
+	/** Non-empty substrings (within a single line) that identify a fatal runner diagnostic. */
 	fatalSignatures: readonly string[];
-	/** 在 fatal 匹配前按整行相等剔除的良性 stderr 行。 */
+	/** Benign stderr lines dropped by whole-line equality before fatal matching. */
 	informationalLines?: readonly string[];
 }
 
 export interface ConfinedArgv {
 	argv: string[];
 	enforcement: SandboxEnforcement;
-	/** 该后端的拒绝方言：被沙箱拒绝的文件效果在该后端下产生的 stderr 子串。 */
+	/** This backend's denial dialect: stderr substrings produced when the sandbox denies a file effect. */
 	denialSignatures: readonly string[];
 	runnerFailureRules: readonly RunnerFailureRule[];
 }
 
-/** fail-closed：命令没有被执行。逃生门是显式配置 danger-full-access。 */
+/** Fail-closed: the command was not executed. The escape hatch is an explicit danger-full-access setting. */
 export class SandboxUnavailableError extends Error {
 	constructor(mode: ConfinedSandboxMode, detail?: string) {
 		super(
@@ -45,14 +45,14 @@ export class SandboxUnavailableError extends Error {
 	}
 }
 
-/** 每个后端自己的拒绝方言（禁止跨后端并集，spec §6）。 */
+/** Each backend's own denial dialect (do not union them across backends, spec §6). */
 export const DENIAL_SIGNATURES = {
 	bwrap: ["read-only file system"],
 	landlock: ["permission denied"],
 	seatbelt: ["operation not permitted"],
 	runnerCommand: ["read-only file system", "permission denied"],
-	// 移植契约（Ruling 6）：覆盖 cmd（Access is denied）、pwsh/.NET（Access to the path…）、
-	// Node EACCES/EPERM 与 git-bash（permission denied / operation not permitted）四种方言。
+	// Port contract (Ruling 6): cover four dialects — cmd (Access is denied), pwsh/.NET
+	// (Access to the path…), Node EACCES/EPERM, and git-bash (permission denied / operation not permitted).
 	"windows-acl": [
 		"access is denied",
 		"access to the path",
@@ -73,8 +73,9 @@ export const RUNNER_FAILURE_RULES = {
 		},
 	],
 	seatbelt: [{ fatalSignatures: ["sandbox-exec: "] }],
-	// 移植契约（Ruling 7）：exit 127 门控 + runner 前缀签名，避免把受限命令自己打印的
-	// 同名字样误判为 runner 失败（命令确实跑过时绝不判 runner 失败）。
+	// Port contract (Ruling 7): exit 127 gate plus a runner-prefix signature, so a confined
+	// command that prints the same wording is not mistaken for a runner failure (if the
+	// command actually ran, never classify it as a runner failure).
 	"windows-acl": [
 		{ allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] },
 	],
@@ -83,12 +84,12 @@ export const RUNNER_FAILURE_RULES = {
 	readonly RunnerFailureRule[]
 >;
 
-/** Windows 受限模式只支持 pwsh（Ruling 2）：bash 在任何受限模式下拒绝执行，绝不 spawn。
- *  纵深防御：本包在 win32 上把 bash 注册为 `exposure: "hidden"`（D3 第三版：模型不可达、也无法被
- *  `defaultTools`/`--tools` 命名激活），故正常路径下模型根本不会看到 bash；本类仍保留为**拒绝壳**，
- *  以防未来宿主改变激活语义或有人直接调用该工具定义。
- *  文案只给**有效**指引：`defaultTools` 的 `-bash` 去不掉扩展注册的工具——所以不再教用户改
- *  `defaultTools`，只说明“用 powershell、bash 保持 fail-closed、danger-full-access 是唯一显式逃生门”。 */
+/** Confined mode on Windows supports only pwsh (Ruling 2): bash is refused in every confined mode and is never spawned.
+ *  Defense in depth: on win32 this package registers bash as `exposure: "hidden"` (D3 rev 3: unreachable by the model, and not activatable by name via
+ *  `defaultTools` / `--tools`), so on the normal path the model never sees bash. This class remains a **refusal shell**
+ *  in case a future host changes activation semantics or someone calls the tool definition directly.
+ *  The message gives only **effective** guidance: `-bash` in `defaultTools` cannot remove an extension-registered tool, so we no longer tell the user to edit
+ *  `defaultTools`. It only says to use powershell, that bash stays fail-closed, and that danger-full-access is the only explicit escape hatch. */
 export class UnsupportedWindowsShellError extends Error {
 	constructor(shell: string) {
 		super(
@@ -102,10 +103,10 @@ export class UnsupportedWindowsShellError extends Error {
 }
 
 /**
- * Windows 受限模式只支持 pwsh（Ruling 2）：bash 在任何受限模式下拒绝执行，绝不 spawn。
- * @param shell - 待执行的 shell 名（`"bash"` / `"powershell"`）。
- * @param platform - 宿平台（注入点）。
- * @param mode - 本次调用解析出的生效模式。
+ * Confined mode on Windows supports only pwsh (Ruling 2): bash is refused in every confined mode and is never spawned.
+ * @param shell - Shell name to run (`"bash"` / `"powershell"`).
+ * @param platform - Host platform (injection point).
+ * @param mode - Effective mode resolved for this call.
  */
 export function assertShellAllowed(
 	shell: string,
@@ -122,19 +123,19 @@ export function assertShellAllowed(
 }
 
 export interface ConfineOptions {
-	/** 预解析的 runner（测试注入 / 调用方缓存）；缺省时走 selectRunner。 */
+	/** Pre-resolved runner (test injection / caller cache); defaults to selectRunner. */
 	selected?: SelectedRunner;
 	runnerCommand?: string[] | null;
 	runnerFailureSignatures?: string[] | null;
 	probeTimeoutMs?: number;
 	hooks?: RunnerHooks;
-	/** 本轮已批准的额外可写目录。自定义 runner 的工具会拒绝添加，这里只透传已有列表。 */
+	/** Extra writable directories already approved this turn. Tools with a custom runner refuse to add more; this only forwards the existing list. */
 	extraRoots?: readonly string[];
 }
 
 /**
- * 把 argv 包装进选中 runner 的策略调用（spec §2）。workspaceRoot 在此统一
- * canonical 化一次，profile 构造器保持纯净。
+ * Wrap argv in the selected runner's policy invocation (spec §2). workspaceRoot is
+ * canonicalized once here so profile builders stay pure.
  */
 export function confine(
 	argv: readonly string[],
@@ -164,9 +165,10 @@ export function confine(
 	if (selected.runner === "unavailable")
 		throw new SandboxUnavailableError(mode);
 
-	// win32 的可用性只解析一次并透传给 runnerInvocation（Task 9 约定）；
-	// 注入即权威：hook 存在时其返回值就是结论（含显式 undefined），绝不回退真实探测。
-	// 不可解析即 fail-closed 抛 SandboxUnavailableError，绝不构造跑不起来的 argv。
+	// Resolve win32 availability once and pass it through to runnerInvocation (Task 9).
+	// Injection is authoritative: when the hook exists, its return value is the answer
+	// (including an explicit undefined); never fall back to a real probe.
+	// If it cannot be resolved, fail closed with SandboxUnavailableError and never build an argv that cannot run.
 	let availability: { node: string; runner: string } | undefined;
 	if (selected.runner === "windows-acl") {
 		const hooks = opts.hooks ?? {};
@@ -195,10 +197,10 @@ export function confine(
 }
 
 /**
- * runner 失败判定（命令根本没跑，优先于 denial 检查）。
- * exit 门控 → 大小写不敏感整行相等剔除 informationalLines → 剩余行内
- * 大小写不敏感子串匹配 fatalSignatures。返回命中的 fatal 行。
- * exitCode 为 0/null（成功或被信号杀）永不判为 runner 失败。
+ * Runner-failure classification (the command never ran; checked before denial).
+ * Exit gate, then drop informationalLines by case-insensitive whole-line equality, then
+ * case-insensitive substring match of fatalSignatures on the remaining lines. Returns the
+ * fatal line that matched. exitCode 0/null (success or killed by a signal) is never a runner failure.
  */
 export function classifyRunnerFailure(
 	exitCode: number | null,
@@ -225,7 +227,7 @@ export function classifyRunnerFailure(
 	return undefined;
 }
 
-/** denial 判定：非零 exit + 任一方言子串（大小写不敏感）出现在 stderr。 */
+/** Denial classification: non-zero exit plus any dialect substring (case-insensitive) in stderr. */
 export function classifyDenial(
 	exitCode: number | null,
 	stderr: string,

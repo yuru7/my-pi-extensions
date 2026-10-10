@@ -1,21 +1,22 @@
 import type { SandboxMode } from "./policy";
 
 /**
- * denial-ledger.ts — denial-first 提权门禁的会话级拒绝账本。
+ * denial-ledger.ts — session-scoped denial ledger for the denial-first escalation gate.
  *
- * 同一会话、同一工具、同一操作（cwd + 去掉提权字段后的参数指纹）的未消费记录
- * 才能放行一次提权。不同命令、不同写入目标、不同工具不能串用。
- * 一条记录只消费一次；过期、会话结束、消费后都丢弃。
+ * Only an unconsumed record for the same session, the same tool, and the same operation
+ * (cwd + parameter fingerprint with escalation fields removed) can allow one escalation.
+ * A different command, write target, or tool cannot reuse it.
+ * Each record is consumed once. Expired records, ended sessions, and consumed records are dropped.
  *
- * 跨 jiti 实例：父子会话是各自独立的模块实例，globalThis 是唯一共享点。
+ * Across jiti instances: parent and child sessions are separate module instances, so globalThis is the only shared point.
  */
 
-/** 拒绝记录的有效期。对话里的重试应紧挨着拒绝发生。 */
+/** Lifetime of a denial record. A retry in the conversation should follow the denial immediately. */
 export const DENIAL_TTL_MS = 10 * 60 * 1000;
 
 const ESCALATION_PARAM_KEYS = new Set(["sandbox_permissions", "justification"]);
 
-/** 提权字段不进指纹，这样“原样重试并带上审批参数”仍能对上刚才的拒绝。 */
+/** Escalation fields are left out of the fingerprint, so "retry as-is and add approval params" still matches the denial just recorded. */
 export function operationFingerprint(params: Record<string, unknown>): string {
 	const rest: Record<string, unknown> = {};
 	for (const key of Object.keys(params).sort()) {
@@ -33,13 +34,13 @@ export interface DenialRecord {
 	workspace: string;
 	sandboxMode: SandboxMode;
 	backend: string;
-	/** 命令文本或写入路径。Reviewer 用，不单独当匹配键。 */
+	/** Command text or write path. Used by the reviewer; not a match key on its own. */
 	target: string;
 	writablePaths: readonly string[];
 	exitCode?: number;
 	stdout?: string;
 	stderr?: string;
-	/** write/edit 围栏拒绝的原文。 */
+	/** Original text of a write/edit fence denial. */
 	error?: string;
 	recordedAt: number;
 }
@@ -52,13 +53,13 @@ export interface DenialMatch {
 }
 
 export interface DenialLedger {
-	/** 记一笔待消费的拒绝。同一匹配键重复记时覆盖内容，仍只保留一条。 */
+	/** Record a denial waiting to be consumed. A repeat for the same match key overwrites the contents and still keeps a single entry. */
 	record(entry: DenialRecord): void;
-	/** 消费匹配的未过期记录。没有则返回 undefined。一次性，且与查找同步完成。 */
+	/** Consume the matching unexpired record. Returns undefined when there is none. One-shot, and atomic with the lookup. */
 	consume(match: DenialMatch, now?: number): DenialRecord | undefined;
-	/** 未消费且未过期的记录。不消费。目录授权用它核对拒绝路径。 */
+	/** Unconsumed, unexpired records. Does not consume them. Directory grants use this to check denied paths. */
 	list(sessionId: string, now?: number): readonly DenialRecord[];
-	/** 会话销毁时清理。 */
+	/** Drop records when the session is destroyed. */
 	forget(sessionId: string): void;
 }
 
@@ -132,7 +133,7 @@ export function getDenialLedger(): DenialLedger {
 	return ledger;
 }
 
-/** 仅供测试复位全局槽位（生产代码不得调用）。 */
+/** Test-only reset of the global slot (production code must not call this). */
 export function resetDenialLedgerForTests(): void {
 	delete (globalThis as Record<symbol, unknown>)[LEDGER_KEY];
 }

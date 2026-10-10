@@ -28,7 +28,7 @@ function makeApi(overrides: Record<string, unknown> = {}) {
 		localFree: rec("localFree", null),
 		getTokenInformation: rec("getTokenInformation", 1),
 		setTokenInformation: rec("setTokenInformation", 1),
-		// 真实 koffi 的 PVOID 出参槽是 BigInt 指针，必须用 koffi.encode 写入句柄。
+		// A real koffi PVOID out-parameter slot is a BigInt pointer, so the handle must be written with koffi.encode.
 		createRestrictedToken: rec(
 			"createRestrictedToken",
 			(...args: unknown[]) => {
@@ -44,15 +44,15 @@ function makeApi(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-/** 读 CreateRestrictedToken 收到的 restricting 列表（buffer 里只有 SID 指针）。 */
+/** Read the restricting list received by CreateRestrictedToken (the buffer holds only SID pointers). */
 function restrictingSlot(calls: Array<{ name: string; args: unknown[] }>) {
 	const call = calls.find((c) => c.name === "createRestrictedToken");
 	return { count: call?.args[6] as number, buffer: call?.args[7] as Buffer };
 }
 
 describe("win32 restricted token", () => {
-	// 说明：`createRestrictedToken` 的 restricting 列表是「SID_AND_ATTRIBUTES 数组」的原生 buffer，
-	// 单测只断言元素个数（每个 16 字节）与 flags，不去解指针内容——指针内容由真机验收覆盖。
+	// Note: `createRestrictedToken`'s restricting list is a native buffer of a SID_AND_ATTRIBUTES array.
+	// The unit test only asserts the element count (16 bytes each) and the flags; it does not decode pointer contents. Pointer contents are covered by real-machine acceptance.
 
 	it("selects the read-only restricting list without capability SIDs", () => {
 		const api = makeApi();

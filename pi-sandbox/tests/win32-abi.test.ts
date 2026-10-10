@@ -7,7 +7,7 @@ describe("win32 abi constants", () => {
 		// (FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD) & ~STANDARD_RIGHTS_WRITE
 		expect(abi.GRANT_MASK).toBe(0x00110156);
 		expect(abi.GRANT_MASK & abi.STANDARD_RIGHTS_WRITE).toBe(0);
-		// WRITE_DAC (0x40000) / WRITE_OWNER (0x80000) 必须不在掩码里：受限子进程不能改 DACL 或夺取所有权
+		// WRITE_DAC (0x40000) / WRITE_OWNER (0x80000) must be absent from the mask: a confined child must not change the DACL or take ownership
 		expect(abi.GRANT_MASK & 0x00040000).toBe(0);
 		expect(abi.GRANT_MASK & 0x00080000).toBe(0);
 		expect(abi.FILE_ALL_ACCESS).toBe(0x1f01ff);

@@ -824,7 +824,7 @@ export interface DirectoryGrantReview {
 	denials: readonly DenialRecord[];
 }
 
-/** 目录授权的审查。范围是「本轮后续每一次工具调用」，不是单条命令。 */
+/** Review of a directory grant. The scope is every later tool call this turn, not a single command. */
 export async function reviewDirectoryGrant(
 	options: ReviewRunOptions & {
 		grant: DirectoryGrantReview;

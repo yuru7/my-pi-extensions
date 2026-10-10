@@ -16,7 +16,7 @@ export { grantTooWide };
 const QUOTED_ABSOLUTE = /['"]((?:\/|[A-Za-z]:[\\/])[^'"]+)['"]/g;
 const BARE_ABSOLUTE = /(?:^|[\s(])((?:\/|[A-Za-z]:[\\/])[^\s:'"]+)/g;
 
-/** `~` 与 `~/...` 展开后再按 cwd 解析相对路径。模型拿到的是原始参数，宿主不会先替这个工具展开。 */
+/** Expand `~` and `~/...`, then resolve relative paths against cwd. The model sees the raw argument; the host does not expand it for this tool first. */
 export function resolveGrantRequest(raw: string, cwd: string): string {
 	const trimmed = raw.trim();
 	let expanded = trimmed;
@@ -27,8 +27,9 @@ export function resolveGrantRequest(raw: string, cwd: string): string {
 }
 
 /**
- * 批准前确认这条路径能成为目录：已存在则必须是目录（跟随 symlink）；
- * 尚不存在则最近的已存在祖先必须是目录，否则 mkdir 会落在文件上。
+ * Before approval, confirm this path can be a directory. If it exists it must be a
+ * directory (following symlinks). If it does not, the nearest existing ancestor must
+ * be a directory, otherwise mkdir would land on a file.
  */
 export function assertCanCreateDirectory(path: string): void {
 	let current = path;
@@ -68,8 +69,10 @@ export function assertCanCreateDirectory(path: string): void {
 }
 
 /**
- * 逐级创建尚不存在的目录，只返回这次真正新建的那些（含中途新建的父目录）。
- * 已存在的目录记成 EEXIST，不算我们造的。中途失败时把刚建的空目录收回，不留半截。
+ * Create missing directories level by level and return only those actually created
+ * this time (including parents created along the way). An existing directory is EEXIST
+ * and does not count as ours. On a mid-way failure, remove the empty directories just
+ * created so nothing is left half-built.
  */
 export function createMissingGrantDirectories(directory: string): string[] {
 	const created: string[] = [];
@@ -103,8 +106,10 @@ export function createMissingGrantDirectories(directory: string): string[] {
 }
 
 /**
- * 权限收回时删掉仍为空的新建目录。深的先删，这样子目录被删光后变空的父目录也会跟着消失。
- * 非空、符号链接、`/` 与家目录一律留下。rmdir 本身不会删除里面的东西。
+ * When the grant is revoked, delete newly created directories that are still empty.
+ * Deeper ones go first, so a parent that becomes empty after its children are removed
+ * disappears too. Non-empty directories, symlinks, `/`, and the home directory are left
+ * in place. rmdir itself never deletes contents.
  */
 export function removeEmptyCreatedDirectories(
 	created: readonly string[],
@@ -118,7 +123,7 @@ export function removeEmptyCreatedDirectories(
 			if (!lstatSync(dir).isDirectory()) continue;
 			rmdirSync(dir);
 		} catch {
-			// 非空、已消失、或没有权限：留在原地。
+			// Non-empty, already gone, or no permission: leave it in place.
 		}
 	}
 }
@@ -127,7 +132,7 @@ function segmentCount(path: string): number {
 	return path.split(/[\\/]+/u).filter((segment) => segment.length > 0).length;
 }
 
-/** 从拒绝文本里抽出绝对路径。命令文本不参与：那是模型写的，不能当拒绝证据。 */
+/** Extract absolute paths from denial text. Command text is excluded: the model wrote it, so it is not denial evidence. */
 export function extractAbsolutePaths(text: string): string[] {
 	const found: string[] = [];
 	for (const pattern of [QUOTED_ABSOLUTE, BARE_ABSOLUTE]) {
@@ -142,7 +147,7 @@ export function extractAbsolutePaths(text: string): string[] {
 	return found;
 }
 
-/** write/edit 的 target 就是被拒路径；shell 只认 stderr / error 里出现的绝对路径。 */
+/** For write/edit, target is the denied path. For a shell, only absolute paths in stderr / error count. */
 export function deniedPaths(record: DenialRecord): string[] {
 	if (record.tool === "write" || record.tool === "edit") {
 		return record.target.trim().length > 0 ? [record.target] : [];
@@ -150,7 +155,7 @@ export function deniedPaths(record: DenialRecord): string[] {
 	return extractAbsolutePaths(`${record.stderr ?? ""}\n${record.error ?? ""}`);
 }
 
-/** 请求目录盖住了这条拒绝里的至少一个路径（canonical 后）。 */
+/** The requested directory covers at least one path in this denial (after canonicalization). */
 export function grantCoversDenial(
 	grantPath: string,
 	record: DenialRecord,

@@ -136,13 +136,13 @@ describe("win32 runner cli", () => {
 	it("exposes the documented failure contract", () => {
 		expect(RUNNER_SIGNATURE).toBe("windows-acl-run");
 		expect(RUNNER_FAILURE_EXIT).toBe(127);
-		// 跨模块一致性：confine.ts 的 windows-acl 失败规则是手写字面量（不经 cli.js 导入），
-		// 任一侧单方面漂移都会让 runner 失败漏判/误判，这里钉在 runner 侧同一组常量上。
+		// Cross-module consistency: confine.ts's windows-acl failure rules are handwritten literals (not imported from cli.js).
+		// A one-sided drift on either side misses or misclassifies a runner failure. Pin them here to the same constants on the runner side.
 		const rules = RUNNER_FAILURE_RULES["windows-acl"];
 		expect(rules).toHaveLength(1);
 		expect(rules[0]?.allowedExitCodes).toEqual([RUNNER_FAILURE_EXIT]);
 		expect(rules[0]?.fatalSignatures).toEqual([`${RUNNER_SIGNATURE}: `]);
-		// 分类器按同一组字段判定：127 + 签名行 → 判 runner 失败；其余 exit code 不判。
+		// The classifier decides on the same fields: 127 plus the signature line is a runner failure; any other exit code is not.
 		const signatureLine = `${RUNNER_SIGNATURE}: --workspace is not an existing directory: C:\\missing`;
 		expect(
 			classifyRunnerFailure(RUNNER_FAILURE_EXIT, signatureLine, rules),

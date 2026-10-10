@@ -57,10 +57,10 @@ describe("confine", () => {
 		expect(result.runnerFailureRules).toEqual([{ fatalSignatures: ["myrunner: "] }]);
 	});
 	it.skipIf(process.platform === "win32")("canonicalizes the workspace root before building the profile", () => {
-		// mkdtemp 真实目录 + symlink 根（dir/real 与 dir/link→real）：旧版传 /tmp 在多数系统上
-		// 已是 canonical，去掉 canonicalPath 的变异照样绿；symlink 根让断言真正承重。
-		// win32 建 symlink 需特权（开发者模式/管理员），与 policy.test.ts 同款 skipIf；
-		// Windows 侧链接/junction 解析由 tests/win32/e2e.test.ts 覆盖。
+		// A real mkdtemp directory plus a symlink root (dir/real and dir/link→real): the old version passed /tmp, which is
+		// already canonical on most systems, so removing the canonicalPath mutation still passed. A symlink root makes the assertion load-bearing.
+		// Creating a symlink on win32 needs privileges (Developer Mode or Administrator), so this uses the same skipIf as policy.test.ts.
+		// Link and junction resolution on Windows is covered by tests/win32/e2e.test.ts.
 		const dir = mkdtempSync(join(tmpdir(), "confine-"));
 		try {
 			mkdirSync(join(dir, "real"));
@@ -69,8 +69,8 @@ describe("confine", () => {
 			const result = confine(["true"], "workspace-write", join(dir, "link"), {
 				selected: { runner: "bwrap", enforcement: "full" },
 			});
-			// bwrap 的 workspace bind 是「源=目标」对（--bind <root> <root>）：两处都必须是
-			// realpath，symlink 拼写不得残留在 argv（去掉 canonicalPath 的变异下两断言皆红）。
+			// bwrap's workspace bind is a source=target pair (--bind <root> <root>): both must be the
+			// realpath, and the symlink spelling must not remain in argv (both assertions fail if the canonicalPath mutation is removed).
 			const bindIdx = result.argv.indexOf(realRoot);
 			expect(bindIdx).toBeGreaterThan(-1);
 			expect(result.argv[bindIdx + 1]).toBe(realRoot);
@@ -90,7 +90,7 @@ describe("classifyRunnerFailure", () => {
 	it("wrong exit code → no match even with the fatal signature", () => {
 		expect(classifyRunnerFailure(1, "landlock-run: something", rules)).toBeUndefined();
 	});
-	it("the informational partial-enforcement line alone is NOT a failure (整行相等剔除先于 fatal 匹配)", () => {
+	it("the informational partial-enforcement line alone is NOT a failure (exact-line exclusion runs before the fatal match)", () => {
 		expect(classifyRunnerFailure(125, "landlock-run: partial enforcement (older Landlock ABI)", rules)).toBeUndefined();
 	});
 	it("informational line removed, fatal line on another row still matches", () => {
@@ -125,9 +125,9 @@ describe("windows-acl dialect", () => {
 	it("treats exit 127 plus the runner signature as a runner failure (and nothing else)", () => {
 		const rules = RUNNER_FAILURE_RULES["windows-acl"];
 		expect(classifyRunnerFailure(127, "windows-acl-run: --temp is not an existing directory: C:\\nope", rules)).toMatch(/--temp is not an existing directory/);
-		// 已知取舍：受限命令自身 exit 127 且恰好打印签名也会命中（Review Focus #3）
+		// Known tradeoff: a confined command that itself exits 127 and happens to print the signature also matches (Review Focus #3)
 		expect(classifyRunnerFailure(127, "windows-acl-run: Access is denied.", rules)).toBeDefined();
-		// 但 exit 非 127 时绝不判为 runner 失败（命令真的跑过）
+		// An exit other than 127 is never a runner failure (the command actually ran)
 		expect(classifyRunnerFailure(1, "windows-acl-run: Access is denied.", rules)).toBeUndefined();
 		expect(classifyRunnerFailure(127, "Access is denied.", rules)).toBeUndefined();
 	});
@@ -144,7 +144,7 @@ describe("windows-acl dialect", () => {
 		expect(confined.argv).toContain("--mode");
 		expect(confined.argv.slice(-4)).toEqual(["--", "pwsh.exe", "-Command", "echo hi"]);
 		expect(confined.enforcement).toBe("partial");
-		// 显式字面量：锁定方言内容与顺序，以及 127 exit 门控（不能只跟导出表互等，否则缺键时 undefined===undefined 假阳性）
+		// Explicit literals: pin dialect content and order, and the exit-127 gate (equality against the export table alone is a false positive when a missing key makes undefined===undefined)
 		expect(confined.denialSignatures).toEqual(["access is denied", "access to the path", "permission denied", "operation not permitted"]);
 		expect(confined.runnerFailureRules).toEqual([{ allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] }]);
 		expect(confined.denialSignatures).toEqual(DENIAL_SIGNATURES["windows-acl"]);
@@ -156,7 +156,7 @@ describe("windows-acl dialect", () => {
 		const confined = confine(["true"], "read-only", "C:\\work\\demo", {
 			selected: { runner: "windows-acl", enforcement: "partial" },
 			hooks: {
-				// 第二次解析才失败：确认 confine 解析一次后透传，runnerInvocation 不再自行解析
+				// The second resolution fails: confirms confine resolves once and then passes it through, and runnerInvocation does not resolve again on its own
 				windowsAclRung: () => {
 					rungCalls += 1;
 					return rungCalls === 1 ? { node: "C:\\node.exe", runner: "C:\\runner.js" } : undefined;
@@ -168,11 +168,11 @@ describe("windows-acl dialect", () => {
 	});
 
 	it("fails closed when the win32 rung cannot be resolved", () => {
-		// 全局 runner 缓存此时已选中 windows-acl，因此下面走的是 confine 自己的 fail-closed 守卫
+		// The global runner cache has already selected windows-acl, so the path below is confine's own fail-closed guard
 		expect(() => confine(["pwsh.exe", "-Command", "echo hi"], "workspace-write", "C:\\work\\demo", {
 			hooks: { platform: "win32", windowsAclRung: () => undefined },
 		})).toThrowError(/SANDBOX_UNAVAILABLE/);
-		// 显式注入 selected：不依赖缓存与 selectRunner 路径，确定性地锁定错误类型与 detail
+		// Inject selected explicitly: independent of the cache and the selectRunner path, this pins the error type and detail deterministically
 		expect(() => confine(["pwsh.exe", "-Command", "echo hi"], "workspace-write", "C:\\work\\demo", {
 			selected: { runner: "windows-acl", enforcement: "partial" },
 			hooks: { windowsAclRung: () => undefined },
@@ -184,8 +184,8 @@ describe("windows-acl dialect", () => {
 	});
 
 	it("documents the bash refusal without a defaultTools snippet", () => {
-		// win32 工具接线：`defaultTools` 去不掉扩展注册的工具，也不再需要配置——文案只给有效指引：
-		// 用 powershell、bash 保持 fail-closed、danger-full-access 是唯一显式逃生门。
+		// win32 tool wiring: `defaultTools` cannot remove a tool the extension registered, and no config is required anymore. The message only gives the guidance that works:
+		// use powershell, bash stays fail-closed, and danger-full-access is the only explicit escape hatch.
 		const error = new UnsupportedWindowsShellError("bash");
 		expect(error.message).toContain('[sandbox: bash is not supported on Windows]');
 		expect(error.message).toContain("the command was NOT executed");

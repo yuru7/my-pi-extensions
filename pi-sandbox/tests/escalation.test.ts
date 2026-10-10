@@ -21,7 +21,7 @@ const base = {
 	summary: "npm i -g foo",
 };
 
-/** 审批对话假件：ask 记录调用并返回固定结算（choice + 可选 Deny 理由）。 */
+/** Approval-dialog fake: ask records the call and returns a fixed outcome (choice + optional Deny reason). */
 function ui(hasUI: boolean, choice: string | undefined, reason?: string) {
 	const ask = vi.fn(async () => ({ choice, reason }));
 	return { hasUI, ask };
@@ -50,8 +50,8 @@ describe("validateEscalationArgs", () => {
 			/nothing ran.*Cause: justification was empty/,
 		);
 	});
-	// 2026-10-02 二次修订：配方只给正向表述，不再列负向子句（删掉 `never the string "null" or ""`）。
-	it("fix recipe 只给正向配方：省略或 JSON null（不含与 strict schema 矛盾的 “never null”）", () => {
+	// 2026-10-02 second revision: the recipe gives only positive wording and no longer lists a negative clause (removed `never the string "null" or ""`).
+	it('fix recipe gives only the positive recipe: omit or JSON null (no "never null" that contradicts the strict schema)', () => {
 		expect(() =>
 			validateEscalationArgs("danger-full-access", undefined),
 		).toThrow(/omit BOTH fields or send JSON null for BOTH/);
@@ -67,32 +67,32 @@ describe("validateEscalationArgs", () => {
 	});
 });
 
-describe("normalizeEscalationValue（占位符归一化，按字段可达性定生死）", () => {
-	// pi ≥1.0.0 实测：execute 之前有 validateToolArguments（针对 declared schema）。
-	// 2026-10-02 三次修订：工具侧 prepareArguments（stripEscalationPlaceholders）在校验前剥掉字符串占位符，
-	// 真实工具链上 "null" / "" 到不了这里；本函数是 resolveCall 层的兑底，承重于未走钩子的调用路径
-	//（子代理转发、未来新增的工具入口）。
-	// - justification 的字符串臂是 Type.String()（字段本身为 string | null）："null" / "NULL" / "" 都是合法字符串
-	//   → 钩子一旦缺席就会真的到达 execute，归一化是 load-bearing 的（否则普通调用会被误判 MALFORMED，
-	//   或带着 Reason: null 弹审批）；
-	// - sandbox_permissions 是两个字面量枚举：字符串形态若不剥就在校验期被拒（execute 不会跑），只有 JSON null
-	//   （schema 已显式声明）和“省略”能到 —— 这两个分支同样由本函数处理。
-	it("null / 非字符串（含 JSON null）→ 未提供", () => {
+describe("normalizeEscalationValue (placeholder normalization; field reachability decides whether it is load-bearing)", () => {
+	// Measured on pi ≥1.0.0: validateToolArguments (against the declared schema) runs before execute.
+	// 2026-10-02 third revision: the tool-side prepareArguments (stripEscalationPlaceholders) strips string placeholders before validation,
+	// so on the real tool path "null" / "" never get here; this function is the resolveCall-layer backstop, load-bearing on call paths that skip the hook
+	// (subagent forwarding, and future tool entry points).
+	// - justification's string arm is Type.String() (the field itself is string | null): "null" / "NULL" / "" are all legal strings
+	//   → if the hook is absent they really do reach execute, and normalization is load-bearing (otherwise a normal call is misjudged MALFORMED,
+	//   or an approval dialog opens with Reason: null);
+	// - sandbox_permissions is a two-literal enum: the string form is rejected at validation if it is not stripped (execute does not run); only JSON null
+	//   (already declared in the schema) and "omitted" can arrive — this function handles those two branches too.
+	it("null / non-string (including JSON null) → omitted", () => {
 		expect(normalizeEscalationValue(null)).toBeUndefined();
 		expect(normalizeEscalationValue(undefined)).toBeUndefined();
 		expect(normalizeEscalationValue(42)).toBeUndefined();
 		expect(normalizeEscalationValue({})).toBeUndefined();
 	});
-	it('字符串 "null"（大小写与包裹空白）→ 未提供', () => {
+	it('the string "null" (any case, with surrounding whitespace) → omitted', () => {
 		expect(normalizeEscalationValue("null")).toBeUndefined();
 		expect(normalizeEscalationValue("NULL")).toBeUndefined();
 		expect(normalizeEscalationValue("  Null  ")).toBeUndefined();
 	});
-	it("空串 / 纯空白 → 未提供", () => {
+	it("empty string / whitespace only → omitted", () => {
 		expect(normalizeEscalationValue("")).toBeUndefined();
 		expect(normalizeEscalationValue("   ")).toBeUndefined();
 	});
-	it("真实值 → trim 后原样返回", () => {
+	it("a real value → returned trimmed, otherwise unchanged", () => {
 		expect(normalizeEscalationValue("danger-full-access")).toBe(
 			"danger-full-access",
 		);
@@ -102,8 +102,8 @@ describe("normalizeEscalationValue（占位符归一化，按字段可达性定�
 	});
 });
 
-describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在工具 prepareArguments 上）", () => {
-	it('两个占位符字符串都剥掉（主导场景：模型把可选字段填成 "null"）', () => {
+describe("stripEscalationPlaceholders (strips placeholders before pi validation; attached to the tool prepareArguments)", () => {
+	it('both placeholder strings are stripped (main case: the model fills an optional field with "null")', () => {
 		expect(
 			stripEscalationPlaceholders({
 				command: "ls",
@@ -112,7 +112,7 @@ describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在�
 			}),
 		).toEqual({ command: "ls" });
 	});
-	it("大小写无关 + 包裹空白 + 空串 / 纯空白都是占位符", () => {
+	it("case-insensitive + surrounding whitespace + empty string / whitespace-only are all placeholders", () => {
 		expect(
 			stripEscalationPlaceholders({ sandbox_permissions: "NULL" }),
 		).toEqual({});
@@ -122,14 +122,14 @@ describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在�
 		expect(stripEscalationPlaceholders({ justification: "" })).toEqual({});
 		expect(stripEscalationPlaceholders({ justification: "   " })).toEqual({});
 	});
-	it("JSON null 原样保留：Type.Null() 声明的合法取值仍走 resolveCall 的归一化，本钩子不改这条路径", () => {
+	it("JSON null is kept as-is: a legal Type.Null() value still goes through resolveCall normalization; this hook does not change that path", () => {
 		const args = { sandbox_permissions: null, justification: null };
 		expect(stripEscalationPlaceholders(args)).toEqual({
 			sandbox_permissions: null,
 			justification: null,
 		});
 	});
-	it("真提权原样保留（不误剥）；非法值原样保留（交给 pi 校验报错）", () => {
+	it("a real escalation is kept as-is (not stripped by mistake); an illegal value is kept as-is (left for pi validation to reject)", () => {
 		const real = {
 			sandbox_permissions: "danger-full-access",
 			justification: "need /etc write",
@@ -142,13 +142,13 @@ describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在�
 			justification: 42,
 		});
 	});
-	it("非对象输入原样返回（防御模型输出 null / 数组 / 标量）", () => {
+	it("non-object input is returned as-is (guards against the model emitting null / an array / a scalar)", () => {
 		expect(stripEscalationPlaceholders(null)).toBeNull();
 		expect(stripEscalationPlaceholders([1, 2])).toEqual([1, 2]);
 		expect(stripEscalationPlaceholders('"null"')).toBe('"null"');
 		expect(stripEscalationPlaceholders(undefined)).toBeUndefined();
 	});
-	it("不 mutation 原对象：会话记录与 UI 里保留模型的原始输出", () => {
+	it("does not mutate the original object: the session log and the UI keep the model's raw output", () => {
 		const args = {
 			command: "ls",
 			sandbox_permissions: "null",
@@ -161,16 +161,16 @@ describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在�
 			justification: "null",
 		});
 	});
-	it("无占位符时返回同一引用：pi 的 prepareToolCallArguments 据此跳过替换（零扰动）", () => {
+	it("returns the same reference when there is no placeholder: pi's prepareToolCallArguments skips replacement on that (no perturbation)", () => {
 		const args = { command: "ls" };
 		expect(stripEscalationPlaceholders(args)).toBe(args);
 	});
 });
 
-describe("isStrictlyWider（denial-first 门禁与 approveEscalation 共用同一张表）", () => {
-	it("read-only → 两档都更宽", () => {
-		// 常量 pin（并入原 WIDER_MODES 表复述用例）：门禁与审批共用的这张表内容本身也钉死——
-		// read-only 的更宽目标恰好两档，且 read-only 不在其列（「nothing widens to read-only」）。
+describe("isStrictlyWider (the denial-first gate and approveEscalation share the same table)", () => {
+	it("read-only → both modes are wider", () => {
+		// Constant pin (folded in from the old WIDER_MODES table-restatement case): the table shared by the gate and approval is itself pinned —
+		// read-only has exactly two wider targets, and read-only is not among them ("nothing widens to read-only").
 		expect(WIDER_MODES["read-only"]).toEqual([
 			"workspace-write",
 			"danger-full-access",
@@ -178,13 +178,13 @@ describe("isStrictlyWider（denial-first 门禁与 approveEscalation 共用同�
 		expect(isStrictlyWider("read-only", "workspace-write")).toBe(true);
 		expect(isStrictlyWider("read-only", "danger-full-access")).toBe(true);
 	});
-	it("workspace-write → 仅 danger-full-access", () => {
+	it("workspace-write → only danger-full-access", () => {
 		expect(isStrictlyWider("workspace-write", "danger-full-access")).toBe(true);
 		expect(isStrictlyWider("workspace-write", "workspace-write")).toBe(false);
 		expect(isStrictlyWider("workspace-write", "read-only")).toBe(false);
 		expect(isStrictlyWider("workspace-write", "banana")).toBe(false);
 	});
-	it("danger-full-access → 没有更宽目标", () => {
+	it("danger-full-access → no wider target", () => {
 		expect(isStrictlyWider("danger-full-access", "workspace-write")).toBe(
 			false,
 		);
@@ -195,17 +195,17 @@ describe("isStrictlyWider（denial-first 门禁与 approveEscalation 共用同�
 });
 
 describe("sanitizeDenialReason", () => {
-	it("折叠空白并 trim（多行理由压成一行，不破坏错误文案格式）", () => {
+	it("collapses whitespace and trims (a multiline reason becomes one line, without breaking the error-text format)", () => {
 		expect(sanitizeDenialReason("  don't   touch\n\n~/.aws ")).toBe(
 			"don't touch ~/.aws",
 		);
 	});
-	it("空 / 纯空白 / 非字符串 → undefined（拒绝文案逐字回退原样）", () => {
+	it("empty / whitespace-only / non-string → undefined (denial text falls back to the original, verbatim)", () => {
 		expect(sanitizeDenialReason("")).toBeUndefined();
 		expect(sanitizeDenialReason("   \n ")).toBeUndefined();
 		expect(sanitizeDenialReason(undefined)).toBeUndefined();
 	});
-	it("截断到 500 字符 + 省略号（理由经错误进上下文，预算受控）", () => {
+	it("truncates to 500 characters plus an ellipsis (the reason enters context via the error, so the budget stays bounded)", () => {
 		const out = sanitizeDenialReason("x".repeat(600));
 		expect(out?.length).toBe(501);
 		expect(out?.endsWith("…")).toBe(true);
@@ -280,7 +280,7 @@ describe("approveEscalation", () => {
 		expect(title).toContain(base.justification);
 		expect(title).toContain(base.summary);
 		expect(u.ask.mock.calls[0][1]).toEqual(["Allow once", "Deny"]);
-		// 两步式的第二步：Deny 理由追问提示随对话下发（ask 的第三参）。
+		// Step two of the two-step flow: the Deny-reason prompt is sent with the dialog (ask's third argument).
 		expect(u.ask.mock.calls[0][2]).toEqual(DENIAL_REASON_PROMPT);
 	});
 	it("Deny → rejected error telling the model to stop", async () => {
@@ -293,7 +293,7 @@ describe("approveEscalation", () => {
 			/rejected escalating this command to "danger-full-access".*stop and explain instead of working around it/s,
 		);
 	});
-	it("Deny + reason → 理由追加进错误文案（模型可见，知道为什么不行）", async () => {
+	it("Deny + reason → the reason is appended to the error text (visible to the model, so it knows why it was refused)", async () => {
 		await expect(
 			approveEscalation(
 				{ ...base, requestedMode: "danger-full-access" },
@@ -303,7 +303,7 @@ describe("approveEscalation", () => {
 			/stop and explain instead of working around it.*The user's reason: never touch ~\/\.aws/s,
 		);
 	});
-	it("Deny + 空白理由 → 不加后缀（拒绝文案逐字回退原样）", async () => {
+	it("Deny + blank reason → no suffix (denial text falls back to the original, verbatim)", async () => {
 		await expect(
 			approveEscalation(
 				{ ...base, requestedMode: "danger-full-access" },

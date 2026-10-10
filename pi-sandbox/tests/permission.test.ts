@@ -6,7 +6,7 @@ function makeCtx() {
 }
 
 afterEach(async () => {
-	// processPermissionState 现在是进程级 globalThis 单例：跨用例/跨文件必须复位
+	// processPermissionState is now a process-level globalThis singleton: it must be reset across cases and across files
 	const { resetPermissionStateForTests } = await import("../src/permission");
 	resetPermissionStateForTests();
 	vi.resetModules();
@@ -20,7 +20,7 @@ describe("createPermissionCommand", () => {
 		const ctx = makeCtx();
 		await cmd.handler("", ctx);
 		expect(ctx.ui.notify).toHaveBeenCalledWith("STATUS-BLOCK", "info");
-		expect(describeStatus).toHaveBeenCalledWith("", null); // C2：无 cwd 时空串，由 index 回落 activate cwd
+		expect(describeStatus).toHaveBeenCalledWith("", null); // C2: an empty string when there is no cwd; index falls back to the activate cwd
 		expect(state.override).toBeNull();
 	});
 	it("no args: passes the command-session ctx.cwd through to describeStatus (C2)", async () => {
@@ -57,22 +57,22 @@ describe("createPermissionCommand", () => {
 	});
 });
 
-describe("processPermissionState 跨模块实例共享（异 cwd 子会话 / reload 会重新 import 扩展）", () => {
-	it("模块被重新 import 后仍是同一对象，且能看到已设的覆盖", async () => {
+describe("processPermissionState shared across module instances (a child session with a different cwd / a reload re-imports the extension)", () => {
+	it("stays the same object after the module is re-imported, and still sees the override that was set", async () => {
 		const { processPermissionState } = await import("../src/permission");
 		processPermissionState.override = "danger-full-access";
 
-		// 模拟宿主的扩展模块缓存失效：loader 以 (cwd, generation) 为令牌，令牌变化即
-		// clearExtensionCache() + createJiti({ moduleCache: false }) 重新 import
-		//（pi dist/core/extensions/loader.js）；vitest 的 resetModules 等价于此。
+		// Simulate the host dropping its extension module cache: the loader tokens on (cwd, generation), and a token change
+		// calls clearExtensionCache() + createJiti({ moduleCache: false }) to re-import
+		// (pi dist/core/extensions/loader.js). vitest's resetModules is equivalent.
 		vi.resetModules();
 		const { processPermissionState: reimported } = await import("../src/permission");
 
-		expect(reimported).toBe(processPermissionState); // 必须是同一个 globalThis 单例
-		expect(reimported.override).toBe("danger-full-access"); // 父会话设的覆盖对“新 import 的实例”可见
+		expect(reimported).toBe(processPermissionState); // must be the same globalThis singleton
+		expect(reimported.override).toBe("danger-full-access"); // the override set by the parent session is visible to the "newly imported instance"
 	});
 
-	it("resetPermissionStateForTests 清掉全局槽位，下一次 import 回到默认状态", async () => {
+	it("resetPermissionStateForTests clears the global slot, and the next import returns to the default state", async () => {
 		const mod = await import("../src/permission");
 		mod.processPermissionState.override = "read-only";
 		mod.resetPermissionStateForTests();
@@ -80,7 +80,7 @@ describe("processPermissionState 跨模块实例共享（异 cwd 子会话 / rel
 		vi.resetModules();
 		const { processPermissionState: fresh } = await import("../src/permission");
 
-		expect(fresh).not.toBe(mod.processPermissionState); // 旧引用已脱离全局槽位
+		expect(fresh).not.toBe(mod.processPermissionState); // the old reference has left the global slot
 		expect(fresh.override).toBeNull();
 	});
 });

@@ -26,8 +26,8 @@ describe("diagnosis skill packaging", () => {
 		expect(aclSkillPaths("linux")).toEqual([]);
 	});
 
-	// pi 把 resources_discover 返回的路径按会话 cwd 解析（resolveResourcePath = resolvePath(p, cwd)），
-	// 所以这里必须是绝对路径——相对路径在真机上被证伪（spec §4.10）。
+	// pi resolves paths returned by resources_discover against the session cwd (resolveResourcePath = resolvePath(p, cwd)),
+	// so this must be an absolute path. A relative path was disproven on a real machine (spec §4.10).
 	it("returns an absolute skill path pointing at the packaged skill directory", () => {
 		const [skillPath] = aclSkillPaths("win32");
 		expect(isAbsolute(skillPath)).toBe(true);
@@ -36,13 +36,13 @@ describe("diagnosis skill packaging", () => {
 	});
 
 	it("keeps the skill out of the model catalog on non-Windows by returning an empty list", () => {
-		// pi 侧语义：返回空数组 = 不追加任何技能路径（spec §4.10 已核实的 mergePaths 行为）
+		// pi-side semantics: returning an empty array means no skill paths are appended (mergePaths behavior verified in spec §4.10)
 		expect(aclSkillPaths("darwin")).toHaveLength(0);
 	});
 
 	it("keeps the skill out of the conventional auto-discovered skills/ directory", () => {
-		// pi 的包资源发现（settings 对象形式 / default 模式）会把 <pkg>/skills 无条件加载到所有平台
-		// （package-manager.js collectDefaultResources），绕过 resources_discover 的平台门控。
+		// pi's package resource discovery (settings object form / default mode) loads <pkg>/skills unconditionally on every platform
+		// (package-manager.js collectDefaultResources), bypassing the platform gate in resources_discover.
 		expect(existsSync(fileURLToPath(new URL("../skills", import.meta.url)))).toBe(false);
 	});
 
@@ -55,9 +55,9 @@ describe("diagnosis skill packaging", () => {
 		const pattern = /\$PACKAGE_SID\s*=\s*'([^']+)'/u.exec(script)?.[1];
 		expect(pattern).toBeDefined();
 		const matches = new RegExp(pattern as string, "u");
-		expect(matches.test("S-1-15-2-1234567890-1234567890")).toBe(true); // 第三方包 SID：命中（会被移除）
-		expect(matches.test("S-1-4-105015370-174601073")).toBe(false); // pi-sandbox 自己的能力 SID：不得命中
-		expect(matches.test("S-1-15-2-1")).toBe(false); // ALL APPLICATION PACKAGES：不得命中
-		expect(matches.test("S-1-15-2-2")).toBe(false); // ALL RESTRICTED APPLICATION PACKAGES：不得命中
+		expect(matches.test("S-1-15-2-1234567890-1234567890")).toBe(true); // third-party package SID: matches (will be removed)
+		expect(matches.test("S-1-4-105015370-174601073")).toBe(false); // pi-sandbox's own capability SID: must not match
+		expect(matches.test("S-1-15-2-1")).toBe(false); // ALL APPLICATION PACKAGES: must not match
+		expect(matches.test("S-1-15-2-2")).toBe(false); // ALL RESTRICTED APPLICATION PACKAGES: must not match
 	});
 });

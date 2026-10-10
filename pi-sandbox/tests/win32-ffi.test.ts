@@ -2,17 +2,17 @@
 import { describe, expect, it } from "vitest";
 import * as ffi from "../src/win32/ffi.js";
 
-// 内存与指针操作走真实 koffi（跨平台可用）；只有 Win32 绑定表是 win32 专属。
+// Memory and pointer operations use real koffi (available cross-platform); only the Win32 binding table is win32-specific.
 import koffi from "koffi";
 const PVOID = koffi.pointer("void");
 
 describe("win32 ffi helpers", () => {
 	it("round-trips a pointer slot", () => {
 		const slot = ffi.allocPtrSlot();
-		const target = ffi.allocBytes(16); // 真实原生内存
+		const target = ffi.allocBytes(16); // real native memory
 		koffi.encode(slot, PVOID, target);
 		expect(ffi.decodePtr(slot)).toBe(target);
-		// 槽为 0 时必须解出 null（grantWrite 的 NULL-DACL 分支依赖它）
+		// A slot of 0 must decode to null (grantWrite's NULL-DACL branch depends on it)
 		koffi.encode(slot, PVOID, 0);
 		expect(ffi.decodePtr(slot)).toBeNull();
 	});
@@ -43,8 +43,8 @@ describe("win32 ffi helpers", () => {
 			return pointer;
 		};
 		expect(ffi.sameSidAt(makeSid(7), 0, makeSid(7), 0)).toBe(true);
-		expect(ffi.sameSidAt(makeSid(7), 0, makeSid(8), 0)).toBe(false); // 子授权不同
-		expect(ffi.sameSidAt(makeSid(7), 0, makeSid(7, 1), 0)).toBe(false); // 长度不同
+		expect(ffi.sameSidAt(makeSid(7), 0, makeSid(8), 0)).toBe(false); // different sub-authority
+		expect(ffi.sameSidAt(makeSid(7), 0, makeSid(7, 1), 0)).toBe(false); // different length
 	});
 
 	it("formats Win32 errors with API name, code, and detail", () => {
@@ -79,7 +79,7 @@ describe("win32 ffi helpers", () => {
 	});
 
 	it("refuses to load the Win32 binding table outside Windows", () => {
-		// koffi 本身可以加载（上面的用例就在用它）；只有 koffi.load("kernel32.dll") 是 win32 专属
+		// koffi itself can be loaded (the cases above already use it); only koffi.load("kernel32.dll") is win32-specific
 		if (process.platform !== "win32") {
 			expect(() => ffi.win32Sync()).toThrowError(/only available on win32 hosts/);
 		} else {

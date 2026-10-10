@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("canonicalPath", () => {
-	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧链接/junction 解析由 tests/win32/e2e.test.ts 覆盖。
+	// Skip on win32: creating a symlink needs privileges (Developer Mode or Administrator). Link and junction resolution on Windows is covered by tests/win32/e2e.test.ts.
 	it.skipIf(process.platform === "win32")("resolves symlinks", () => {
 		writeFileSync(join(dir, "real"), "x");
 		symlinkSync(join(dir, "real"), join(dir, "link"));
@@ -49,7 +49,7 @@ describe("writableRoots", () => {
 	it("workspace-write: canonical, deduped, contains workspace and the platform tmp roots", () => {
 		const roots = writableRoots("workspace-write", dir);
 		expect(roots).toContain(canonicalPath(dir));
-		// 平台无关：缺省 tmp 根由 defaultTmpRoots(platform) 推导（POSIX 为 "/tmp" + os.tmpdir()，win32 只有 %TEMP%）。
+		// Platform-independent: the default tmp roots come from defaultTmpRoots(platform) (POSIX is "/tmp" + os.tmpdir(); win32 is only %TEMP%).
 		for (const tmp of defaultTmpRoots(process.platform))
 			expect(roots).toContain(canonicalPath(tmp));
 		expect(new Set(roots).size).toBe(roots.length);

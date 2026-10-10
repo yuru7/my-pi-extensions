@@ -29,11 +29,11 @@ export type SelectedRunner =
 export interface RunnerPolicy {
 	mode: ConfinedSandboxMode;
 	workspaceRoot: string;
-	/** 本轮已批准的额外可写目录（canonical）。read-only 下也要挂上，否则批准了也写不进去。 */
+	/** Extra writable directories approved for this turn (canonical). Mount them under read-only too, or an approval still cannot write. */
 	extraRoots?: readonly string[];
 }
 
-/** 测试钩子：注入平台/probe/launcher 路径，单测不依赖真实 bwrap/landlock（deepseek 同款）。 */
+/** Test hooks: inject platform/probe/launcher paths so unit tests do not depend on a real bwrap/landlock (same pattern as deepseek). */
 export interface RunnerHooks {
 	platform?: string;
 	probeBwrap?: (timeoutMs: number) => boolean;
@@ -43,20 +43,20 @@ export interface RunnerHooks {
 	) => SandboxEnforcement | "unusable";
 	launcherPath?: () => string;
 	seatbeltExec?: string;
-	/** 覆盖 win32 rung 的前置检查结论（测试注入）；返回 undefined 表示该 rung 不可用。 */
+	/** Override the win32 rung preflight result (test injection); returning undefined means that rung is unavailable. */
 	windowsAclRung?: () => { node: string; runner: string } | undefined;
-	/** 注入 win32 的 node 可执行文件；存在即权威（显式 undefined = 模拟探测不到 node），不再跑真实探测。 */
+	/** Inject the win32 node executable; if the property is present it is authoritative (explicit undefined = simulate node not found) and the real probe is not run. */
 	nodeExecutable?: string;
-	/** 覆盖 win32 runner 入口文件路径。 */
+	/** Override the win32 runner entry-file path. */
 	windowsRunnerPath?: string;
-	/** 覆盖 koffi 可解析性探测。 */
+	/** Override the koffi resolvability probe. */
 	koffiResolvable?: () => boolean;
 }
 
 /**
- * bwrap mount profile（deepseek profiles.ts 语义，/tmp 一处为 2026-10-01 的有意偏离，见 spec §4）：
- * 宿主 / 全盘 ro-bind（一切可读），workspace-write 追加宿主 /tmp 与工作区的 rw bind——
- * 两者都原路径透明：沙箱内的 /tmp 就是宿主 /tmp（跨命令、跨 read/write 工具语义一致）。
+ * bwrap mount profile (deepseek profiles.ts semantics; the /tmp entry is an intentional divergence dated 2026-10-01, see spec §4):
+ * ro-bind the host / for the whole disk (everything is readable), and workspace-write adds rw binds of the host /tmp and the workspace—
+ * both are transparent at the original path: /tmp inside the sandbox is the host /tmp (consistent across commands and across the read/write tools).
  */
 export function bwrapProfileArgs(policy: RunnerPolicy): string[] {
 	const args = [
@@ -79,7 +79,7 @@ export function bwrapProfileArgs(policy: RunnerPolicy): string[] {
 	return args;
 }
 
-/** Landlock 允许清单：readOnly / + readWrite /dev/null（workspace-write 追加 /tmp 与工作区）。 */
+/** Landlock allow-list: readOnly / plus readWrite /dev/null (workspace-write also adds /tmp and the workspace). */
 export function landlockProfileArgs(policy: RunnerPolicy): string[] {
 	const readWrite = ["/dev/null"];
 	if (policy.mode === "workspace-write") {
@@ -89,14 +89,14 @@ export function landlockProfileArgs(policy: RunnerPolicy): string[] {
 	return grantArgs({ readOnly: ["/"], readWrite });
 }
 
-/** 把一个路径引用为 SBPL 字符串字面量（转义 \ 与 "）。 */
+/** Quote a path as an SBPL string literal (escape \ and "). */
 function sbplString(path: string): string {
 	return `"${path.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`)}"`;
 }
 
 /**
- * Seatbelt SBPL：默认允许、拒绝一切文件写，放行 /dev/null 与 writableRoots
- * （与 fs 围栏共用 policy.writableRoots 推导，防止语义漂移）。
+ * Seatbelt SBPL: allow by default, deny every file write, and allow /dev/null plus writableRoots
+ * (derived from the same policy.writableRoots as the fs fence, so the semantics cannot drift).
  */
 export function seatbeltProfileArgs(policy: RunnerPolicy): string[] {
 	const forms = [
@@ -122,8 +122,8 @@ export function seatbeltProfileArgs(policy: RunnerPolicy): string[] {
 const PLATFORM_CHAINS: Record<string, readonly RunnerKind[]> = {
 	linux: ["bwrap", "landlock"],
 	darwin: ["seatbelt"],
-	// win32 唯一候选（spec Ruling 1）：不做功能探测（选型期绝不 spawn），只做可解析性前置检查——
-	// runner 文件 / koffi / node 任何缺失都在选型期落到 unavailable，而不是运行期的 spawn ENOENT。
+	// win32's only candidate (spec Ruling 1): no functional probe (never spawn during selection), only a resolvability preflight—
+	// any missing runner file / koffi / node becomes unavailable at selection time, not a spawn ENOENT at runtime.
 	win32: ["windows-acl"],
 };
 
@@ -131,26 +131,26 @@ const STATIC_ENFORCEMENT: Record<RunnerKind, SandboxEnforcement> = {
 	bwrap: "full",
 	landlock: "full",
 	seatbelt: "full",
-	// spec Ruling 6：win32 恒为 partial。三处结构性缺口（继承自 dsh，保留文档、无法闭合）：
-	// 1. NTFS 硬链接是文件对象别名：工作区内已授权文件的硬链接在工作区外同样可写；
-	// 2. 读不受限：WRITE_RESTRICTED 只交叉检查写访问，受限进程能读调用者可读的一切；
-	// 3. 被其他 AppContainer 工具以包 SID 打标过的文件对 Low 完整性令牌不可读。
+	// spec Ruling 6: win32 is always partial. Three structural gaps (inherited from dsh, documented, and not closable):
+	// 1. An NTFS hard link is an alias of the file object: a hard link outside the workspace to an authorized file inside it is writable too;
+	// 2. Reads are unrestricted: WRITE_RESTRICTED cross-checks write access only, so a restricted process can read everything the caller can read;
+	// 3. Files labeled with a package SID by another AppContainer tool are unreadable to a Low integrity token.
 	"windows-acl": "partial",
 };
 
 let cachedVerdict: SelectedRunner | undefined;
 
-/** 清探测缓存（测试用；生产进程内探测只做一次）。 */
+/** Clear the probe cache (tests only; a production process probes once). */
 export function resetRunnerCache(): void {
 	cachedVerdict = undefined;
 }
 
-/** 默认 runner 入口：包内 src/win32/runner.js（相对本模块，发布后位于 node_modules 内）。 */
+/** Default runner entry: the package's src/win32/runner.js (relative to this module; after publish it lives inside node_modules). */
 function defaultWindowsRunnerPath(): string {
 	return fileURLToPath(new URL("./win32/runner.js", import.meta.url));
 }
 
-/** win32 的 node 可执行文件：Node 运行时用 execPath；bun 或打包运行时回退 PATH 上的 node.exe。 */
+/** win32 node executable: a Node runtime uses execPath; bun or a bundled runtime falls back to node.exe on PATH. */
 function defaultNodeExecutable(): string | undefined {
 	if (process.versions.node !== undefined && process.versions.bun === undefined)
 		return process.execPath;
@@ -172,12 +172,12 @@ function defaultKoffiResolvable(): boolean {
 }
 
 /**
- * win32 rung 的可用性前置检查（spec Ruling 1）：runner 文件存在、koffi 可解析、有 node 可执行文件，
- * 三项全过才返回 { node, runner }；任何缺失返回 undefined（调用方转 SANDBOX_UNAVAILABLE）。
- * 纯可解析性检查，绝不 spawn 任何进程。
+ * win32 rung availability preflight (spec Ruling 1): the runner file exists, koffi resolves, and a node executable is present.
+ * Return { node, runner } only when all three pass; any miss returns undefined (the caller turns that into SANDBOX_UNAVAILABLE).
+ * Resolvability only; never spawn a process.
  *
- * 注入即权威：`windowsAclRung` 存在时其返回值即结论（含显式 undefined = 不可用）；
- * `nodeExecutable` 存在时同理不回退真实探测（显式 undefined = 模拟探测不到 node）。
+ * Injection is authoritative: when `windowsAclRung` is present its return value is the verdict (including explicit undefined = unavailable);
+ * when `nodeExecutable` is present, likewise do not fall back to the real probe (explicit undefined = simulate node not found).
  */
 export function windowsAclAvailability(
 	hooks: RunnerHooks = {},
@@ -209,8 +209,8 @@ export function defaultProbeBwrap(timeoutMs: number): boolean {
 }
 
 /**
- * 平台链选择（spec §3）：单候选直接选定（seatbelt 执行期拒绝即 fail-closed）；
- * 多候选按序功能探测；全不可用 → unavailable（调用方必须抛错，绝不裸跑）。
+ * Platform-chain selection (spec §3): a single candidate is selected directly (a seatbelt denial at execution time is fail-closed);
+ * multiple candidates are functionally probed in order; if none is usable → unavailable (the caller must throw, and must never run unsandboxed).
  */
 export function selectRunner(
 	probeTimeoutMs: number,
@@ -262,14 +262,14 @@ function probeRunner(
 			return probe(launcher, probeTimeoutMs);
 		}
 		case "seatbelt":
-			return "full"; // 单候选链不会走到探测；保留分支的完备性
+			return "full"; // a single-candidate chain never reaches the probe; the branch is kept for completeness
 		case "windows-acl":
-			return "unusable"; // win32 是唯候选链，chainVerdict 已前置解析可解析性，永不走到探测
+			return "unusable"; // win32 is a single-candidate chain; chainVerdict already resolved resolvability up front, so the probe is never reached
 	}
 }
 
-/** win32 runner 的前缀：node + 包内 runner.js + 授权根/模式；'--' 与命令 argv 由 confine 拼接。
- * `--temp` 用与 fs 围栏同一个根（canonicalPath(tmpdir())，win32 的 defaultTmpRoots）。 */
+/** Prefix for the win32 runner: node + the package's runner.js + granted roots/mode; '--' and the command argv are appended by confine.
+ * `--temp` uses the same root as the fs fence (canonicalPath(tmpdir()), win32's defaultTmpRoots). */
 export function windowsAclRunnerArgv(
 	policy: RunnerPolicy,
 	availability: { node: string; runner: string },
@@ -289,9 +289,9 @@ export function windowsAclRunnerArgv(
 }
 
 /**
- * 选中 runner 对一份策略的完整调用前缀（'--' 与命令 argv 由 confine 拼接）。
- * win32 需要前置检查的结论：约定由 confine 解析一次并透传 `availability`（避免重复解析）；
- * 缺省时本函数自行解析（hook 注入优先），解析不到即抛——绝不构造跑不起来的 argv。
+ * Full invocation prefix of the selected runner for one policy ('--' and the command argv are appended by confine).
+ * win32 needs the preflight verdict: by convention confine resolves it once and passes `availability` through (so it is not resolved twice);
+ * when omitted, this function resolves it itself (hook injection first) and throws if it cannot—never build an argv that cannot run.
  */
 export function runnerInvocation(
 	selected: SelectedRunner & { runner: RunnerKind },

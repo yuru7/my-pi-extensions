@@ -2,13 +2,14 @@ import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import * as piHost from "@earendil-works/pi-coding-agent";
 import { createSandboxShellOps, type ShellOpsOptions } from "./shell-ops";
 
-/** 与 pi 本地 powershell ops 一致：让 pwsh 以 UTF-8 输出（否则中文结果乱码）。 */
+/** Match pi's local powershell ops: make pwsh emit UTF-8 (otherwise non-ASCII output is garbled). */
 export const POWERSHELL_UTF8_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
 
 /**
- * 宿主探测（命名空间导入 + `typeof === "function"`）：pi < 1.0.0 没有 `getPowerShellConfig`，
- * 静态具名导入会在链接期失败（ESM），命名空间属性读取最坏只是 undefined。
- * 探测本身在模块加载时做一次；解析（调用该函数）在每次 exec 做，宿主配置可变。
+ * Host probe (namespace import + `typeof === "function"`): pi < 1.0.0 has no
+ * `getPowerShellConfig`. A static named import fails at link time (ESM); a namespace
+ * property read is at worst undefined. The probe runs once at module load. Resolution
+ * (calling the function) happens on every exec, because the host config can change.
  */
 const host = piHost as unknown as Record<string, unknown>;
 const hostGetPowerShellConfig = typeof host.getPowerShellConfig === "function"
@@ -16,17 +17,20 @@ const hostGetPowerShellConfig = typeof host.getPowerShellConfig === "function"
 	: undefined;
 
 export interface SandboxPowerShellOpts extends Omit<ShellOpsOptions, "shell"> {
-	/** 测试注入：宿主解析结果（生产用 getPowerShellConfig）。 */
+	/** Test injection: host resolution result (production uses getPowerShellConfig). */
 	powerShellConfig?: () => { shell: string; args: string[] };
 }
 
 /**
- * pwsh 的受限 ops：argv 来自宿主的 getPowerShellConfig，命令串前置 UTF-8 前缀，
- * 其余（guard/confine/spawn/timeout/abort/拒绝记账）复用 shell-ops 工厂。
- * 解析失败（宿主无该导出 / 工具不可用）在 Promise 执行器内抛错 → reject 且不 spawn（fail-closed）。
+ * Confined ops for pwsh. argv comes from the host's getPowerShellConfig, the command
+ * string is prefixed with the UTF-8 preamble, and the rest (guard/confine/spawn/timeout/
+ * abort/denial accounting) reuses the shell-ops factory. If resolution fails (the host
+ * has no such export / the tool is unavailable) the error is thrown inside the Promise
+ * executor, so the call rejects and does not spawn (fail-closed).
  *
- * 返回 `BashOperations`：本地宿主的类型是 0.80.2，还没有 `PowerShellOperations`；
- * pi ≥ 1.0.0 的结构同形（exec 形状一致），调用方按需窄化。
+ * Returns `BashOperations`: the local host types are 0.80.2 and have no
+ * `PowerShellOperations`. pi >= 1.0.0 is structurally the same (same exec shape); callers
+ * narrow the type when they need to.
  */
 export function createSandboxPowerShellOps(opts: SandboxPowerShellOpts): BashOperations {
 	const resolve = opts.powerShellConfig ?? hostGetPowerShellConfig

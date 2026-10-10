@@ -12,9 +12,9 @@ import { main } from "../src/win32/runner.js";
 
 const PVOID = koffi.pointer("void");
 
-// requireDirectory 走真实文件系统：workspace / --temp 根必须是真实存在的目录，
-// 且 withPathLock 的锁文件根真的 mkdir，所以隔离到每个用例自己的临时目录里，
-// 不写进仓库 cwd。
+// requireDirectory hits the real filesystem: the workspace and --temp roots must be directories that actually exist,
+// and withPathLock really mkdirs its lock-file root, so isolate each case in its own temp directory
+// instead of writing into the repo cwd.
 let root = "";
 let WS = "";
 let TMP = "";
@@ -31,10 +31,10 @@ afterEach(() => {
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
 	const calls: Array<{ name: string; args: unknown[] }> = [];
-	// 每个 SID 字符串一个可区分的哨兵指针：stub 里其他哨兵是 0x1/0x2/0x5000/0x9000/0xa000，
-	// 这里从 0x10000 起，保证能断言 DACL 合并里“写的是哪条 SID”而不是只能数调用。
+	// One distinguishable sentinel pointer per SID string. Other sentinels in the stub are 0x1/0x2/0x5000/0x9000/0xa000;
+	// start at 0x10000 so a DACL merge can assert which SID was written, not merely count the calls.
 	const sidPointers = new Map<string, bigint>();
-	// makeWellKnownSid 返回的是它自己 allocBytes 的缓冲区；stub 收到的第 3 个实参就是该指针。
+	// makeWellKnownSid returns the buffer from its own allocBytes; the 3rd argument the stub receives is that pointer.
 	const wellKnownPointers = new Map<number, bigint>();
 	const rec =
 		(name: string, result: unknown) =>
@@ -78,8 +78,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 				koffi.encode(needed as never, "uint32", 16);
 				return 0;
 			}
-			// TokenDefaultDacl 必须给一条非 NULL 的现 DACL，否则 §4.6 的补丁拒绝继续；
-			// TokenIntegrityLevel 的载荷只被 stub 的 SetTokenInformation 消费，写 0 即可。
+			// TokenDefaultDacl must supply a non-NULL existing DACL, or the §4.6 patch refuses to continue.
+			// The TokenIntegrityLevel payload is only consumed by the stub's SetTokenInformation; writing 0 is enough.
 			info.writeBigUInt64LE(cls === abi.TokenDefaultDacl ? 0x9000n : 0n, 0);
 			return 1;
 		},
@@ -109,7 +109,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 		createRestrictedToken: rec(
 			"createRestrictedToken",
 			(...args: unknown[]) => {
-				koffi.encode(args[8] as never, PVOID, 0x5000n); // 出参槽必须写成非 NULL 令牌
+				koffi.encode(args[8] as never, PVOID, 0x5000n); // the out-parameter slot must be written as a non-NULL token
 				return 1;
 			},
 		),
@@ -117,7 +117,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 		localAlloc: rec("localAlloc", Buffer.alloc(256)),
 		localFree: rec("localFree", null),
 		setEntriesInAclW: rec("setEntriesInAclW", (...args: unknown[]) => {
-			koffi.encode(args[3] as never, PVOID, 0xa000n); // 合并后的新 ACL 指针
+			koffi.encode(args[3] as never, PVOID, 0xa000n); // pointer to the merged new ACL
 			return 0;
 		}),
 		initializeAcl: rec("initializeAcl", 1),
@@ -152,18 +152,18 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-/** EXPLICIT_ACCESS_W 里 Trustee.ptstrName（SID 指针）的字节偏移。 */
+/** Byte offset of Trustee.ptstrName (the SID pointer) inside EXPLICIT_ACCESS_W. */
 const TRUSTEE_NAME_OFFSET =
 	abi.TRUSTEE_W_OFFSET + abi.TRUSTEE_W_PTSTRNAME_OFFSET;
 
-/** 读出一条合并条目里 trustee 命名的 SID 指针。 */
+/** Read the SID pointer named by the trustee in one merged entry. */
 function mergedTrusteePointer(entries: Buffer) {
 	return entries.readBigUInt64LE(TRUSTEE_NAME_OFFSET);
 }
 
 /**
- * 令牌默认 DACL 补丁是唯一一次单条目（count=1）的 SetEntriesInAclW 合并；
- * 授权路径的两次合并都带 2 条 ACE（环境删除 Deny + 能力 Grant）。
+ * The token default-DACL patch is the only single-entry (count=1) SetEntriesInAclW merge.
+ * Both merges on the grant path carry 2 ACEs (environment-delete Deny + capability Grant).
  */
 function defaultDaclTrustee(calls: Array<{ name: string; args: unknown[] }>) {
 	const patches = calls.filter(
@@ -202,12 +202,12 @@ describe("windows-acl runner main", () => {
 		const sids = deps.calls
 			.filter((c) => c.name === "convertStringSidToSidW")
 			.map((c) => String(c.args[0]));
-		// Step 3 要求 #6：两条 SID 都必须派生。toHaveLength(2) 正是「只派生一条、
-		// 两条根共用同一身份」的检出点：旧断言对单条 SID 真空成立。
+		// Step 3 requirement #6: both SIDs must be derived. toHaveLength(2) is exactly the check for
+		// "only one SID was derived and both roots share the same identity"; the old assertion was vacuously true for a single SID.
 		expect(sids).toHaveLength(2);
 		for (const sid of sids) expect(sid.startsWith("S-1-4-")).toBe(true);
 		const [workspaceSid, tempSid] = sids;
-		// workspace = 2 个 sub-authority；temp = 3 个：固定第三段 `-1` 与所有 workspace SID 域分离。
+		// workspace = 2 sub-authorities; temp = 3: the fixed third component `-1` is domain-separated from every workspace SID.
 		expect(workspaceSid.split("-")).toHaveLength(5);
 		expect(tempSid.split("-")).toHaveLength(6);
 		expect(tempSid.endsWith("-1")).toBe(true);
@@ -225,8 +225,8 @@ describe("windows-acl runner main", () => {
 		if (tempSid === undefined || workspaceSid === undefined) {
 			throw new Error(`expected both capability SIDs, got ${sids.join(", ")}`);
 		}
-		// §4.6：默认 DACL 补丁必须命名 temp（writeSids[1]）；把 writeSids[1]/[0]
-		// 的两个操作数对调会被这里检出（旧断言只在真机探针里看过指针）。
+		// §4.6: the default-DACL patch must name temp (writeSids[1]). Swapping the writeSids[1]/[0]
+		// operands is caught here (the old assertion only inspected the pointer in a real-machine probe).
 		const trustee = defaultDaclTrustee(deps.calls);
 		expect(trustee).toBe(deps.sidPointers.get(tempSid));
 		expect(trustee).not.toBe(deps.sidPointers.get(workspaceSid));
@@ -264,7 +264,7 @@ describe("windows-acl runner main", () => {
 	it("names the well-known Everyone SID in the token's default DACL under read-only", async () => {
 		const deps = makeDeps();
 		await main(args("read-only"), deps as never);
-		// read-only 不派生能力 SID，默认 DACL 补丁回退 Everyone（writeSids 为空）。
+		// read-only does not derive a capability SID; the default-DACL patch falls back to Everyone (writeSids is empty).
 		const trustee = defaultDaclTrustee(deps.calls);
 		expect(trustee).toBe(deps.wellKnownPointers.get(abi.WinWorldSid));
 		expect(trustee).not.toBe(deps.wellKnownPointers.get(abi.WinLowLabelSid));
@@ -272,11 +272,11 @@ describe("windows-acl runner main", () => {
 
 	it("fails closed without spawning when a root grant cannot be applied", async () => {
 		const deps = makeDeps();
-		deps.api.setNamedSecurityInfoW = () => 5; // ERROR_ACCESS_DENIED：授权失败必须冒泡
+		deps.api.setNamedSecurityInfoW = () => 5; // ERROR_ACCESS_DENIED: a grant failure must bubble up
 		await expect(
 			main(args("workspace-write"), deps as never),
 		).rejects.toThrowError(/SetNamedSecurityInfoW/);
-		// 授权失败绝不降级成「零授权照样跑」：spawn/wait 一次都不能发生。
+		// A grant failure must never degrade into "run with zero grants": spawn/wait must not happen even once.
 		expect(
 			deps.calls.filter((c) => c.name === "spawn" || c.name === "wait"),
 		).toEqual([]);
@@ -288,8 +288,8 @@ describe("windows-acl runner main", () => {
 		expect(deps.calls.some((c) => c.name === "setNamedSecurityInfoW")).toBe(
 			false,
 		);
-		// 授权路径零调用：没有路径锁、没有能力 SID 解析、没有标签/ACL 读取构造。唯一一次
-		// SetEntriesInAclW 是 §4.6 的令牌默认 DACL 补丁（SID 回退到 Everyone），不是授权根的 DACL 合并。
+		// Zero calls on the grant path: no path lock, no capability-SID resolution, no label/ACL read-and-build. The only
+		// SetEntriesInAclW is the §4.6 token default-DACL patch (SID falls back to Everyone), not a DACL merge of a grant root.
 		for (const grantCall of [
 			"createFileW",
 			"getNamedSecurityInfoW",
@@ -315,14 +315,14 @@ describe("windows-acl runner main", () => {
 		const spawned = deps.calls.find((c) => c.name === "spawn");
 		const options = spawned?.args[1] as { command: string; args: string[] };
 		expect(options.command).toBe("pwsh.exe");
-		// `--` 之后的 argv 必须逐字透传：哪怕长得像 runner flag（"--temp C:\\x"）
-		// 也不能被二次解析或改写。
+		// argv after `--` must be passed through verbatim: even if it looks like a runner flag ("--temp C:\\x")
+		// it must not be parsed again or rewritten.
 		expect(options.args).toEqual(["-Command", "echo --temp C:\\x"]);
 	});
 
 	it("starts the child in the runner's own cwd, not the workspace root", async () => {
 		const deps = makeDeps();
-		// 前置条件：「继承 process.cwd()」与「改写成 workspace」只有在两者不同时才能区分。
+		// Precondition: "inherit process.cwd()" and "rewrite to the workspace" can be distinguished only when the two differ.
 		expect(WS).not.toBe(process.cwd());
 		await main(args("workspace-write"), deps as never);
 		const spawned = deps.calls.find((c) => c.name === "spawn");
@@ -333,7 +333,7 @@ describe("windows-acl runner main", () => {
 		const deps = makeDeps();
 		await main(args("workspace-write"), deps as never);
 		const names = deps.calls.map((c) => c.name);
-		// 先钉存在性：setConsoleCtrlHandler 缺失时 indexOf 为 -1，顺序比较会恒真。
+		// Pin presence first: if setConsoleCtrlHandler is missing, indexOf is -1 and the order comparison is vacuously true.
 		expect(names).toContain("setConsoleCtrlHandler");
 		expect(names.indexOf("setConsoleCtrlHandler")).toBeLessThan(
 			names.indexOf("spawn"),
@@ -376,7 +376,7 @@ describe("windows-acl runner main", () => {
 			),
 		).rejects.toThrowError(/temp root must not be inside the workspace/i);
 		expect(deps.calls.some((c) => c.name === "openProcess")).toBe(false);
-		expect(deps.calls).toEqual([]); // 任何 Win32 调用都还没发生
+		expect(deps.calls).toEqual([]); // no Win32 call has happened yet
 	});
 
 	it("prints exactly one signature line and exits 127 as the entry point", () => {
@@ -428,8 +428,8 @@ describe("windows-acl runner main", () => {
 				],
 				{ encoding: "utf8" },
 			);
-			// 符号链接入口下 main 也必须跑起来：Linux/macOS 上 win32() 抛错 → 签名行 + 127。
-			// 旧的 URL 字面比较在这里判 false，进程会静默 exit 0（TS 分类器视为成功）。
+			// main must also run when the entry point is a symlink: on Linux/macOS win32() throws, producing the signature line and exit 127.
+			// The old literal URL comparison returned false here, and the process silently exited 0 (the TS classifier treats that as success).
 			expect(result.status).toBe(RUNNER_FAILURE_EXIT);
 			expect(result.stderr).toContain(`${RUNNER_SIGNATURE}: `);
 		},

@@ -34,10 +34,10 @@ export interface ApprovalSettings {
 /** sandbox.json / pi-sandbox.json の統合スキーマ。 */
 export interface SandboxConfig {
 	mode: SandboxMode;
-	/** 运维覆盖：自定义 bwrap 兼容 runner argv；必须与 runnerFailureSignatures 成对。 */
+	/** Ops override: custom bwrap-compatible runner argv; must be paired with runnerFailureSignatures. */
 	runnerCommand: string[] | null;
 	runnerFailureSignatures: string[] | null;
-	/** 每个功能探测的超时；必须为正有限数（0 对 Node 意味着无超时）。 */
+	/** Timeout for each capability probe; must be a positive finite number (0 means no timeout in Node). */
 	probeTimeoutMs: number;
 	approvalMode: ApprovalMode;
 	autoReview: AutoReviewConfig;
@@ -182,7 +182,7 @@ export function approvalStatusLine(config: SandboxConfig, projectTrusted: boolea
 function readJsonFile(path: string): Record<string, unknown> | null {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-		// I2：非 null 对象的 JSON（数组/数字/字符串/布尔）一律按 corrupt 处理
+		// I2: JSON that is not a non-null object (array/number/string/boolean) is always treated as corrupt
 		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
 		return parsed as Record<string, unknown>;
 	} catch {
@@ -258,7 +258,7 @@ function applyApproval(state: ApprovalState, raw: Record<string, unknown>): void
 	}
 }
 
-/** 校验并规范化一份合并后的原始配置；非法即 throw（source 用于报错定位）。 */
+/** Validate and normalize one merged raw config; throw on invalid input (source locates the error). */
 export function validateSandboxConfig(raw: Record<string, unknown>, source: string): SandboxConfig {
 	let mode: SandboxMode = DEFAULT_SANDBOX_CONFIG.mode;
 	if (raw.mode !== undefined) {
@@ -345,7 +345,7 @@ export function loadSandboxConfig(hostCwd: string, agentDir = getAgentDir()): Sa
 
 const configCache = new Map<string, SandboxConfig>();
 
-/** 安全加载（fail-safe，I2）：任何加载/校验错误回落默认配置（仍是受约束的 workspace-write），按 cwd 缓存。 */
+/** Safe load (fail-safe, I2): any load/validation error falls back to the default config (still the confined workspace-write) and is cached by cwd. */
 export function getSandboxConfig(hostCwd: string): SandboxConfig {
 	let cached = configCache.get(hostCwd);
 	if (!cached) {

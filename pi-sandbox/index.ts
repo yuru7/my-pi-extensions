@@ -17,17 +17,17 @@ import { aclSkillPaths } from "./src/win32/skill-paths";
 import { getWritableGrants } from "./src/writable-grants";
 
 /**
- * pi-subagents 的子会话生命周期通道名（约定，非编译期契约；spec §4.1、§8）。
- * 本包不 import pi-subagents——两包互不依赖，通道名在此独立声明；上游漂移的后果是
- * link 缺失 → 子会话退回 fail-closed，失败方向安全。
+ * Channel names for the pi-subagents child-session lifecycle (a convention, not a compile-time contract; spec §4.1, §8).
+ * This package does not import pi-subagents—the two packages do not depend on each other, and the channel names are declared independently here. If upstream drifts,
+ * a missing link sends the child session back to fail-closed, which fails safe.
  */
 const SUBAGENT_CHILD_SESSION_CREATED = "subagents:child:session-created";
 const SUBAGENT_CHILD_DISPOSED = "subagents:child:disposed";
 
 /**
- * ctx 的每个成员都是取值器且先 assertActive()：会话替换 / reload 之后读取会抛
- * "This extension ctx is stale…"。任何读取失败都按"无 UI"处理——严格 fail-closed，
- * 绝不让宿主的内部报错冒泡成子代理工具调用的错误文本（spec §6）。
+ * Every member of ctx is a getter that calls assertActive() first: a read after session replacement / reload throws
+ * "This extension ctx is stale…". Any read failure is treated as "no UI"—strictly fail-closed,
+ * and the host's internal error must never bubble up as the error text of a subagent tool call (spec §6).
  */
 function readHasUI(ctx: { hasUI: boolean }): boolean {
 	try {
@@ -38,9 +38,9 @@ function readHasUI(ctx: { hasUI: boolean }): boolean {
 }
 
 /**
- * 活动工具探测（Ruling 8 的前置）：`getActiveTools` 是 pi 较新的 API，老宿主上可能不存在；
- * 取值器又可能因 ctx 失效 / reload 抛错。`typeof` 探测 + try/catch 把任何失败都归为
- * “无法判断”（undefined）——本文件的约定是扩展 factory 永不 throw（I2），提示宁可不出。
+ * Active-tool probe (prerequisite for Ruling 8): `getActiveTools` is a newer pi API and may be missing on older hosts;
+ * the getter can also throw when ctx is stale / on reload. A `typeof` probe plus try/catch maps every failure to
+ * "indeterminate" (undefined)—this file's contract is that the extension factory never throws (I2), so skipping the notice is preferable.
  */
 function readActiveTools(pi: ExtensionAPI): string[] | undefined {
 	try {
@@ -52,14 +52,14 @@ function readActiveTools(pi: ExtensionAPI): string[] | undefined {
 	}
 }
 
-/** Ruling 8 的提示文案：必须点名修法与失败方向（未启用前 bash 命令被拒）。
- *  方向只给**有效**的那一半 `+powershell`：win32 下未受限（沙箱受控）的 shell 是本包覆盖注册的
- *  `powershell`（**扩展工具自动激活**；pi 内建的默认激活列表 `["read","bash","edit","write"]`
- *  并不包含它），而本包的 bash 又以 `exposure: "hidden"` 注册（D3 第三版：不声明给模型、也不可被
- *  命名激活）——`-bash` 既去不掉扩展注册的工具，也不是这里需要的动作。
- *  T15 修订：补上宿主前提 `requires pi >= 1.0.0`（措辞与 `src/confine.ts` 的
- *  `UnsupportedWindowsShellError` 一致）——低于 1.0.0 的宿主没有 `powershell` 工具，
- *  只让用户去 settings.json 打开一个不存在的工具是不可执行的。 */
+/** Ruling 8 notice copy: it must name the fix and the failure direction (bash commands are refused until it is enabled).
+ *  The direction gives only the **effective** half, `+powershell`: on win32 the unrestricted (sandbox-controlled) shell is this package's overriding registration of
+ *  `powershell` (**extension tools activate automatically**; pi's built-in default activation list `["read","bash","edit","write"]`
+ *  does not include it), while this package's bash is registered with `exposure: "hidden"` (D3 third revision: not declared to the model, and it cannot be
+ *  activated by name)—`-bash` neither removes an extension-registered tool nor is the action needed here.
+ *  T15 revision: add the host prerequisite `requires pi >= 1.0.0` (wording matches `UnsupportedWindowsShellError` in `src/confine.ts`)—
+ *  hosts below 1.0.0 have no `powershell` tool,
+ *  and sending the user to settings.json to enable a tool that does not exist is not actionable. */
 const POWERSHELL_HINT_MESSAGE = [
 	"pi-sandbox: on Windows the confined shell is PowerShell only. Enable it in ~/.pi/agent/settings.json (requires pi >= 1.0.0):",
 	'  { "defaultTools": ["+powershell"] }',
@@ -67,22 +67,22 @@ const POWERSHELL_HINT_MESSAGE = [
 ].join("\n");
 
 /**
- * 每进程一次的提示标志：pi 对每个会话（含子会话）重调 factory，不加标志会每次 activate /
- * session_start 重复刷屏。模块级变量在同一 pi 进程的所有会话间共享。
+ * Once-per-process notice flag: pi reinvokes the factory for every session (including child sessions); without the flag, every activate /
+ * session_start would spam the notice again. The module-level variable is shared by every session in the same pi process.
  */
 let powershellHintShown = false;
 
 /**
- * Ruling 8：win32 上 pwsh 未激活时提示一次（有 UI 走 `ctx.ui.notify`，无 UI 写 stderr）。
- * 判决条件必须能明确判断：宿主有 `getActiveTools`，且 `bash` 在活动列表而 `powershell` 不在。
- * D3 第三版后本包的 bash 以 `exposure: "hidden"` 注册：`getActiveToolNames()` 只返回**被声明**的
- * 工具，hidden 永不出现在活动列表里（也不可被命名激活）——因此这条提示在 pi ≥1.0.0 上没有可触发的
- * 正常路径，保留它是为了**老宿主**（≤0.80.x：不认识 `exposure`、扩展工具一律自动激活、且该版本
- * 根本没有 powershell 工具）——正是文案里 `requires pi >= 1.0.0` 前提要拦的场景。
- * 已知边界（未裁决，先记录）：pi ≥1.0.0 上用户显式排除 powershell（`defaultTools: ["-powershell"]`
- * 或 `--exclude-tools powershell`）时 bash 不在活动列表 → 本提示不触发；若认为该状态也需要提示，
- * 触发条件应放宽为“仅 powershell ∉ active”（那会让 ≤0.80.x 宿主每次都提示升级）。
- * 任何取值失败（陈旧 ctx / 老宿主 / 取值器抛错）都静默——提示是锦上添花，绝不能阻断激活。
+ * Ruling 8: notify once when pwsh is inactive on win32 (`ctx.ui.notify` when a UI is present, stderr otherwise).
+ * The ruling condition must be decidable: the host has `getActiveTools`, and `bash` is in the active list while `powershell` is not.
+ * After the D3 third revision this package registers bash with `exposure: "hidden"`: `getActiveToolNames()` returns only **declared**
+ * tools, and hidden never appears in the active list (nor can it be activated by name)—so this notice has no triggerable
+ * normal path on pi ≥1.0.0. It is kept for **older hosts** (≤0.80.x: they do not understand `exposure`, extension tools always activate automatically, and that version
+ * has no powershell tool at all)—exactly the case the `requires pi >= 1.0.0` premise in the copy is meant to catch.
+ * Known boundary (undecided; recorded for now): on pi ≥1.0.0, when the user explicitly excludes powershell (`defaultTools: ["-powershell"]`
+ * or `--exclude-tools powershell`), bash is not in the active list → this notice does not fire. If that state should also notify,
+ * the trigger should be relaxed to "only powershell ∉ active" (that would tell ≤0.80.x hosts to upgrade on every run).
+ * Any getter failure (stale ctx / old host / getter throw) stays silent—the notice is optional and must never block activation.
  */
 function maybeWarnMissingPowerShellTool(
 	pi: ExtensionAPI,
@@ -106,7 +106,7 @@ function maybeWarnMissingPowerShellTool(
 				notified = true;
 			}
 		} catch {
-			notified = false; // ctx 已失效（reload / 会话替换）：继续走 stderr
+			notified = false; // ctx is stale (reload / session replacement): fall through to stderr
 		}
 	}
 	if (!notified)
@@ -116,11 +116,11 @@ function maybeWarnMissingPowerShellTool(
 }
 
 /**
- * Ruling 8 的 `/permission` 状态行：win32 上受限 shell 只有 PowerShell（本包覆盖注册的 `powershell`
- * 作为扩展工具自动激活；本包的 bash 以 `exposure: "hidden"` 注册，永不进活动列表）。
- * 能判断出 pwsh 不在活动工具里就注明尚未激活——`/permission` 是用户排查“bash 为何被拒”的第一站。
- * 无法判断（老宿主没有 `getActiveTools`——此类宿主上 pwsh 工具根本不存在——或取值失败）时注明
- * `activation unknown`：不断言激活状态，避免裸 `shell: powershell only` 被读成“已启用”（T15 修订）。
+ * Ruling 8 `/permission` status line: on win32 the only confined shell is PowerShell (this package's overriding `powershell`
+ * activates automatically as an extension tool; this package's bash is registered with `exposure: "hidden"` and never enters the active list).
+ * When it can be determined that pwsh is not among the active tools, note that it is not yet activated—`/permission` is the user's first stop when investigating "why bash was refused".
+ * When it cannot be determined (older hosts have no `getActiveTools`—on those hosts the pwsh tool does not exist at all—or the getter fails), note
+ * `activation unknown`: do not assert an activation state, so a bare `shell: powershell only` is not read as "enabled" (T15 revision).
  */
 function win32ShellStatusLine(pi: ExtensionAPI): string | null {
 	if (process.platform !== "win32") return null;
@@ -134,25 +134,25 @@ function win32ShellStatusLine(pi: ExtensionAPI): string | null {
 
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
-	// I2 fail-safe：坏配置在此 warn 并回落 DEFAULT（仍是受约束的 workspace-write），
-	// 绝不 throw——throw 会让 pi 把整个扩展置 null，三个基础工具随即无沙箱裸跑（fail-open）。
+	// I2 fail-safe: a bad config warns here and falls back to DEFAULT (still constrained workspace-write),
+	// and must never throw—a throw makes pi null out the whole extension, and the three base tools then run unsandboxed (fail-open).
 	getSandboxConfig(cwd);
 
-	// C1：/permission 覆盖用进程级模块单例（spec §9）——pi 对每个会话（含 subagent 子会话）
-	// 重新调用本 factory，activate 闭包不跨会话共享；模块单例才能覆盖父/子全部会话。
+	// C1: /permission overrides use a process-level module singleton (spec §9)—pi reinvokes this factory for every session (including subagent child sessions),
+	// and the activate closure is not shared across sessions; only a module singleton covers every parent and child session.
 	const tools = createSandboxTools({ cwd, permission: processPermissionState });
-	// win32 上 bash 是“注册但模型不可达”的覆盖（tools.ts 按平台加 exposure: "hidden"）：既不进模型
-	// 工具列表、也不可被命名激活，又保证 bash 这个名字命中的是本包的拒绝壳，而不是 pi 内置的未受限 bash。
+	// On win32, bash is an override that is "registered but unreachable by the model" (tools.ts adds exposure: "hidden" per platform): it is neither on the model's
+	// tool list nor activatable by name, and the name bash still hits this package's denial shell rather than pi's built-in unrestricted bash.
 	pi.registerTool(tools.bash as never);
 	pi.registerTool(tools.write as never);
 	pi.registerTool(tools.edit as never);
 	if (tools.grantWrite !== undefined)
 		pi.registerTool(tools.grantWrite as never);
-	// Ruling 9：技能按平台**追加**贡献（pi 侧是 mergePaths 合并语义）。只返回本包的技能路径，
-	// 或空数组 = 什么也不加（非 win32 上零目录条目）；绝不返回“完整集合”而抹掉其他来源。
+	// Ruling 9: skills are **appended** per platform (pi's side is mergePaths merge semantics). Return only this package's skill paths,
+	// or an empty array = add nothing (zero directory entries off win32); never return a "complete set" that wipes other sources.
 	pi.on("resources_discover", () => ({ skillPaths: aclSkillPaths() }));
-	// 老宿主（含本仓 devDependency 0.80.2）没有 createPowerShellToolDefinition → tools.powershell
-	// 为 undefined：跳过注册即可，不报错（此时宿主本来也没有 powershell 工具可覆盖）。
+	// Older hosts (including this repo's devDependency 0.80.2) have no createPowerShellToolDefinition → tools.powershell
+	// is undefined: skip registration and do not error (those hosts have no powershell tool to override anyway).
 	if (tools.powershell !== undefined)
 		pi.registerTool(tools.powershell as never);
 
@@ -160,7 +160,7 @@ export default function (pi: ExtensionAPI) {
 		"permission",
 		createPermissionCommand({
 			state: processPermissionState,
-			// C2：pi 从不 chdir，会话 cwd 只经命令 ctx.cwd 可达；空串回落 activate 时 cwd。
+			// C2: pi never chdirs; the session cwd is reachable only via the command's ctx.cwd. An empty string falls back to the cwd at activate time.
 			describeStatus: (statusCwd, projectTrusted = null) => {
 				const effectiveCwd = statusCwd || cwd;
 				const cfg = getSandboxConfig(effectiveCwd);
@@ -170,8 +170,8 @@ export default function (pi: ExtensionAPI) {
 						? "/permission override"
 						: "config default";
 				let runnerText: string;
-				// Ruling 19：danger-full-access 首判——自定义 runner 已配置但模式为全放行时，
-				// runner 行必须显示 bypassed（runner 不参与该模式的执行）。
+				// Ruling 19: danger-full-access is decided first—when a custom runner is configured but the mode is full access,
+				// the runner line must show bypassed (the runner does not take part in execution in that mode).
 				if (effective === "danger-full-access") {
 					runnerText = "bypassed (danger-full-access)";
 				} else if (cfg.runnerCommand !== null && cfg.runnerCommand.length > 0) {
@@ -199,19 +199,19 @@ export default function (pi: ExtensionAPI) {
 	// /pi-sandbox init writes the default pi-sandbox.json (global or project; confirm before overwrite).
 	pi.registerCommand("pi-sandbox", createPiSandboxCommand());
 
-	// 提权审批转发（spec 2026-09-30 §4.5）：子会话 hasUI=false，其提权请求经 broker 路由到父会话弹窗。
-	// broker 挂 globalThis——父子是各自独立的 jiti 实例，模块单例不共享。
+	// Escalation approval forwarding (spec 2026-09-30 §4.5): a child session has hasUI=false, and its escalation requests are routed through the broker to the parent session's dialog.
+	// The broker is stored on globalThis—parent and child are separate jiti instances, so module singletons are not shared.
 	const broker = getEscalationBroker();
-	// 捕获本次 activate 注册的会话 id：session_shutdown 的 ctx 可能已 stale（pi 会对失效 ctx 抛错），
-	// 用捕获值注销更稳；factory 每会话重调，所以这个变量天然是会话级的。
+	// Capture the session id registered by this activate: session_shutdown's ctx may already be stale (pi throws on a stale ctx),
+	// so unregistering with the captured value is more reliable. The factory is reinvoked per session, so this variable is naturally session-scoped.
 	let registeredSessionId: string | null = null;
-	// 宿主每次 /reload 都复用同一 event bus 并重新调用本 factory：不退订就会无上限累积监听器
-	// （超过 Node 默认 maxListeners 后打印 MaxListenersExceededWarning 污染用户终端）。
+	// On every /reload the host reuses the same event bus and reinvokes this factory: without unsubscribing, listeners accumulate without bound
+	// (past Node's default maxListeners it prints MaxListenersExceededWarning and pollutes the user's terminal).
 	const unsubscribeCreated = pi.events.on(
 		SUBAGENT_CHILD_SESSION_CREATED,
 		(data) => {
 			const event = data as { sessionId?: unknown; parentSessionId?: unknown };
-			if (typeof event.sessionId !== "string") return; // 契约漂移 → 不 link → 子会话保持 fail-closed
+			if (typeof event.sessionId !== "string") return; // contract drift → no link → the child session stays fail-closed
 			broker.linkChild(
 				event.sessionId,
 				typeof event.parentSessionId === "string"
@@ -224,7 +224,7 @@ export default function (pi: ExtensionAPI) {
 		const event = data as { sessionId?: unknown };
 		if (typeof event.sessionId !== "string") return;
 		broker.unlinkChild(event.sessionId);
-		getDenialLedger().forget(event.sessionId); // 子会话销毁：清掉未消费的拒绝记录（防 Map 泄漏）
+		getDenialLedger().forget(event.sessionId); // child session disposed: drop unconsumed denial records (prevent a Map leak)
 		getWritableGrants().clear(event.sessionId);
 	});
 	const clearGrants = (ctx: {
@@ -235,12 +235,12 @@ export default function (pi: ExtensionAPI) {
 			if (typeof sessionId === "string" && sessionId.length > 0)
 				getWritableGrants().clear(sessionId);
 		} catch {
-			// 陈旧 ctx：清不掉就留到下一次拿得到 id 的事件。不让宿主的内部错误冒泡。
+			// Stale ctx: if it cannot be cleared, leave it until the next event that yields an id. Do not let the host's internal error bubble up.
 		}
 	};
-	// 新的用户提示开始时先清掉上一轮的目录授权。steering / follow-up 不经过 before_agent_start，
-	// 它们以用户消息进入同一轮，所以 message_start 也清。agent_settled 是这一轮真正结束的点
-	// （重试和压缩还没结束，不能在 agent_end 清）。clear 会删掉这次新建且仍为空的目录。
+	// At the start of a new user prompt, clear the previous turn's directory grants. Steering / follow-up do not pass through before_agent_start;
+	// they enter the same turn as user messages, so message_start clears as well. agent_settled is when this turn actually ends
+	// (retries and compaction are not finished yet, so do not clear on agent_end). clear deletes directories created this time that are still empty.
 	pi.on("before_agent_start", (_event, ctx) => {
 		clearGrants(ctx);
 	});
@@ -254,27 +254,27 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		// Ruling 8 的提示不依赖 UI 或会话身份（无 UI 时落 stderr），所以必须在下面的 hasUI
-		// 守卫**之前**——守卫之后的路径是审批通道注册，与提示无关。
+		// The Ruling 8 notice does not depend on a UI or a session identity (it goes to stderr when there is no UI), so it must run **before** the hasUI
+		// guard below—the path after the guard registers the approval channel and has nothing to do with the notice.
 		maybeWarnMissingPowerShellTool(pi, ctx);
-		if (!readHasUI(ctx)) return; // headless / 子会话 / ctx 已失效：都不是审批终点
+		if (!readHasUI(ctx)) return; // headless / child session / stale ctx: none of these is an approval endpoint
 		let sessionId: string;
 		try {
 			sessionId = ctx.sessionManager.getSessionId();
 		} catch {
-			return; // 拿不到会话身份就不注册（严格 fail-closed，不猜）
+			return; // do not register without a session identity (strictly fail-closed; do not guess)
 		}
 		if (registeredSessionId !== null && registeredSessionId !== sessionId) {
-			// 同一 activate 内二次 session_start 且换了会话：先摘掉旧通道，避免残留在注册表里
+			// A second session_start in the same activate that switched sessions: detach the old channel first so it does not linger in the registry
 			broker.unregisterParent(registeredSessionId);
 		}
 		registeredSessionId = sessionId;
 		broker.registerParent({
 			sessionId,
-			// hasUI 现查而非快照：注册后父会话可能因 reload / 会话替换失去 UI，或使 ctx 失效
+			// hasUI is checked live, not snapshotted: after registration the parent session may lose its UI because of reload / session replacement, or ctx may go stale
 			hasUI: () => readHasUI(ctx),
 			select: (title, options, opts) => ctx.ui.select(title, options, opts),
-			// 两步式的第二步：Deny 后的可选理由。旧宿主/异常 ctx 可能没有 input——缺失时 broker 跳过追问。
+			// Second step of the two-step flow: the optional reason after Deny. Older hosts / a bad ctx may have no input—when it is missing the broker skips the follow-up.
 			input:
 				typeof ctx.ui.input === "function"
 					? (title, placeholder, opts) => ctx.ui.input(title, placeholder, opts)
@@ -286,7 +286,7 @@ export default function (pi: ExtensionAPI) {
 		unsubscribeDisposed();
 		if (registeredSessionId === null) return;
 		broker.unregisterParent(registeredSessionId);
-		getDenialLedger().forget(registeredSessionId); // 会话销毁：清掉未消费的拒绝记录（防 Map 泄漏）
+		getDenialLedger().forget(registeredSessionId); // session disposed: drop unconsumed denial records (prevent a Map leak)
 		getWritableGrants().clear(registeredSessionId);
 		registeredSessionId = null;
 	});

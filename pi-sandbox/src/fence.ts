@@ -16,7 +16,7 @@ import {
 import { denialFollowupHint, sandboxDenialMarker } from "./escalation";
 import { canonicalPath, type SandboxMode, writableRoots } from "./policy";
 
-/** fs 写围栏拒绝：message 携带拒绝标记、下一步提示和 path。 */
+/** fs write-fence denial: message carries the denial marker, the next-step hint, and path. */
 export class FenceDenialError extends Error {
 	constructor(
 		path: string,
@@ -40,13 +40,13 @@ export class FenceDenialError extends Error {
 }
 
 /**
- * 写目标的 canonical 化：解析**最深已存在祖先**的 symlink，保留不存在的尾部拼写。
- * 直接 realpath 整条路径会对尚不存在的写目标失败；不解析祖先则会被
- * ws/link → /etc 式 symlink 逃逸（词法前缀命中 ws/ 但实际落在围栏外）。
- * Ruling 7：realpath 失败处先 lstat 区分"悬空 symlink"与"真缺失"——悬空 symlink
- * 必须继续跟随（readlink，相对目标对 dirname 解析），否则停留词法拼写会放行
- * ws/dangling → 围栏外目标，内核写入时跟随 symlink 即逃逸；ELOOP 守卫 40 次后
- * 回退词法拼写（此时内核写入同样 ELOOP，检查与落点无分歧）。
+ * Canonicalize a write target: resolve the symlink of the **deepest existing ancestor**, and keep the spelling of the tail that does not exist.
+ * realpath on the whole path fails for a write target that does not exist yet; skipping the ancestor lets a
+ * ws/link → /etc style symlink escape (the lexical prefix hits ws/ but the real location is outside the fence).
+ * Ruling 7: where realpath fails, lstat first to tell a "dangling symlink" from "truly missing"—a dangling symlink
+ * must still be followed (readlink, with a relative target resolved against dirname), or staying on the lexical spelling would allow
+ * ws/dangling → a target outside the fence, and the kernel follows the symlink on write and escapes; after the ELOOP guard hits 40
+ * fall back to the lexical spelling (the kernel write ELOOPs the same way, so the check and the landing point do not diverge).
  */
 export function canonicalizeTarget(path: string): string {
 	let current = resolvePath(path);
@@ -64,33 +64,32 @@ export function canonicalizeTarget(path: string): string {
 				lst = undefined;
 			}
 			if (lst?.isSymbolicLink()) {
-				if (++symlinkGuard > 40) return resolvePath(path); // symlink 环：保守回词法拼写
+				if (++symlinkGuard > 40) return resolvePath(path); // symlink cycle: conservatively fall back to the lexical spelling
 				current = resolvePath(dirname(current), readlinkSync(current));
 				continue;
 			}
 			const parent = dirname(current);
-			if (parent === current) return resolvePath(path); // 连根都不可解析：保留词法拼写（保守，匹配不到任何授予根以外的东西）
+			if (parent === current) return resolvePath(path); // even the root cannot be resolved: keep the lexical spelling (conservative; it matches nothing outside a granted root)
 			tail.push(basename(current));
 			current = parent;
 		}
 	}
 }
 
-/** 文件系统身份：`ino`/`dev` 的宿主形态随读取方式而变（bigint 读取为 BigInt，number 读取为 Number）。 */
+/** Filesystem identity: the host shape of `ino`/`dev` depends on how it was read (a bigint read is BigInt, a number read is Number). */
 type FileIdentity = { dev: bigint | number; ino: bigint | number };
 
 /**
- * 身份的精确化：win32 的 NTFS FileId 是 64 位（16 位序列号 + 48 位 MFT 记录号），同一父目录下
- * 相邻目录只差 1；`Stats.ino` 的 number 形态超过 `2^53` 后按偶舍入——真机 CI 上 `outside` 的真身
- * `…C5` 与 `fake-tmp` 的 `…C4` 都被显示成 `14355223812536772`（2026-10-05 由围栏自检捕获），
- * 身份回退于是把围栏外判成授予根，fail-open。故身份比较一律经 BigInt。
+ * Make an identity exact: a win32 NTFS FileId is 64 bits (16-bit sequence number + 48-bit MFT record number), and adjacent directories under the same parent
+ * differ by 1; `Stats.ino` as a number rounds to even past `2^53`—on real-machine CI the real id of `outside`
+ * `…C5` and `fake-tmp`'s `…C4` both displayed as `14355223812536772` (caught by the fence self-check on 2026-10-05),
+ * so the identity fallback judged something outside the fence to be a granted root, fail-open. Identity comparison therefore always goes through BigInt.
  *
- * number 形态只在注入/异常宿主出现（生产一律 `{ bigint: true }` 读取），且只有
- * `Number.isSafeInteger` 内的值才保证未被舍入——不精确即身份未知，不得用于判等。
+ * The number shape appears only under injection / an abnormal host (production always reads with `{ bigint: true }`), and only a value inside
+ * `Number.isSafeInteger` is guaranteed not to have been rounded—imprecise means the identity is unknown and must not be used for equality.
  *
- * 注：number 分支在生产路径不可达，但**不是死代码**——它是注入/异常宿主（mock fs、忽略
- * options 的宿主）降级返回 number 身份时的 fail-closed 护栏，由 `fence.test.ts` 的「零身份」
- * 与「已舍入 number 按未知」两条用例钉住。删掉它会让那类宿主直接 fail-open。
+ * Note: the number branch is unreachable on the production path, but it is **not dead code**—it is the fail-closed guard when an injected / abnormal host (a mock fs, or a host that ignores
+ * options) degrades to a number identity, pinned by the "zero identity" and "a rounded number counts as unknown" cases in `fence.test.ts`. Deleting it would fail-open on that kind of host.
  */
 function exact(value: bigint | number): bigint | undefined {
 	if (typeof value === "bigint") return value;
@@ -102,9 +101,9 @@ function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
 	const bIno = exact(b.ino);
 	const aDev = exact(a.dev);
 	const bDev = exact(b.dev);
-	// 身份未知 ≠ 身份相同：libuv 的 Windows stat 回退（目录句柄被 Defender/索引器瞬时占用时）
-	// 给出 ino/dev = 0 的“未知身份”，`0 === 0` 会把两个不同目录判成同一（2026-10-04 真机 CI
-	// 捕获）。零身份、以及无法精确化为 BigInt 的身份，两侧任一命中都一律不匹配。
+	// Unknown identity ≠ the same identity: libuv's Windows stat fallback (when a directory handle is briefly held by Defender/the indexer)
+	// reports ino/dev = 0 as an "unknown identity", and `0 === 0` would judge two different directories to be the same (caught on real-machine CI,
+	// 2026-10-04). A zero identity, and an identity that cannot be made exact as BigInt, never matches if either side hits it.
 	if (
 		aIno === undefined ||
 		bIno === undefined ||
@@ -117,37 +116,37 @@ function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
 }
 
 /**
- * 身份读取：`{ bigint: true }` 拿到完整 64 位 FileId，避开 `Stats.ino` 的 number 精度陷阱。
- * 注入/异常宿主即使忽略 options 返回 number 形态，也只有 `Number.isSafeInteger` 内的值会参与判等
- * （see `exact`）——已舍入的 number 身份按未知处理，不可能再撞成“同一目录”。
+ * Identity read: `{ bigint: true }` gets the full 64-bit FileId and avoids the number-precision trap in `Stats.ino`.
+ * Even if an injected / abnormal host ignores options and returns a number, only a value inside `Number.isSafeInteger` takes part in equality
+ * (see `exact`)—a rounded number identity is treated as unknown and can no longer collide as "the same directory".
  */
 function readIdentity(path: string): FileIdentity {
 	return statSync(path, { bigint: true });
 }
 
-/** 大小写归一：平台不敏感时统一小写（win32 的盘符/目录名拼写差异）。 */
+/** Case folding: when the platform is case-insensitive, fold to lowercase (win32 drive-letter / directory-name spelling differences). */
 function comparablePath(path: string, caseSensitive: boolean): string {
 	return caseSensitive ? path : path.toLowerCase();
 }
 
-/** win32 上 "/" 与 "\\" 都是分隔符：比较前先统一成 path.sep；POSIX 不动。 */
+/** On win32 both "/" and "\\" are separators: normalize to path.sep before comparing; POSIX is left alone. */
 const normalizeSeparators = (p: string) =>
 	sep === "\\" ? p.replaceAll("/", "\\") : p;
 
-/** 尾部分隔符：win32 两种都去（盘根 "C:\\" → "C:"）；POSIX 只去 "/"——"\\" 在那里是合法文件名字符。 */
+/** Trailing separators: on win32 strip both (a drive root "C:\\" → "C:"); POSIX strips only "/"—"\\" is a legal filename character there. */
 const TRAILING_SEPARATORS = sep === "\\" ? /[\\/]+$/ : /\/+$/;
 
-/** 裸盘符（"C:"）：表示"每驱动器当前目录"（drive-relative），不是盘根；子路径必须由分隔符继续。 */
+/** A bare drive letter ("C:"): it means "current directory per drive" (drive-relative), not the drive root; a child path must continue with a separator. */
 const DRIVE_LETTER_PREFIX = /^[A-Za-z]:$/;
 
-/** 盘符相对路径（"C:" / "C:work"）：语义依赖 per-drive CWD，是歧义路径，不得进入围栏判定。 */
+/** A drive-relative path ("C:" / "C:work"): its meaning depends on the per-drive CWD, so it is ambiguous and must not enter the fence check. */
 const DRIVE_RELATIVE_PATH = /^[A-Za-z]:(?![\\/])/;
 
 /**
- * 词法包含判定：分隔符用 path.sep（win32 上 \ 与 / 都可能出现，先归一化），
- * 且必须落在分隔符边界上——C:\work\demo2 不是 C:\work\demo 的子路径。
- * 大小写由调用方按平台约定传入；拼写不同（大小写、8.3 短名、junction）时
- * 仍由下面的 dev/ino 身份回退兜底。
+ * Lexical containment: separators use path.sep (on win32 both \ and / can appear, so normalize first),
+ * and the match must land on a separator boundary—C:\work\demo2 is not a child of C:\work\demo.
+ * Case is passed in by the caller per the platform convention; when the spelling differs (case, 8.3 short names, junctions)
+ * the dev/ino identity fallback below still covers it.
  */
 function isLexicallyUnder(
 	target: string,
@@ -155,32 +154,32 @@ function isLexicallyUnder(
 	caseSensitive: boolean,
 ): boolean {
 	const t = comparablePath(normalizeSeparators(target), caseSensitive);
-	// 去尾部（重复）分隔符：根前缀不能带分隔符，否则 C:\work\demo2 会被误判为子路径。
-	// POSIX "/" 去尾为空，连同空根一起保持根语义。
+	// Strip trailing (repeated) separators: a root prefix must not keep a separator, or C:\work\demo2 is misjudged as a child path.
+	// Stripping POSIX "/" leaves empty, and together with the empty root that keeps the root meaning.
 	const r = comparablePath(
 		normalizeSeparators(root).replace(TRAILING_SEPARATORS, "") || sep,
 		caseSensitive,
 	);
-	// win32 盘根 "C:\\" 去尾后就是裸盘符 "C:"；裸盘符是"每驱动器当前目录"而非盘根，
-	// 因此必须由分隔符继续（C:\…）才可能是它的子路径——裸 "C:" 与 "C:work" 都不算。
+	// A win32 drive root "C:\\" becomes the bare drive letter "C:" after stripping; a bare drive letter is "current directory per drive", not the drive root,
+	// so it can be a child path only when a separator continues (C:\…)—a bare "C:" and "C:work" do not count.
 	if (DRIVE_LETTER_PREFIX.test(r)) return t.startsWith(`${r}${sep}`);
 	if (t === r) return true;
 	return t.startsWith(r === sep ? r : `${r}${sep}`);
 }
 
 /**
- * containment 判定（deepseek dsh-fs-sandbox 语义）：词法快路径处理常规 canonical
- * 拼写；拼写不一致时沿 target 的存在祖先向上 walk，用文件系统身份（dev+ino，一律按 bigint
- * 读取与比较）与授予根比较——容忍 missing 后缀，防祖先 symlink 换绑逃逸。
- * caseSensitive 缺省按平台推导（win32 不敏感）；身份回退本身与大小写无关。
+ * Containment check (deepseek dsh-fs-sandbox semantics): the lexical fast path handles ordinary canonical
+ * spelling; when the spelling disagrees, walk up target's existing ancestors and compare filesystem identity (dev+ino, always read
+ * and compared as bigint) with the granted root—tolerate a missing suffix, and stop an ancestor symlink from being retargeted into an escape.
+ * caseSensitive defaults from the platform (win32 is insensitive); the identity fallback itself is independent of case.
  */
 export function isWithinRoots(
 	target: string,
 	roots: readonly string[],
 	caseSensitive: boolean = process.platform !== "win32",
 ): boolean {
-	// win32：裸盘符与盘符相对路径按 per-drive CWD 解析，结果随进程 CWD 漂移；
-	// 围栏判定必须确定，故一律视为不在任何授予根内（POSIX 宿主无此语义，不适用）。
+	// win32: a bare drive letter and a drive-relative path resolve against the per-drive CWD, and the result drifts with the process CWD;
+	// the fence check must be determinate, so both are treated as inside no granted root (POSIX hosts have no such meaning, so this does not apply).
 	if (sep === "\\" && DRIVE_RELATIVE_PATH.test(normalizeSeparators(target)))
 		return false;
 	for (const root of roots) {
@@ -191,7 +190,7 @@ export function isWithinRoots(
 		try {
 			rootInfo = readIdentity(root);
 		} catch {
-			continue; // 授予根不存在：匹配不到任何东西
+			continue; // granted root does not exist: it matches nothing
 		}
 		let ancestor = target;
 		for (;;) {
@@ -213,19 +212,19 @@ export function isWithinRoots(
 export interface FencePolicy {
 	mode: SandboxMode;
 	workspaceRoot: string;
-	/** 测试注入（testing.md「参数注入」）：围栏比较是否大小写敏感；生产不传，缺省按 process.platform 推导。 */
+	/** Test injection (testing.md "parameter injection"): whether fence comparison is case-sensitive; production omits it, and the default is derived from process.platform. */
 	caseSensitive?: boolean;
-	/** 测试注入（testing.md「参数注入」）：替换缺省 tmp 根（`defaultTmpRoots()`：win32 仅 `os.tmpdir()`，其余 `"/tmp"` + `os.tmpdir()`）；生产不传。 */
+	/** Test injection (testing.md "parameter injection"): replace the default tmp roots (`defaultTmpRoots()`: win32 is only `os.tmpdir()`, otherwise `"/tmp"` + `os.tmpdir()`); production omits it. */
 	_tmpRoots?: readonly string[];
-	/** 本轮已批准的额外可写目录。read-only 下也参与比较。 */
+	/** Extra writable directories approved for this turn. They take part in the comparison under read-only too. */
 	extraRoots?: readonly string[];
-	/** 自定义 runner 接不住额外可写根。拒绝文案就只给一次性提权。 */
+	/** A custom runner cannot accept an extra writable root. The denial copy then offers only a one-shot escalation. */
 	customRunner?: boolean;
 }
 
 /**
- * `/`、家目录、以及家目录的任何祖先。这些宽度等价于整盘放行，应走 danger-full-access。
- * 放在围栏侧是为了让拒绝文案和授权工具用同一判断，同时避开 grant-path → fence 的环。
+ * `/`, the home directory, and any ancestor of home. That width is equivalent to allowing the whole disk, and should go through danger-full-access.
+ * It lives on the fence side so the denial copy and the grant tool share one judgment, and so the grant-path → fence cycle is avoided.
  */
 export function grantTooWide(
 	canonical: string,
@@ -243,9 +242,9 @@ export function grantTooWide(
 }
 
 /**
- * 拒绝里的路径能否收成一个可授权目录。
- * 已存在的目录，以及 mkdir 的目标（asDirectory）用路径自身。
- * 文件或不存在的写文件目标用其父目录。没有路径、或散在不同目录时，不给目录授权。
+ * Whether the paths in a denial collapse to one directory that can be granted.
+ * An existing directory, and a mkdir target (asDirectory), use the path itself.
+ * A file, or a write-file target that does not exist, uses its parent directory. With no path, or paths spread across different directories, no directory grant is offered.
  */
 export function grantDirectoryForDenial(
 	paths: readonly string[],
@@ -270,22 +269,22 @@ export function grantDirectoryForDenial(
 	return { grantDirectory: directory };
 }
 
-/** 目录路径授权目录自身；文件路径授权其父目录。asDirectory 用于尚不存在的 mkdir 目标。 */
+/** A directory path grants the directory itself; a file path grants its parent. asDirectory is for a mkdir target that does not exist yet. */
 function narrowGrantDirectory(path: string, asDirectory: boolean): string {
 	const canonical = canonicalizeTarget(path);
 	if (asDirectory) return canonical;
 	try {
 		if (statSync(canonical).isDirectory()) return canonical;
 	} catch {
-		// 尚不存在：按文件的父目录。
+		// Does not exist yet: use the file's parent directory.
 	}
 	return dirname(canonical);
 }
 
 /**
- * 校验一个写路径。danger-full-access 放行；read-only 全拒；workspace-write
- * 要求 canonicalizeTarget 后落在 writableRoots 内。违规抛 FenceDenialError。
- * 调用方（tools.ts）传入的是已对 cwd 解析的路径；此处 resolvePath 兜底相对路径。
+ * Check one write path. danger-full-access allows it; read-only denies everything; workspace-write
+ * requires the path to land inside writableRoots after canonicalizeTarget. A violation throws FenceDenialError.
+ * The caller (tools.ts) passes a path already resolved against cwd; resolvePath here is the fallback for a relative path.
  */
 export function assertWriteAllowed(
 	absPath: string,

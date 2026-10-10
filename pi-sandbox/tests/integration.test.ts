@@ -26,7 +26,7 @@ describe.skipIf(skipConfinedBashCases)(
 		});
 		afterAll(() => {
 			rmSync(ws, { recursive: true, force: true });
-			rmSync(`/etc/sbx-escape-${process.pid}`, { force: true }); // 仅在沙箱失效且 root 运行时才会存在，尽力清理
+			rmSync(`/etc/sbx-escape-${process.pid}`, { force: true }); // exists only if the sandbox failed and the process ran as root; clean up best-effort
 		});
 
 		async function run(mode: ConfinedSandboxMode, command: string) {

@@ -2,9 +2,10 @@ import { readProjectTrusted } from "./config";
 import { isSandboxMode, SANDBOX_MODES, type SandboxMode } from "./policy";
 
 /**
- * 进程级用户覆盖（spec §8/§9）：一个 pi 进程只有一个人类用户，/permission 设置的
- * 覆盖对父会话与所有子会话的下一次工具调用立即生效。这是救活被卡子 agent 的
- * 唯一持久杠杆（子会话 hasUI=false，escalation 一律 fail-closed）。
+ * Process-wide user override (spec §8/§9). One pi process has one human user, so an
+ * override set by /permission takes effect on the next tool call in the parent session
+ * and every child session. This is the only persistent lever for a stuck child agent
+ * (child sessions have hasUI=false, so escalation is always fail-closed).
  */
 export interface PermissionState {
 	override: SandboxMode | null;
@@ -14,7 +15,7 @@ export function createPermissionState(): PermissionState {
 	return { override: null };
 }
 
-/** 进程全局槽位键：带包名前缀，避免与其他扩展的 globalThis 使用相撞。 */
+/** Process-global slot key, prefixed with the package name so it does not collide with other extensions' globalThis use. */
 const PERMISSION_STATE_KEY = Symbol.for("@yuru7/pi-sandbox:permission-state");
 
 function getOrCreatePermissionState(): PermissionState {
@@ -27,26 +28,30 @@ function getOrCreatePermissionState(): PermissionState {
 }
 
 /**
- * 进程级单例（spec §9），必须挂 **globalThis** 而不是模块级变量：宿主的扩展模块缓存以
- * (cwd, generation) 为令牌（`dist/core/extensions/loader.js` 的 `useExtensionCacheCwd` /
- * `loadExtensionModule`），令牌变化即 `clearExtensionCache()` + `createJiti({ moduleCache: false })`
- * 重新 import 整个扩展——pi-subagents 的子会话 cwd 为 `params.cwd ?? snapshot.cwd`（可与父不同），
- * `/reload` 也会清缓存。模块级变量在这些情形下会重新初始化成 `{ override: null }`，父会话设的
- * `/permission` 覆盖对子会话（或 reload 后的新实例）不可见：表现为"我明明放宽了，它还是被拒"。
- * globalThis 槽位在同进程内被所有模块实例共享，因此先设/后设、同 cwd/异 cwd 都能看到同一份状态。
+ * Process-wide singleton (spec §9). It must live on **globalThis**, not in a module-level
+ * variable. The host's extension module cache is keyed by (cwd, generation)
+ * (`useExtensionCacheCwd` / `loadExtensionModule` in `dist/core/extensions/loader.js`).
+ * When the token changes, `clearExtensionCache()` + `createJiti({ moduleCache: false })`
+ * re-import the whole extension. A pi-subagents child session cwd is
+ * `params.cwd ?? snapshot.cwd` (it may differ from the parent), and `/reload` also clears
+ * the cache. A module-level variable is reinitialized to `{ override: null }` in those
+ * cases, so a `/permission` override set in the parent is invisible to a child session
+ * (or to the new instance after reload): "I widened it, and it is still denied."
+ * The globalThis slot is shared by every module instance in the process, so the same
+ * state is visible whether it was set before or after, and whether the cwd matches.
  */
 export const processPermissionState: PermissionState = getOrCreatePermissionState();
 
-/** 仅供测试复位全局槽位（生产代码不得调用）。 */
+/** Test-only reset of the global slot (production code must not call this). */
 export function resetPermissionStateForTests(): void {
 	delete (globalThis as Record<symbol, unknown>)[PERMISSION_STATE_KEY];
 }
 
 export interface PermissionCommandDeps {
 	state: PermissionState;
-	/** 生成状态块：effective mode 及来源、选中 runner 与 enforcement、workspace root。
-	 *  cwd 为发起命令的会话 cwd（C2：pi 从不 chdir，只经 ctx.cwd 可达）；空串表示未知。
-	 *  projectTrusted 为 true/false/null（确认できない）。 */
+	/** Build the status block: effective mode and its source, selected runner and enforcement, workspace root.
+	 *  cwd is the session cwd of the command (C2: pi never chdirs; it is reachable only via ctx.cwd); an empty string means unknown.
+	 *  projectTrusted is true/false/null (cannot be confirmed). */
 	describeStatus: (cwd: string, projectTrusted?: boolean | null) => string;
 }
 
