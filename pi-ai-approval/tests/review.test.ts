@@ -6,7 +6,6 @@ import {
 	buildReviewSystemPrompt,
 	buildPrivateDataReviewSystemPrompt,
 	RTK_COMMAND_REVIEW_GUIDANCE,
-	UPSTREAM_GUARDIAN_COMMIT,
 } from "../src/policy.ts";
 import {
 	APPROVAL_TIMEOUT_DETAIL,
@@ -22,13 +21,6 @@ import {
 	parseModelSpec,
 	type ReviewMessage,
 } from "../src/review.ts";
-
-test("tracks the synced upstream Guardian commit", () => {
-	assert.equal(
-		UPSTREAM_GUARDIAN_COMMIT,
-		"e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
-	);
-});
 
 test("parses the dedicated reviewer model", () => {
 	assert.deepEqual(parseModelSpec(undefined), {

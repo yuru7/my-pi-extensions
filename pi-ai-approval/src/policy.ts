@@ -6,8 +6,6 @@
 // Modifications: adapted for Pi tool names, policy configuration, and action/reviewer behavior.
 // The reviewer now only classifies risk into six levels; the final allow/ask/deny decision
 // is made by local configuration (riskActions), never by the reviewer.
-export const UPSTREAM_GUARDIAN_COMMIT =
-	"e363b08c9175ac1cbe5893615dd2cb9ddf95043b";
 
 const REVIEW_POLICY_TEMPLATE = `You are classifying the risk of one planned coding-agent action in the context of the user's current task. Classify risk only; do not decide execution. A local policy layer maps the classification to allow, ask, or deny.
 
