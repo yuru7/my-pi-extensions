@@ -1,9 +1,20 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertWriteAllowed, canonicalizeTarget, FenceDenialError, isWithinRoots } from "../src/fence";
-import { escalationHintMarker } from "../src/escalation";
+import {
+	assertWriteAllowed,
+	canonicalizeTarget,
+	FenceDenialError,
+	grantDirectoryForDenial,
+	isWithinRoots,
+} from "../src/fence";
 import { defaultTmpRoots } from "../src/policy";
 
 /**
@@ -29,22 +40,37 @@ beforeEach(() => {
 	outside = realpathSync.native(join(dir, "outside"));
 	wsWrite = { mode: "workspace-write", workspaceRoot: ws };
 });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+	rmSync(dir, { recursive: true, force: true });
+});
 
 describe("canonicalizeTarget", () => {
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧链接语义由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("resolves symlinks in the existing prefix, keeps the missing tail", () => {
-		symlinkSync(outside, join(ws, "link"));
-		expect(canonicalizeTarget(join(ws, "link", "newfile.txt"))).toBe(join(outside, "newfile.txt"));
-	});
+	it.skipIf(isWin32)(
+		"resolves symlinks in the existing prefix, keeps the missing tail",
+		() => {
+			symlinkSync(outside, join(ws, "link"));
+			expect(canonicalizeTarget(join(ws, "link", "newfile.txt"))).toBe(
+				join(outside, "newfile.txt"),
+			);
+		},
+	);
 	it("keeps an entirely missing path's resolved spelling", () => {
 		expect(canonicalizeTarget(join(ws, "a", "b"))).toBe(join(ws, "a", "b"));
 	});
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧链接语义由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("follows a dangling symlink to its target spelling (Ruling 7)", () => {
-		symlinkSync(join(realpathSync.native("/etc"), "sbx-probe-x"), join(ws, "d2"));
-		expect(canonicalizeTarget(join(ws, "d2"))).toBe(join(realpathSync.native("/etc"), "sbx-probe-x"));
-	});
+	it.skipIf(isWin32)(
+		"follows a dangling symlink to its target spelling (Ruling 7)",
+		() => {
+			symlinkSync(
+				join(realpathSync.native("/etc"), "sbx-probe-x"),
+				join(ws, "d2"),
+			);
+			expect(canonicalizeTarget(join(ws, "d2"))).toBe(
+				join(realpathSync.native("/etc"), "sbx-probe-x"),
+			);
+		},
+	);
 	it("collapses .. lexically against the real ancestor", () => {
 		expect(canonicalizeTarget(join(ws, "sub", "..", "f"))).toBe(join(ws, "f"));
 	});
@@ -57,11 +83,14 @@ describe("isWithinRoots", () => {
 		expect(isWithinRoots(`${ws}sibling`, [ws])).toBe(false); // 字符串前缀但非路径段边界
 	});
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧祖先身份/短名语义由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("ancestor identity walk catches a symlinked spelling that lexically misses", () => {
-		const viaSymlink = join(dir, "ws-link", "f"); // dir/ws-link → ws（词法上不含 ws 前缀）
-		symlinkSync(ws, join(dir, "ws-link"));
-		expect(isWithinRoots(viaSymlink, [ws])).toBe(true);
-	});
+	it.skipIf(isWin32)(
+		"ancestor identity walk catches a symlinked spelling that lexically misses",
+		() => {
+			const viaSymlink = join(dir, "ws-link", "f"); // dir/ws-link → ws（词法上不含 ws 前缀）
+			symlinkSync(ws, join(dir, "ws-link"));
+			expect(isWithinRoots(viaSymlink, [ws])).toBe(true);
+		},
+	);
 	it("unrelated path → false", () => {
 		expect(isWithinRoots(join(outside, "f"), [ws])).toBe(false);
 	});
@@ -69,51 +98,145 @@ describe("isWithinRoots", () => {
 
 describe("assertWriteAllowed", () => {
 	it("allows inside the workspace, including missing tails", () => {
-		expect(() => assertWriteAllowed(join(ws, "new/dir/file.txt"), wsWrite)).not.toThrow();
+		expect(() =>
+			assertWriteAllowed(join(ws, "new/dir/file.txt"), wsWrite),
+		).not.toThrow();
 	});
 	it("allows every platform tmp root (defaultTmpRoots) and os.tmpdir()", () => {
 		// 平台无关：不写字面 "/tmp"——win32 的 tmp 可写根只有 os.tmpdir()（%TEMP%），字面 "/tmp" 在那里
 		// 应当被拒绝（这正是本用例在 Windows 上曾失败的原因）。缺省 tmp 根由 defaultTmpRoots(platform) 推导。
 		for (const root of defaultTmpRoots(process.platform)) {
-			expect(() => assertWriteAllowed(join(canonicalizeTarget(root), "sbx-test-x"), wsWrite)).not.toThrow();
+			expect(() =>
+				assertWriteAllowed(
+					join(canonicalizeTarget(root), "sbx-test-x"),
+					wsWrite,
+				),
+			).not.toThrow();
 		}
-		expect(() => assertWriteAllowed(join(canonicalizeTarget(tmpdir()), "sbx-test-x"), wsWrite)).not.toThrow();
+		expect(() =>
+			assertWriteAllowed(
+				join(canonicalizeTarget(tmpdir()), "sbx-test-x"),
+				wsWrite,
+			),
+		).not.toThrow();
 	});
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧围栏逃逸由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("denies outside with marker + hint (Review Focus #1: symlink escape)", () => {
-		// 逃逸目标必须是真·围栏外的既有目录：dir/outside 落在 os.tmpdir() 下，而 tmpdir()
-		// 是 workspace-write 的可写根（spec §4），指过去会被合法放行；计划 Review Focus #1
-		// 指定 /etc。尾部故意不存在（计划原文"目标不存在"），否则整条路径可被 realpath 解出。
-		symlinkSync(realpathSync.native("/etc"), join(ws, "link"));
-		let err: unknown;
-		try { assertWriteAllowed(join(ws, "link", "sbx-nonexistent-probe"), wsWrite); } catch (e) { err = e; }
-		expect(err).toBeInstanceOf(FenceDenialError);
-		const msg = (err as Error).message;
-		expect(msg).toContain("[sandbox: file access denied under workspace-write mode]");
-		expect(msg).toContain(escalationHintMarker("operation"));
-	});
+	it.skipIf(isWin32)(
+		"denies outside with marker + hint (Review Focus #1: symlink escape)",
+		() => {
+			// 逃逸目标必须是真·围栏外的既有目录：dir/outside 落在 os.tmpdir() 下，而 tmpdir()
+			// 是 workspace-write 的可写根（spec §4），指过去会被合法放行；计划 Review Focus #1
+			// 指定 /etc。尾部故意不存在（计划原文"目标不存在"），否则整条路径可被 realpath 解出。
+			symlinkSync(realpathSync.native("/etc"), join(ws, "link"));
+			let err: unknown;
+			try {
+				assertWriteAllowed(join(ws, "link", "sbx-nonexistent-probe"), wsWrite);
+			} catch (e) {
+				err = e;
+			}
+			expect(err).toBeInstanceOf(FenceDenialError);
+			const msg = (err as Error).message;
+			expect(msg).toContain(
+				"[sandbox: file access denied under workspace-write mode]",
+			);
+			expect(msg).toContain("Do not grant a wider directory");
+			expect(msg).toContain("/etc");
+		},
+	);
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧围栏逃逸由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("denies a dangling final-component symlink pointing outside (Ruling 7: P1 escape)", () => {
-		symlinkSync(join(realpathSync.native("/etc"), `sbx-dangling-probe-${process.pid}`), join(ws, "dangling"));
-		expect(() => assertWriteAllowed(join(ws, "dangling"), wsWrite)).toThrow(FenceDenialError);
-	});
+	it.skipIf(isWin32)(
+		"denies a dangling final-component symlink pointing outside (Ruling 7: P1 escape)",
+		() => {
+			symlinkSync(
+				join(realpathSync.native("/etc"), `sbx-dangling-probe-${process.pid}`),
+				join(ws, "dangling"),
+			);
+			expect(() => assertWriteAllowed(join(ws, "dangling"), wsWrite)).toThrow(
+				FenceDenialError,
+			);
+		},
+	);
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧相对链接解析由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("resolves a relative dangling symlink against the link's directory and denies escape (M5)", () => {
-		const etcTarget = join(realpathSync.native("/etc"), `sbx-rel-probe-${process.pid}`);
-		symlinkSync(relative(ws, etcTarget), join(ws, "rel-dangling"));
-		expect(canonicalizeTarget(join(ws, "rel-dangling"))).toBe(etcTarget);
-		expect(() => assertWriteAllowed(join(ws, "rel-dangling"), wsWrite)).toThrow(FenceDenialError);
-	});
+	it.skipIf(isWin32)(
+		"resolves a relative dangling symlink against the link's directory and denies escape (M5)",
+		() => {
+			const etcTarget = join(
+				realpathSync.native("/etc"),
+				`sbx-rel-probe-${process.pid}`,
+			);
+			symlinkSync(relative(ws, etcTarget), join(ws, "rel-dangling"));
+			expect(canonicalizeTarget(join(ws, "rel-dangling"))).toBe(etcTarget);
+			expect(() =>
+				assertWriteAllowed(join(ws, "rel-dangling"), wsWrite),
+			).toThrow(FenceDenialError);
+		},
+	);
 	// win32 跳过：建 symlink 需特权（开发者模式/管理员）；Windows 侧链接语义由 tests/win32/e2e.test.ts 覆盖。
-	it.skipIf(isWin32)("allows a dangling final-component symlink pointing inside the workspace", () => {
-		symlinkSync(join(ws, "future.txt"), join(ws, "dangling-in"));
-		expect(() => assertWriteAllowed(join(ws, "dangling-in"), wsWrite)).not.toThrow();
-	});
+	it.skipIf(isWin32)(
+		"allows a dangling final-component symlink pointing inside the workspace",
+		() => {
+			symlinkSync(join(ws, "future.txt"), join(ws, "dangling-in"));
+			expect(() =>
+				assertWriteAllowed(join(ws, "dangling-in"), wsWrite),
+			).not.toThrow();
+		},
+	);
 	it("read-only denies everything, even inside the workspace", () => {
-		expect(() => assertWriteAllowed(join(ws, "f"), { mode: "read-only", workspaceRoot: ws })).toThrow(FenceDenialError);
+		expect(() =>
+			assertWriteAllowed(join(ws, "f"), {
+				mode: "read-only",
+				workspaceRoot: ws,
+			}),
+		).toThrow(FenceDenialError);
 	});
 	it("danger-full-access allows anywhere", () => {
-		expect(() => assertWriteAllowed("/etc/hosts", { mode: "danger-full-access", workspaceRoot: ws })).not.toThrow();
+		expect(() =>
+			assertWriteAllowed("/etc/hosts", {
+				mode: "danger-full-access",
+				workspaceRoot: ws,
+			}),
+		).not.toThrow();
+	});
+	it("a custom runner denial does not offer a directory grant", () => {
+		expect(() =>
+			assertWriteAllowed("/etc/hosts", {
+				mode: "workspace-write",
+				workspaceRoot: ws,
+				customRunner: true,
+			}),
+		).toThrow(/custom runnerCommand cannot accept a directory grant/);
+	});
+});
+
+describe("grantDirectoryForDenial", () => {
+	it("uses the parent of a file, refuses home, and splits different directories", () => {
+		expect(grantDirectoryForDenial(["/etc/hosts"]).grantDirectory).toBe(
+			canonicalizeTarget("/etc"),
+		);
+		expect(grantDirectoryForDenial([join(homedir(), "notes.txt")])).toEqual({
+			refusedDirectory: canonicalizeTarget(homedir()),
+		});
+		expect(
+			grantDirectoryForDenial(["/etc/hosts", join(tmpdir(), "elsewhere.txt")])
+				.split,
+		).toBe(true);
+		expect(grantDirectoryForDenial([])).toEqual({});
+	});
+	it("names an existing directory itself, and a new directory create the same way", () => {
+		const directory = mkdtempSync(join(tmpdir(), "grant-dir-"));
+		try {
+			const real = canonicalizeTarget(directory);
+			expect(grantDirectoryForDenial([directory]).grantDirectory).toBe(real);
+			expect(
+				grantDirectoryForDenial([join(directory, "file.txt")]).grantDirectory,
+			).toBe(real);
+			const created = join(directory, "child");
+			expect(grantDirectoryForDenial([created], true).grantDirectory).toBe(
+				canonicalizeTarget(created),
+			);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -133,28 +256,57 @@ describe("win32 containment", () => {
 
 	it("matches case-insensitively when the platform is case-insensitive", () => {
 		expect(isWithinRoots(caseUnder, [caseRoot], false)).toBe(true);
-		expect(isWithinRoots(join(dir, "case", "other", "a.txt"), [caseRoot], false)).toBe(false);
+		expect(
+			isWithinRoots(join(dir, "case", "other", "a.txt"), [caseRoot], false),
+		).toBe(false);
 	});
 
 	it("stays case-sensitive when told to", () => {
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\Demo\\a.txt", ["C:\\__pi_sandbox_fixture__\\demo"], true)).toBe(false);
+		expect(
+			isWithinRoots(
+				"C:\\__pi_sandbox_fixture__\\Demo\\a.txt",
+				["C:\\__pi_sandbox_fixture__\\demo"],
+				true,
+			),
+		).toBe(false);
 		expect(isWithinRoots(caseUnder, [caseRoot], true)).toBe(false);
 	});
 
-	it.skipIf(sep === "\\")("keeps a trailing backslash literal on POSIX (no separator widening)", () => {
-		// "\" 在 POSIX 是文件名字符：根 ".../Demo\" 只包含 ".../Demo\/…"，不能因去尾
-		// 而把 ".../Demo" 整棵子树也纳入（那是 POSIX 行为的扩大）。
-		const weirdRoot = `${caseRoot}\\`;
-		expect(isWithinRoots(join(weirdRoot, "f.txt"), [weirdRoot], false)).toBe(true);
-		expect(isWithinRoots(join(caseRoot, "f.txt"), [weirdRoot], false)).toBe(false);
-	});
+	it.skipIf(sep === "\\")(
+		"keeps a trailing backslash literal on POSIX (no separator widening)",
+		() => {
+			// "\" 在 POSIX 是文件名字符：根 ".../Demo\" 只包含 ".../Demo\/…"，不能因去尾
+			// 而把 ".../Demo" 整棵子树也纳入（那是 POSIX 行为的扩大）。
+			const weirdRoot = `${caseRoot}\\`;
+			expect(isWithinRoots(join(weirdRoot, "f.txt"), [weirdRoot], false)).toBe(
+				true,
+			);
+			expect(isWithinRoots(join(caseRoot, "f.txt"), [weirdRoot], false)).toBe(
+				false,
+			);
+		},
+	);
 
 	it("uses the platform separator instead of a hardcoded slash", () => {
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\demo", ["C:\\__pi_sandbox_fixture__\\demo"], false)).toBe(true);
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\demo2", ["C:\\__pi_sandbox_fixture__\\demo"], false)).toBe(false); // 前缀但不是子路径
+		expect(
+			isWithinRoots(
+				"C:\\__pi_sandbox_fixture__\\demo",
+				["C:\\__pi_sandbox_fixture__\\demo"],
+				false,
+			),
+		).toBe(true);
+		expect(
+			isWithinRoots(
+				"C:\\__pi_sandbox_fixture__\\demo2",
+				["C:\\__pi_sandbox_fixture__\\demo"],
+				false,
+			),
+		).toBe(false); // 前缀但不是子路径
 		expect(isWithinRoots(caseRoot, [caseRoot], false)).toBe(true);
 		expect(isWithinRoots(`${caseRoot}2`, [caseRoot], false)).toBe(false); // 前缀但不是子路径
-		expect(isWithinRoots(join(caseRoot, "sub", "f.txt"), [caseRoot], false)).toBe(true);
+		expect(
+			isWithinRoots(join(caseRoot, "sub", "f.txt"), [caseRoot], false),
+		).toBe(true);
 	});
 
 	it("does not treat a bare drive letter as a drive root", () => {
@@ -165,13 +317,36 @@ describe("win32 containment", () => {
 		expect(isWithinRoots("C:", ["C:\\"], false)).toBe(false);
 	});
 
-	it.skipIf(process.platform !== "win32")("normalizes / to \\ and bounds on the platform separator (win32)", () => {
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\Demo\\a.txt", ["C:\\__pi_sandbox_fixture__\\demo"], false)).toBe(true);
-		expect(isWithinRoots("C:/__pi_sandbox_fixture__/Demo/a.txt", ["C:\\__pi_sandbox_fixture__\\demo"], false)).toBe(true);
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\demo2", ["C:\\__pi_sandbox_fixture__\\demo"], false)).toBe(false);
-		expect(isWithinRoots("C:\\__pi_sandbox_fixture__\\demo", ["C:\\"], false)).toBe(true); // 盘根：去尾成 "C:" 后由分隔符继续
-		expect(isWithinRoots("C:work", ["C:\\"], false)).toBe(false); // 盘相对路径不是盘根子路径
-	});
+	it.skipIf(process.platform !== "win32")(
+		"normalizes / to \\ and bounds on the platform separator (win32)",
+		() => {
+			expect(
+				isWithinRoots(
+					"C:\\__pi_sandbox_fixture__\\Demo\\a.txt",
+					["C:\\__pi_sandbox_fixture__\\demo"],
+					false,
+				),
+			).toBe(true);
+			expect(
+				isWithinRoots(
+					"C:/__pi_sandbox_fixture__/Demo/a.txt",
+					["C:\\__pi_sandbox_fixture__\\demo"],
+					false,
+				),
+			).toBe(true);
+			expect(
+				isWithinRoots(
+					"C:\\__pi_sandbox_fixture__\\demo2",
+					["C:\\__pi_sandbox_fixture__\\demo"],
+					false,
+				),
+			).toBe(false);
+			expect(
+				isWithinRoots("C:\\__pi_sandbox_fixture__\\demo", ["C:\\"], false),
+			).toBe(true); // 盘根：去尾成 "C:" 后由分隔符继续
+			expect(isWithinRoots("C:work", ["C:\\"], false)).toBe(false); // 盘相对路径不是盘根子路径
+		},
+	);
 
 	it("honours the injected case sensitivity in the fence policy", () => {
 		// 偏差：计划原稿用字面 "C:\..." 路径，但 Linux 上 canonicalizeTarget 会把它们按
@@ -186,8 +361,12 @@ describe("win32 containment", () => {
 			caseSensitive: false,
 			_tmpRoots: [] as readonly string[],
 		};
-		expect(() => assertWriteAllowed(join(ws, "file.txt"), policy)).not.toThrow();
-		expect(() => assertWriteAllowed(join(outside, "file.txt"), policy)).toThrowError(/file access denied/);
+		expect(() =>
+			assertWriteAllowed(join(ws, "file.txt"), policy),
+		).not.toThrow();
+		expect(() =>
+			assertWriteAllowed(join(outside, "file.txt"), policy),
+		).toThrowError(/file access denied/);
 	});
 });
 
@@ -204,9 +383,13 @@ describe("identity fallback robustness", () => {
 			return { ...actual, statSync: () => unknown };
 		});
 		try {
-			const { isWithinRoots: withUnknownIdentity } = await import("../src/fence");
+			const { isWithinRoots: withUnknownIdentity } = await import(
+				"../src/fence"
+			);
 			// root（"…\bbb"）与 target 祖先（"…\aaa"）身份均未知 → 不得视为同一目录
-			expect(withUnknownIdentity("C:\\tmp\\aaa\\f.txt", ["C:\\tmp\\bbb"], false)).toBe(false);
+			expect(
+				withUnknownIdentity("C:\\tmp\\aaa\\f.txt", ["C:\\tmp\\bbb"], false),
+			).toBe(false);
 		} finally {
 			vi.doUnmock("node:fs");
 			vi.resetModules();
@@ -235,7 +418,13 @@ describe("identity fallback robustness", () => {
 		try {
 			const { isWithinRoots: withExactIdentity } = await import("../src/fence");
 			// 退回 number 身份时两侧都是 14355223812536772 → 误判为同一目录 → true
-			expect(withExactIdentity("C:\\tmp\\outside\\f.txt", ["C:\\tmp\\fake-tmp"], false)).toBe(false);
+			expect(
+				withExactIdentity(
+					"C:\\tmp\\outside\\f.txt",
+					["C:\\tmp\\fake-tmp"],
+					false,
+				),
+			).toBe(false);
 		} finally {
 			vi.doUnmock("node:fs");
 			vi.resetModules();
@@ -251,12 +440,23 @@ describe("identity fallback robustness", () => {
 		vi.doMock("node:fs", async (importOriginal) => {
 			const actual = await importOriginal<typeof import("node:fs")>();
 			// 两个不同目录的真身在 number 形态下都是这个舍入结果（真机 CI 的观测值）
-			const statSync = (() => ({ dev: 1, ino: 14355223812536772 })) as unknown as typeof actual.statSync;
+			const statSync = (() => ({
+				dev: 1,
+				ino: 14355223812536772,
+			})) as unknown as typeof actual.statSync;
 			return { ...actual, statSync };
 		});
 		try {
-			const { isWithinRoots: withRoundedIdentity } = await import("../src/fence");
-			expect(withRoundedIdentity("C:\\tmp\\outside\\f.txt", ["C:\\tmp\\fake-tmp"], false)).toBe(false);
+			const { isWithinRoots: withRoundedIdentity } = await import(
+				"../src/fence"
+			);
+			expect(
+				withRoundedIdentity(
+					"C:\\tmp\\outside\\f.txt",
+					["C:\\tmp\\fake-tmp"],
+					false,
+				),
+			).toBe(false);
 		} finally {
 			vi.doUnmock("node:fs");
 			vi.resetModules();

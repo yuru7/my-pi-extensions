@@ -3,9 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSandboxConfigCache } from "../src/config";
-import { getEscalationBroker, resetEscalationBrokerForTests } from "../src/escalation-broker";
-import { processPermissionState, type PermissionState } from "../src/permission";
+import {
+	getEscalationBroker,
+	resetEscalationBrokerForTests,
+} from "../src/escalation-broker";
+import {
+	type PermissionState,
+	processPermissionState,
+} from "../src/permission";
 import { aclSkillPaths } from "../src/win32/skill-paths";
+import {
+	getWritableGrants,
+	resetWritableGrantsForTests,
+} from "../src/writable-grants";
 
 let dir: string;
 beforeEach(() => {
@@ -17,6 +27,7 @@ afterEach(() => {
 	processPermissionState.override = null; // C1：模块单例跨测试复位
 	for (const state of freshPermissionStates.splice(0)) state.override = null; // T15 修订：resetModules 后重取的新实例同样复位
 	resetEscalationBrokerForTests(); // 审批通道注册表同为进程级单例，必须复位
+	resetWritableGrantsForTests();
 	resetSandboxConfigCache();
 	vi.unstubAllEnvs();
 	rmSync(dir, { recursive: true, force: true });
@@ -39,7 +50,10 @@ async function importIndexWithDangerFullAccessOverride() {
 	return (await import("../index")).default;
 }
 
-type CommandHandler = (args: string, ctx: { ui: { notify: ReturnType<typeof vi.fn> }; cwd?: string }) => Promise<void>;
+type CommandHandler = (
+	args: string,
+	ctx: { ui: { notify: ReturnType<typeof vi.fn> }; cwd?: string },
+) => Promise<void>;
 type HookHandler = (event: unknown, ctx: unknown) => void;
 
 /**
@@ -81,7 +95,11 @@ function makeFakePi() {
 }
 
 function parentCtx(sessionId: string, hasUI = true) {
-	return { hasUI, sessionManager: { getSessionId: () => sessionId }, ui: { select: async () => "Allow once", input: async () => "because" } };
+	return {
+		hasUI,
+		sessionManager: { getSessionId: () => sessionId },
+		ui: { select: async () => "Allow once", input: async () => "because" },
+	};
 }
 
 describe("extension activate", () => {
@@ -89,11 +107,43 @@ describe("extension activate", () => {
 		const { fakePi, tools, commands, hooks, channels } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
-		expect(tools.sort()).toEqual(["bash", "edit", "write"]);
+		expect(tools.sort()).toEqual([
+			"bash",
+			"edit",
+			"sandbox_grant_write",
+			"write",
+		]);
 		expect(commands).toEqual(["permission", "pi-sandbox"]);
-		// T15 起多一个 resources_discover（技能平台门控）；其余注册面不变。
-		expect(Object.keys(hooks).sort()).toEqual(["resources_discover", "session_shutdown", "session_start"]);
-		expect(Object.keys(channels).sort()).toEqual(["subagents:child:disposed", "subagents:child:session-created"]);
+		// T15 起多一个 resources_discover（技能平台门控）；目录授权的生命周期钩子也在这里。
+		expect(Object.keys(hooks).sort()).toEqual([
+			"agent_settled",
+			"before_agent_start",
+			"message_start",
+			"resources_discover",
+			"session_shutdown",
+			"session_start",
+		]);
+		expect(Object.keys(channels).sort()).toEqual([
+			"subagents:child:disposed",
+			"subagents:child:session-created",
+		]);
+	});
+
+	it("clears a directory grant on the next user message, on settle, and before the next prompt", async () => {
+		const { fakePi, hooks } = makeFakePi();
+		(await import("../index")).default(fakePi as never);
+		const ctx = { sessionManager: { getSessionId: () => "sess" } };
+		getWritableGrants().grant("sess", "/tmp/granted");
+		hooks.message_start?.({ message: { role: "assistant" } }, ctx);
+		expect(getWritableGrants().list("sess")).toEqual(["/tmp/granted"]);
+		hooks.message_start?.({ message: { role: "user" } }, ctx);
+		expect(getWritableGrants().list("sess")).toEqual([]);
+		getWritableGrants().grant("sess", "/tmp/granted");
+		hooks.agent_settled?.({}, ctx);
+		expect(getWritableGrants().list("sess")).toEqual([]);
+		getWritableGrants().grant("sess", "/tmp/granted");
+		hooks.before_agent_start?.({}, ctx);
+		expect(getWritableGrants().list("sess")).toEqual([]);
 	});
 
 	it("/permission override is shared across activates via the module singleton (C1)", async () => {
@@ -107,12 +157,19 @@ describe("extension activate", () => {
 
 		// 会话 #1 设覆盖（用 danger-full-access：status 走 bypassed 分支，不触发真实 runner 探测）
 		const notify1 = vi.fn();
-		await first.commandHandlers.permission.handler("danger-full-access", { ui: { notify: notify1 } });
-		expect(notify1).toHaveBeenCalledWith(expect.stringContaining("danger-full-access"), "info");
+		await first.commandHandlers.permission.handler("danger-full-access", {
+			ui: { notify: notify1 },
+		});
+		expect(notify1).toHaveBeenCalledWith(
+			expect.stringContaining("danger-full-access"),
+			"info",
+		);
 
 		// 会话 #2 的 status 必须看到该覆盖（无 cwd → describeStatus("") 回落 activate cwd）
 		const notify2 = vi.fn();
-		await second.commandHandlers.permission.handler("", { ui: { notify: notify2 } });
+		await second.commandHandlers.permission.handler("", {
+			ui: { notify: notify2 },
+		});
 		const status = String(notify2.mock.calls[0]?.[0]);
 		expect(status).toContain("danger-full-access");
 		expect(status).toContain("/permission");
@@ -124,7 +181,10 @@ describe("extension activate", () => {
 		// chdir 过去让 activate 的 process.cwd() 命中它；PI_CODING_AGENT_DIR 已被 beforeEach 隔离。
 		const projectDir = join(dir, "project");
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
-		writeFileSync(join(projectDir, ".pi", "sandbox.json"), JSON.stringify({ runnerCommand: ["myrunner"] }));
+		writeFileSync(
+			join(projectDir, ".pi", "sandbox.json"),
+			JSON.stringify({ runnerCommand: ["myrunner"] }),
+		);
 		const { fakePi, tools, commands } = makeFakePi();
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const prevCwd = process.cwd();
@@ -132,9 +192,16 @@ describe("extension activate", () => {
 		try {
 			const activate = (await import("../index")).default;
 			expect(() => activate(fakePi as never)).not.toThrow();
-			expect(tools.sort()).toEqual(["bash", "edit", "write"]);
+			expect(tools.sort()).toEqual([
+				"bash",
+				"edit",
+				"sandbox_grant_write",
+				"write",
+			]);
 			expect(commands).toEqual(["permission", "pi-sandbox"]);
-			expect(warn.mock.calls.flat().join(" ")).toMatch(/falling back to defaults/u);
+			expect(warn.mock.calls.flat().join(" ")).toMatch(
+				/falling back to defaults/u,
+			);
 		} finally {
 			process.chdir(prevCwd);
 			warn.mockRestore();
@@ -144,17 +211,23 @@ describe("extension activate", () => {
 	it("status shows bypassed before custom runner when mode is danger-full-access (Ruling 19)", async () => {
 		const proj = mkdtempSync(join(tmpdir(), "proj-"));
 		mkdirSync(join(proj, ".pi"), { recursive: true });
-		writeFileSync(join(proj, ".pi", "sandbox.json"), JSON.stringify({
-			mode: "danger-full-access",
-			runnerCommand: ["myrunner"],
-			runnerFailureSignatures: ["myrunner: "],
-		}));
+		writeFileSync(
+			join(proj, ".pi", "sandbox.json"),
+			JSON.stringify({
+				mode: "danger-full-access",
+				runnerCommand: ["myrunner"],
+				runnerFailureSignatures: ["myrunner: "],
+			}),
+		);
 		try {
 			const { fakePi, commandHandlers } = makeFakePi();
 			const activate = (await import("../index")).default;
 			activate(fakePi as never);
 			const notify = vi.fn();
-			await commandHandlers.permission.handler("", { ui: { notify }, cwd: proj });
+			await commandHandlers.permission.handler("", {
+				ui: { notify },
+				cwd: proj,
+			});
 			const text = notify.mock.calls[0][0] as string;
 			expect(text).toContain("bypassed");
 			expect(text).not.toContain("custom command");
@@ -174,7 +247,10 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		expect(broker.resolveChannel("child-1")).toBeNull(); // 还没 session_start
 		hooks.session_start?.({ type: "session_start" }, parentCtx("parent-1"));
 		expect(broker.resolveChannel("child-1")).not.toBeNull();
-		hooks.session_shutdown?.({ type: "session_shutdown" }, parentCtx("parent-1"));
+		hooks.session_shutdown?.(
+			{ type: "session_shutdown" },
+			parentCtx("parent-1"),
+		);
 		expect(broker.resolveChannel("child-1")).toBeNull(); // 父通道已注销，子会话回到 fail-closed
 	});
 
@@ -200,7 +276,11 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
-		const ctx = { hasUI: true, sessionManager: { getSessionId: () => "p" }, ui: { select: async () => "Allow once" } };
+		const ctx = {
+			hasUI: true,
+			sessionManager: { getSessionId: () => "p" },
+			ui: { select: async () => "Allow once" },
+		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		getEscalationBroker().linkChild("c", "p");
 		expect(getEscalationBroker().resolveChannel("c")).not.toBeNull();
@@ -214,15 +294,28 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		activate(fakePi as never);
 		hooks.session_start?.({ type: "session_start" }, parentCtx("p"));
 		const broker = getEscalationBroker();
-		channels["subagents:child:session-created"]?.({ sessionId: "c1", parentSessionId: "p" });
+		channels["subagents:child:session-created"]?.({
+			sessionId: "c1",
+			parentSessionId: "p",
+		});
 		expect(broker.resolveChannel("c1")).not.toBeNull();
 		channels["subagents:child:disposed"]?.({ sessionId: "c1" });
 		expect(broker.resolveChannel("c1")).toBeNull();
 		// 上游契约漂移（缺字段 / 类型错）→ 不 link、不抛错，子会话保持 fail-closed
-		expect(() => channels["subagents:child:session-created"]?.({})).not.toThrow();
-		expect(() => channels["subagents:child:session-created"]?.({ sessionId: 42, parentSessionId: "p" })).not.toThrow();
+		expect(() =>
+			channels["subagents:child:session-created"]?.({}),
+		).not.toThrow();
+		expect(() =>
+			channels["subagents:child:session-created"]?.({
+				sessionId: 42,
+				parentSessionId: "p",
+			}),
+		).not.toThrow();
 		// 数字载荷被 typeof 守卫拦下：既没建立 link，也没污染后续合法 link（正对照）
-		channels["subagents:child:session-created"]?.({ sessionId: "c2", parentSessionId: "p" });
+		channels["subagents:child:session-created"]?.({
+			sessionId: "c2",
+			parentSessionId: "p",
+		});
 		expect(broker.resolveChannel("c2")).not.toBeNull();
 		expect(broker.resolveChannel("42")).toBeNull();
 	});
@@ -232,7 +325,11 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
 		const select = vi.fn(async () => "Allow once");
-		const ctx = { hasUI: true, sessionManager: { getSessionId: () => "p" }, ui: { select } };
+		const ctx = {
+			hasUI: true,
+			sessionManager: { getSessionId: () => "p" },
+			ui: { select },
+		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		const channel = getEscalationBroker().resolveChannel("c");
 		expect(channel).toBeNull(); // 还没 link
@@ -241,7 +338,9 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		expect(resolved).not.toBeNull();
 		const ac = new AbortController();
 		await resolved?.select("T", ["Allow once", "Deny"], { signal: ac.signal });
-		expect(select).toHaveBeenCalledWith("T", ["Allow once", "Deny"], { signal: ac.signal });
+		expect(select).toHaveBeenCalledWith("T", ["Allow once", "Deny"], {
+			signal: ac.signal,
+		});
 	});
 
 	it("注册的父通道把 opts 透传给 ctx.ui.input（Deny 理由两步式的第二步）", async () => {
@@ -249,21 +348,31 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
 		const input = vi.fn(async () => "because");
-		const ctx = { hasUI: true, sessionManager: { getSessionId: () => "p" }, ui: { select: async () => "Allow once", input } };
+		const ctx = {
+			hasUI: true,
+			sessionManager: { getSessionId: () => "p" },
+			ui: { select: async () => "Allow once", input },
+		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		getEscalationBroker().linkChild("c", "p");
 		const resolved = getEscalationBroker().resolveChannel("c");
 		expect(resolved).not.toBeNull();
 		const ac = new AbortController();
 		await resolved?.input?.("Why deny?", "optional", { signal: ac.signal });
-		expect(input).toHaveBeenCalledWith("Why deny?", "optional", { signal: ac.signal });
+		expect(input).toHaveBeenCalledWith("Why deny?", "optional", {
+			signal: ac.signal,
+		});
 	});
 
 	it("旧宿主 ctx.ui 无 input → 通道 input 为 undefined（broker 跳过理由追问）", async () => {
 		const { fakePi, hooks } = makeFakePi();
 		const activate = (await import("../index")).default;
 		activate(fakePi as never);
-		const ctx = { hasUI: true, sessionManager: { getSessionId: () => "p" }, ui: { select: async () => "Allow once" } };
+		const ctx = {
+			hasUI: true,
+			sessionManager: { getSessionId: () => "p" },
+			ui: { select: async () => "Allow once" },
+		};
 		hooks.session_start?.({ type: "session_start" }, ctx);
 		getEscalationBroker().linkChild("c", "p");
 		const resolved = getEscalationBroker().resolveChannel("c");
@@ -278,7 +387,10 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
 		let stale = false;
 		const ctx = {
 			get hasUI() {
-				if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+				if (stale)
+					throw new Error(
+						"This extension ctx is stale after session replacement or reload.",
+					);
 				return true;
 			},
 			sessionManager: { getSessionId: () => "p" },
@@ -308,7 +420,10 @@ describe("escalation approval forwarding wiring (spec 2026-09-30 §4.5)", () => 
  */
 describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 	/** Node 上 process.platform 是 configurable 的数据属性：临时改写后按原描述符还原。 */
-	async function withPlatform<T>(platform: string, run: () => Promise<T> | T): Promise<T> {
+	async function withPlatform<T>(
+		platform: string,
+		run: () => Promise<T> | T,
+	): Promise<T> {
 		const original = Object.getOwnPropertyDescriptor(process, "platform");
 		Object.defineProperty(process, "platform", { value: platform });
 		try {
@@ -321,8 +436,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 	/** 带 getActiveTools 的假 pi（Ruling 8 的探测面）；传函数可模拟取值抛错（陈旧宿主）。 */
 	function makeFakePiWithActiveTools(active: string[] | (() => string[])) {
 		const made = makeFakePi();
-		(made.fakePi as unknown as { getActiveTools: () => string[] }).getActiveTools =
-			typeof active === "function" ? active : () => active;
+		(
+			made.fakePi as unknown as { getActiveTools: () => string[] }
+		).getActiveTools = typeof active === "function" ? active : () => active;
 		return made;
 	}
 
@@ -330,23 +446,60 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		return {
 			hasUI: true,
 			sessionManager: { getSessionId: () => sessionId },
-			ui: { select: async () => "Allow once", input: async () => "because", notify },
+			ui: {
+				select: async () => "Allow once",
+				input: async () => "because",
+				notify,
+			},
 		};
 	}
 
 	it("contributes the ACL skill path only on win32", async () => {
-		const handlers: Record<string, Array<(event: unknown, ctx: unknown) => unknown>> = {};
-		const fakePi = { on: (name: string, handler: never) => { (handlers[name] ??= []).push(handler); return () => {}; }, registerTool: () => {}, registerCommand: () => {}, events: { on: () => () => {} } };
+		const handlers: Record<
+			string,
+			Array<(event: unknown, ctx: unknown) => unknown>
+		> = {};
+		const fakePi = {
+			on: (name: string, handler: never) => {
+				(handlers[name] ??= []).push(handler);
+				return () => {};
+			},
+			registerTool: () => {},
+			registerCommand: () => {},
+			events: { on: () => () => {} },
+		};
 		(await import("../index")).default(fakePi as never);
 		const discovery = handlers.resources_discover?.[0];
 		expect(discovery).toBeDefined();
 		await withPlatform("win32", async () => {
-			await expect(Promise.resolve(discovery?.({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, {}))).resolves.toEqual({
+			await expect(
+				Promise.resolve(
+					discovery?.(
+						{
+							type: "resources_discover",
+							cwd: process.cwd(),
+							reason: "startup",
+						},
+						{},
+					),
+				),
+			).resolves.toEqual({
 				skillPaths: aclSkillPaths("win32"),
 			});
 		});
 		await withPlatform("linux", async () => {
-			await expect(Promise.resolve(discovery?.({ type: "resources_discover", cwd: process.cwd(), reason: "reload" }, {}))).resolves.toEqual({ skillPaths: [] });
+			await expect(
+				Promise.resolve(
+					discovery?.(
+						{
+							type: "resources_discover",
+							cwd: process.cwd(),
+							reason: "reload",
+						},
+						{},
+					),
+				),
+			).resolves.toEqual({ skillPaths: [] });
 		});
 	});
 
@@ -385,12 +538,17 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		});
 		expect(notify).toHaveBeenCalledTimes(1);
 		const text = String(notify.mock.calls[0]?.[0]);
-		expect(text).toContain("sandbox mode: danger-full-access (/permission override)"); // 隔离生效：status 确实读到本用例设的 override
+		expect(text).toContain(
+			"sandbox mode: danger-full-access (/permission override)",
+		); // 隔离生效：status 确实读到本用例设的 override
 		expect(text).toContain("shell: powershell only (not activated)");
 	});
 
 	it("/permission 状态行在 win32 且 pwsh 已激活时只注明 shell 方言", async () => {
-		const { fakePi, commandHandlers } = makeFakePiWithActiveTools(["bash", "powershell"]);
+		const { fakePi, commandHandlers } = makeFakePiWithActiveTools([
+			"bash",
+			"powershell",
+		]);
 		const activate = await importIndexWithDangerFullAccessOverride();
 		activate(fakePi as never);
 		const notify = vi.fn();
@@ -399,7 +557,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		});
 		expect(notify).toHaveBeenCalledTimes(1);
 		const text = String(notify.mock.calls[0]?.[0]);
-		expect(text).toContain("sandbox mode: danger-full-access (/permission override)");
+		expect(text).toContain(
+			"sandbox mode: danger-full-access (/permission override)",
+		);
 		expect(text).toContain("shell: powershell only");
 		expect(text).not.toContain("not activated");
 	});
@@ -416,7 +576,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		});
 		expect(notify).toHaveBeenCalledTimes(1);
 		const text = String(notify.mock.calls[0]?.[0]);
-		expect(text).toContain("sandbox mode: danger-full-access (/permission override)");
+		expect(text).toContain(
+			"sandbox mode: danger-full-access (/permission override)",
+		);
 		expect(text).not.toContain("shell: powershell");
 	});
 
@@ -432,7 +594,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		});
 		expect(notify).toHaveBeenCalledTimes(1);
 		const text = String(notify.mock.calls[0]?.[0]);
-		expect(text).toContain("sandbox mode: danger-full-access (/permission override)");
+		expect(text).toContain(
+			"sandbox mode: danger-full-access (/permission override)",
+		);
 		expect(text).toContain("shell: powershell only (activation unknown)");
 		expect(text).not.toContain("(not activated)");
 	});
@@ -446,8 +610,14 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			await withPlatform("win32", async () => {
-				first.hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify));
-				first.hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify)); // 同一 activate 内重复 session_start
+				first.hooks.session_start?.(
+					{ type: "session_start" },
+					uiCtx("p", notify),
+				);
+				first.hooks.session_start?.(
+					{ type: "session_start" },
+					uiCtx("p", notify),
+				); // 同一 activate 内重复 session_start
 			});
 			expect(notify).toHaveBeenCalledTimes(1);
 			expect(notify.mock.calls[0]?.[1]).toBe("warning");
@@ -467,7 +637,10 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 			activate(second.fakePi as never);
 			const notify2 = vi.fn();
 			await withPlatform("win32", async () => {
-				second.hooks.session_start?.({ type: "session_start" }, uiCtx("p2", notify2));
+				second.hooks.session_start?.(
+					{ type: "session_start" },
+					uiCtx("p2", notify2),
+				);
 			});
 			expect(notify2).not.toHaveBeenCalled();
 		} finally {
@@ -484,7 +657,10 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			await withPlatform("win32", async () => {
-				hooks.session_start?.({ type: "session_start" }, { hasUI: false, ui: { notify } });
+				hooks.session_start?.(
+					{ type: "session_start" },
+					{ hasUI: false, ui: { notify } },
+				);
 			});
 			expect(notify).not.toHaveBeenCalled();
 			expect(warn).toHaveBeenCalledTimes(1);
@@ -505,12 +681,16 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		try {
 			const staleCtx = {
 				get hasUI(): boolean {
-					throw new Error("This extension ctx is stale after session replacement or reload.");
+					throw new Error(
+						"This extension ctx is stale after session replacement or reload.",
+					);
 				},
 				ui: { notify: vi.fn() },
 			};
 			await withPlatform("win32", async () => {
-				expect(() => hooks.session_start?.({ type: "session_start" }, staleCtx)).not.toThrow();
+				expect(() =>
+					hooks.session_start?.({ type: "session_start" }, staleCtx),
+				).not.toThrow();
 			});
 			expect(warn).toHaveBeenCalledTimes(1);
 			expect(String(warn.mock.calls[0]?.[0])).toContain("+powershell");
@@ -528,7 +708,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			await withPlatform("win32", async () => {
-				expect(() => hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify))).not.toThrow();
+				expect(() =>
+					hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify)),
+				).not.toThrow();
 			});
 			expect(notify).not.toHaveBeenCalled();
 			expect(warn).not.toHaveBeenCalled();
@@ -548,7 +730,9 @@ describe("T15: 平台门控与 pwsh 未激活提示（Ruling 8/9）", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			await withPlatform("win32", async () => {
-				expect(() => hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify))).not.toThrow();
+				expect(() =>
+					hooks.session_start?.({ type: "session_start" }, uiCtx("p", notify)),
+				).not.toThrow();
 			});
 			expect(notify).not.toHaveBeenCalled();
 			expect(warn).not.toHaveBeenCalled();

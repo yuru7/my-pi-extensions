@@ -11,24 +11,36 @@ import {
 	launcherPath,
 	probe as probeLandlockLauncher,
 } from "@deepseek-ai/node-addon-system/landlock-run";
-import { canonicalPath, writableRoots, type ConfinedSandboxMode } from "./policy";
+import {
+	type ConfinedSandboxMode,
+	canonicalPath,
+	defaultTmpRoots,
+	writableRoots,
+} from "./policy";
 
 export { LAUNCHER_BIN, LAUNCHER_FAILURE_EXIT };
 
 export type SandboxEnforcement = "full" | "partial";
 export type RunnerKind = "bwrap" | "landlock" | "seatbelt" | "windows-acl";
-export type SelectedRunner = { runner: RunnerKind; enforcement: SandboxEnforcement } | { runner: "unavailable" };
+export type SelectedRunner =
+	| { runner: RunnerKind; enforcement: SandboxEnforcement }
+	| { runner: "unavailable" };
 
 export interface RunnerPolicy {
 	mode: ConfinedSandboxMode;
 	workspaceRoot: string;
+	/** 本轮已批准的额外可写目录（canonical）。read-only 下也要挂上，否则批准了也写不进去。 */
+	extraRoots?: readonly string[];
 }
 
 /** 测试钩子：注入平台/probe/launcher 路径，单测不依赖真实 bwrap/landlock（deepseek 同款）。 */
 export interface RunnerHooks {
 	platform?: string;
 	probeBwrap?: (timeoutMs: number) => boolean;
-	probeLandlock?: (launcher: string, timeoutMs: number) => SandboxEnforcement | "unusable";
+	probeLandlock?: (
+		launcher: string,
+		timeoutMs: number,
+	) => SandboxEnforcement | "unusable";
 	launcherPath?: () => string;
 	seatbeltExec?: string;
 	/** 覆盖 win32 rung 的前置检查结论（测试注入）；返回 undefined 表示该 rung 不可用。 */
@@ -47,11 +59,23 @@ export interface RunnerHooks {
  * 两者都原路径透明：沙箱内的 /tmp 就是宿主 /tmp（跨命令、跨 read/write 工具语义一致）。
  */
 export function bwrapProfileArgs(policy: RunnerPolicy): string[] {
-	const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--proc", "/proc", "--die-with-parent"];
+	const args = [
+		"--ro-bind",
+		"/",
+		"/",
+		"--dev",
+		"/dev",
+		"--unshare-pid",
+		"--proc",
+		"/proc",
+		"--die-with-parent",
+	];
 	if (policy.mode === "workspace-write") {
 		args.push("--bind", "/tmp", "/tmp");
 		args.push("--bind", policy.workspaceRoot, policy.workspaceRoot);
 	}
+	for (const extra of policy.extraRoots ?? [])
+		args.push("--bind", extra, extra);
 	return args;
 }
 
@@ -61,6 +85,7 @@ export function landlockProfileArgs(policy: RunnerPolicy): string[] {
 	if (policy.mode === "workspace-write") {
 		readWrite.push("/tmp", policy.workspaceRoot);
 	}
+	for (const extra of policy.extraRoots ?? []) readWrite.push(extra);
 	return grantArgs({ readOnly: ["/"], readWrite });
 }
 
@@ -80,9 +105,16 @@ export function seatbeltProfileArgs(policy: RunnerPolicy): string[] {
 		"(deny file-write*)",
 		`(allow file-write* (literal ${sbplString("/dev/null")}))`,
 	];
-	const roots = writableRoots(policy.mode, policy.workspaceRoot);
+	const roots = writableRoots(
+		policy.mode,
+		policy.workspaceRoot,
+		defaultTmpRoots(),
+		policy.extraRoots ?? [],
+	);
 	if (roots.length > 0) {
-		forms.push(`(allow file-write* ${roots.map((root) => `(subpath ${sbplString(root)})`).join(" ")})`);
+		forms.push(
+			`(allow file-write* ${roots.map((root) => `(subpath ${sbplString(root)})`).join(" ")})`,
+		);
 	}
 	return ["-p", forms.join(" ")];
 }
@@ -120,7 +152,8 @@ function defaultWindowsRunnerPath(): string {
 
 /** win32 的 node 可执行文件：Node 运行时用 execPath；bun 或打包运行时回退 PATH 上的 node.exe。 */
 function defaultNodeExecutable(): string | undefined {
-	if (process.versions.node !== undefined && process.versions.bun === undefined) return process.execPath;
+	if (process.versions.node !== undefined && process.versions.bun === undefined)
+		return process.execPath;
 	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
 		if (dir.length === 0) continue;
 		const candidate = join(dir, "node.exe");
@@ -146,9 +179,13 @@ function defaultKoffiResolvable(): boolean {
  * 注入即权威：`windowsAclRung` 存在时其返回值即结论（含显式 undefined = 不可用）；
  * `nodeExecutable` 存在时同理不回退真实探测（显式 undefined = 模拟探测不到 node）。
  */
-export function windowsAclAvailability(hooks: RunnerHooks = {}): { node: string; runner: string } | undefined {
+export function windowsAclAvailability(
+	hooks: RunnerHooks = {},
+): { node: string; runner: string } | undefined {
 	if (hooks.windowsAclRung !== undefined) return hooks.windowsAclRung();
-	const node = Object.hasOwn(hooks, "nodeExecutable") ? hooks.nodeExecutable : defaultNodeExecutable();
+	const node = Object.hasOwn(hooks, "nodeExecutable")
+		? hooks.nodeExecutable
+		: defaultNodeExecutable();
 	const runner = hooks.windowsRunnerPath ?? defaultWindowsRunnerPath();
 	const koffiOk = (hooks.koffiResolvable ?? defaultKoffiResolvable)();
 	if (node === undefined || !existsSync(runner) || !koffiOk) return undefined;
@@ -156,10 +193,18 @@ export function windowsAclAvailability(hooks: RunnerHooks = {}): { node: string;
 }
 
 export function defaultProbeBwrap(timeoutMs: number): boolean {
-	const probe = spawnSync("bwrap", [...bwrapProfileArgs({ mode: "read-only", workspaceRoot: "/" }), "--", "true"], {
-		timeout: timeoutMs,
-		stdio: "ignore",
-	});
+	const probe = spawnSync(
+		"bwrap",
+		[
+			...bwrapProfileArgs({ mode: "read-only", workspaceRoot: "/" }),
+			"--",
+			"true",
+		],
+		{
+			timeout: timeoutMs,
+			stdio: "ignore",
+		},
+	);
 	return probe.status === 0;
 }
 
@@ -167,20 +212,31 @@ export function defaultProbeBwrap(timeoutMs: number): boolean {
  * 平台链选择（spec §3）：单候选直接选定（seatbelt 执行期拒绝即 fail-closed）；
  * 多候选按序功能探测；全不可用 → unavailable（调用方必须抛错，绝不裸跑）。
  */
-export function selectRunner(probeTimeoutMs: number, hooks: RunnerHooks = {}): SelectedRunner {
+export function selectRunner(
+	probeTimeoutMs: number,
+	hooks: RunnerHooks = {},
+): SelectedRunner {
 	cachedVerdict ??= chainVerdict(probeTimeoutMs, hooks);
 	return cachedVerdict;
 }
 
-function chainVerdict(probeTimeoutMs: number, hooks: RunnerHooks): SelectedRunner {
+function chainVerdict(
+	probeTimeoutMs: number,
+	hooks: RunnerHooks,
+): SelectedRunner {
 	const chain = PLATFORM_CHAINS[hooks.platform ?? process.platform] ?? [];
 	const [first, ...rest] = chain;
 	if (first === undefined) return { runner: "unavailable" };
 	if (first === "windows-acl") {
-		if (windowsAclAvailability(hooks) === undefined) return { runner: "unavailable" };
-		return { runner: "windows-acl", enforcement: STATIC_ENFORCEMENT["windows-acl"] };
+		if (windowsAclAvailability(hooks) === undefined)
+			return { runner: "unavailable" };
+		return {
+			runner: "windows-acl",
+			enforcement: STATIC_ENFORCEMENT["windows-acl"],
+		};
 	}
-	if (rest.length === 0) return { runner: first, enforcement: STATIC_ENFORCEMENT[first] };
+	if (rest.length === 0)
+		return { runner: first, enforcement: STATIC_ENFORCEMENT[first] };
 	for (const kind of chain) {
 		const enforcement = probeRunner(kind, probeTimeoutMs, hooks);
 		if (enforcement !== "unusable") return { runner: kind, enforcement };
@@ -188,13 +244,21 @@ function chainVerdict(probeTimeoutMs: number, hooks: RunnerHooks): SelectedRunne
 	return { runner: "unavailable" };
 }
 
-function probeRunner(kind: RunnerKind, probeTimeoutMs: number, hooks: RunnerHooks): SandboxEnforcement | "unusable" {
+function probeRunner(
+	kind: RunnerKind,
+	probeTimeoutMs: number,
+	hooks: RunnerHooks,
+): SandboxEnforcement | "unusable" {
 	switch (kind) {
 		case "bwrap":
-			return (hooks.probeBwrap ?? defaultProbeBwrap)(probeTimeoutMs) ? "full" : "unusable";
+			return (hooks.probeBwrap ?? defaultProbeBwrap)(probeTimeoutMs)
+				? "full"
+				: "unusable";
 		case "landlock": {
 			const launcher = (hooks.launcherPath ?? launcherPath)();
-			const probe = hooks.probeLandlock ?? ((l: string, t: number) => probeLandlockLauncher(l, { timeoutMs: t }));
+			const probe =
+				hooks.probeLandlock ??
+				((l: string, t: number) => probeLandlockLauncher(l, { timeoutMs: t }));
 			return probe(launcher, probeTimeoutMs);
 		}
 		case "seatbelt":
@@ -206,8 +270,11 @@ function probeRunner(kind: RunnerKind, probeTimeoutMs: number, hooks: RunnerHook
 
 /** win32 runner 的前缀：node + 包内 runner.js + 授权根/模式；'--' 与命令 argv 由 confine 拼接。
  * `--temp` 用与 fs 围栏同一个根（canonicalPath(tmpdir())，win32 的 defaultTmpRoots）。 */
-export function windowsAclRunnerArgv(policy: RunnerPolicy, availability: { node: string; runner: string }): string[] {
-	return [
+export function windowsAclRunnerArgv(
+	policy: RunnerPolicy,
+	availability: { node: string; runner: string },
+): string[] {
+	const argv = [
 		availability.node,
 		availability.runner,
 		"--workspace",
@@ -217,6 +284,8 @@ export function windowsAclRunnerArgv(policy: RunnerPolicy, availability: { node:
 		"--mode",
 		policy.mode,
 	];
+	for (const extra of policy.extraRoots ?? []) argv.push("--extra", extra);
+	return argv;
 }
 
 /**
@@ -234,13 +303,21 @@ export function runnerInvocation(
 		case "bwrap":
 			return ["bwrap", ...bwrapProfileArgs(policy)];
 		case "landlock":
-			return [(hooks.launcherPath ?? launcherPath)(), ...landlockProfileArgs(policy)];
+			return [
+				(hooks.launcherPath ?? launcherPath)(),
+				...landlockProfileArgs(policy),
+			];
 		case "seatbelt":
-			return [hooks.seatbeltExec ?? "sandbox-exec", ...seatbeltProfileArgs(policy)];
+			return [
+				hooks.seatbeltExec ?? "sandbox-exec",
+				...seatbeltProfileArgs(policy),
+			];
 		case "windows-acl": {
 			const resolved = availability ?? windowsAclAvailability(hooks);
 			if (resolved === undefined) {
-				throw new Error("windows-acl is unavailable: missing runner file, koffi, or a node executable");
+				throw new Error(
+					"windows-acl is unavailable: missing runner file, koffi, or a node executable",
+				);
 			}
 			return windowsAclRunnerArgv(policy, resolved);
 		}

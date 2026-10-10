@@ -7,7 +7,7 @@
  *
  * Stable argv contract (the TS seam builds it):
  *   [node, cli.js, '--workspace', <dir>, '--temp', <dir>,
- *    '--mode', <read-only|workspace-write>, '--', <argv...>]
+ *    '--mode', <read-only|workspace-write>, [--extra <dir>]..., '--', <argv...>]
  *
  * Deltas from the deepseek-harness reference (`runner.ts`): the `--write-sid`
  * and `--temp-write-sid` seam-managed-SID flags are gone — this package's
@@ -46,12 +46,13 @@ function fail(detail) {
  * at the first `--`; every token after it is the wrapped command's argv and
  * is kept verbatim.
  * @param {string[]} raw - `process.argv.slice(2)`.
- * @returns {{ workspace: string, temp: string, mode: string, command: string, args: string[] }}
+ * @returns {{ workspace: string, temp: string, mode: string, extras: string[], command: string, args: string[] }}
  */
 export function parseArgs(raw) {
 	let workspace;
 	let temp;
 	let mode;
+	const extras = [];
 	let index = 0;
 	for (; index < raw.length; index++) {
 		const token = raw[index];
@@ -72,6 +73,9 @@ export function parseArgs(raw) {
 			case "--mode":
 				mode = value;
 				break;
+			case "--extra":
+				extras.push(value);
+				break;
 			default:
 				fail(`unknown argument: ${token}`);
 		}
@@ -82,7 +86,7 @@ export function parseArgs(raw) {
 	const argv = raw.slice(index);
 	const command = argv[0];
 	if (command === undefined) fail("missing command after --");
-	return { workspace, temp, mode, command, args: argv.slice(1) };
+	return { workspace, temp, mode, extras, command, args: argv.slice(1) };
 }
 
 /**

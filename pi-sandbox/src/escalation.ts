@@ -11,12 +11,18 @@ export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
 };
 
 /** 请求档位是否严格更宽（denial-first 门禁与 approveEscalation 共用同一张表）。 */
-export function isStrictlyWider(effective: SandboxMode, requested: string): boolean {
+export function isStrictlyWider(
+	effective: SandboxMode,
+	requested: string,
+): boolean {
 	return (WIDER_MODES[effective] ?? []).includes(requested as SandboxMode);
 }
 
 /** 封闭的提权目标词汇（read-only 是底线，不可作为目标）。 */
-export const ESCALATION_TARGETS = ["workspace-write", "danger-full-access"] as const;
+export const ESCALATION_TARGETS = [
+	"workspace-write",
+	"danger-full-access",
+] as const;
 
 export const ESCALATION_OPTIONS = ["Allow once", "Deny"] as const;
 
@@ -24,19 +30,29 @@ export const ESCALATION_OPTIONS = ["Allow once", "Deny"] as const;
  * 畸形提权参数的错误文案（按需付费：只在模型发了畸形参数时进上下文）。三要素缺一不可——
  * ① 是否执行（nothing ran：模型当时据此误判为"沙箱拒绝"，进而滥用最大档）② 原因 ③ 可自我修复的配方。
  */
-const MALFORMED_ESCALATION = "invalid escalation: this call was rejected before execution (nothing ran).";
+const MALFORMED_ESCALATION =
+	"invalid escalation: this call was rejected before execution (nothing ran).";
 const ESCALATION_FIX =
 	'Fix: to run without escalation, omit BOTH fields or send JSON null for BOTH; to escalate, send sandbox_permissions ("workspace-write" | "danger-full-access") with a one-sentence justification.';
 
-export function validateEscalationArgs(sandboxPermissions: string | undefined, justification: string | undefined): void {
+export function validateEscalationArgs(
+	sandboxPermissions: string | undefined,
+	justification: string | undefined,
+): void {
 	if (sandboxPermissions !== undefined && justification === undefined) {
-		throw new Error(`${MALFORMED_ESCALATION} Cause: sandbox_permissions was sent without justification. ${ESCALATION_FIX}`);
+		throw new Error(
+			`${MALFORMED_ESCALATION} Cause: sandbox_permissions was sent without justification. ${ESCALATION_FIX}`,
+		);
 	}
 	if (justification !== undefined && sandboxPermissions === undefined) {
-		throw new Error(`${MALFORMED_ESCALATION} Cause: justification was sent without sandbox_permissions. ${ESCALATION_FIX}`);
+		throw new Error(
+			`${MALFORMED_ESCALATION} Cause: justification was sent without sandbox_permissions. ${ESCALATION_FIX}`,
+		);
 	}
 	if (justification !== undefined && justification.trim().length === 0) {
-		throw new Error(`${MALFORMED_ESCALATION} Cause: justification was empty. ${ESCALATION_FIX}`);
+		throw new Error(
+			`${MALFORMED_ESCALATION} Cause: justification was empty. ${ESCALATION_FIX}`,
+		);
 	}
 }
 
@@ -66,7 +82,10 @@ export function normalizeEscalationValue(value: unknown): string | undefined {
 }
 
 /** 提权字段名（与 `src/tools.ts` 的 `ESCALATION_PROPS` 键一致；一致性由 tests/tools.test.ts 钉住）。 */
-export const PLACEHOLDER_KEYS = ["sandbox_permissions", "justification"] as const;
+export const PLACEHOLDER_KEYS = [
+	"sandbox_permissions",
+	"justification",
+] as const;
 
 /**
  * pi 的 `prepareArguments` 钩子体（接线见 `src/tools.ts` 的 `withPlaceholderStripping`）：
@@ -94,13 +113,18 @@ export const PLACEHOLDER_KEYS = ["sandbox_permissions", "justification"] as cons
  * 泛型断言 `as T` 安全：本例只可能删掉 declared schema 中 optional 的两个键，其余键值原样。
  */
 export function stripEscalationPlaceholders<T>(args: T): T {
-	if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+	if (typeof args !== "object" || args === null || Array.isArray(args))
+		return args;
 	const record = args as Record<string, unknown>;
 	let stripped: Record<string, unknown> | undefined;
 	for (const key of PLACEHOLDER_KEYS) {
 		if (!(key in record)) continue;
 		const value = record[key];
-		if (typeof value !== "string" || normalizeEscalationValue(value) !== undefined) continue;
+		if (
+			typeof value !== "string" ||
+			normalizeEscalationValue(value) !== undefined
+		)
+			continue;
 		stripped ??= { ...record };
 		delete stripped[key];
 	}
@@ -113,11 +137,38 @@ export function sandboxDenialMarker(mode: SandboxMode): string {
 }
 
 /**
- * 随拒绝下发的同轮提示（按需付费）：先给"不用提权的出路"（可写根），再给提权配方——
- * nudge 放在决策点，不依赖模型回忆工具描述（常态提示预算见 tools.ts 的提示预算说明）。
+ * 拒绝当场的下一步。调用方已经按路径把情况分成：能授权的一个目录、过宽、
+ * 路径散在多个目录、路径缺失、或自定义 runner。这里只负责写给模型的那一句。
  */
-export function escalationHintMarker(subject: "command" | "operation"): string {
-	return `[sandbox: escalation available — writable here: the workspace + /tmp; retry this exact ${subject} once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]`;
+export function denialFollowupHint(args: {
+	subject: "command" | "operation";
+	customRunner?: boolean;
+	grantDirectory?: string;
+	refusedDirectory?: string;
+	split?: boolean;
+	targetPath?: string;
+}): string {
+	const subject = args.subject;
+	if (args.customRunner) {
+		return `[sandbox: a custom runnerCommand cannot accept a directory grant. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
+	}
+	if (
+		args.grantDirectory !== undefined &&
+		subject === "operation" &&
+		args.targetPath !== undefined
+	) {
+		return `[sandbox: to change only ${args.targetPath}, retry this exact call once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write in ${args.grantDirectory} again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.]`;
+	}
+	if (args.grantDirectory !== undefined) {
+		return `[sandbox: if this command writes in ${args.grantDirectory} only once, retry this exact command once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write there again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.]`;
+	}
+	if (args.refusedDirectory !== undefined) {
+		return `[sandbox: sandbox_grant_write refuses ${args.refusedDirectory} because it is /, the home directory, or an ancestor of home. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
+	}
+	if (args.split) {
+		return `[sandbox: the denied paths are not in one directory. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification. Do not grant a wider directory.]`;
+	}
+	return `[sandbox: this denial names no directory. Writable here: the workspace and /tmp. Otherwise retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
 }
 
 /**
@@ -157,7 +208,11 @@ export interface EscalationDecision {
  */
 export interface EscalationUI {
 	hasUI: boolean;
-	ask(title: string, options: string[], denialReason?: DenialReasonPrompt): Promise<EscalationDecision>;
+	ask(
+		title: string,
+		options: string[],
+		denialReason?: DenialReasonPrompt,
+	): Promise<EscalationDecision>;
 }
 
 export interface EscalationRequest {
@@ -179,7 +234,9 @@ export const DENIAL_REASON_PROMPT: DenialReasonPrompt = {
  * 理由归一化：折叠空白、trim、截断到 500 字符。空/占位符 → undefined（拒绝文案逐字回退原样）。
  * 理由随工具错误进上下文，不能让一次输入撑爆提示预算。
  */
-export function sanitizeDenialReason(raw: string | undefined): string | undefined {
+export function sanitizeDenialReason(
+	raw: string | undefined,
+): string | undefined {
 	if (typeof raw !== "string") return undefined;
 	const collapsed = raw.replace(/\s+/g, " ").trim();
 	if (collapsed.length === 0) return undefined;
@@ -196,10 +253,16 @@ function denialReasonSuffix(raw: string | undefined): string {
  * 同模式免审批 → 严格更宽校验 → hasUI 显式检查 → ask 审批（Deny 时追问可选理由）。
  * 返回值只对发起它的那一次调用生效（一次性，不持久）。
  */
-export async function approveEscalation(request: EscalationRequest, ui: EscalationUI): Promise<SandboxMode> {
-	const { requestedMode, justification, effectiveMode, subject, summary } = request;
+export async function approveEscalation(
+	request: EscalationRequest,
+	ui: EscalationUI,
+): Promise<SandboxMode> {
+	const { requestedMode, justification, effectiveMode, subject, summary } =
+		request;
 	if (requestedMode === effectiveMode) return effectiveMode;
-	if (!(WIDER_MODES[effectiveMode] ?? []).includes(requestedMode as SandboxMode)) {
+	if (
+		!(WIDER_MODES[effectiveMode] ?? []).includes(requestedMode as SandboxMode)
+	) {
 		throw new Error(
 			`sandbox escalation to "${requestedMode}" is not strictly wider than this call's current "${effectiveMode}" mode — nothing was executed. Run the call as-is, or escalate to "danger-full-access".`,
 		);
@@ -220,7 +283,9 @@ export async function approveEscalation(request: EscalationRequest, ui: Escalati
 		DENIAL_REASON_PROMPT,
 	);
 	if (decision.choice === undefined) {
-		throw new Error(`approval for escalating to "${requestedMode}" was cancelled — nothing was executed`);
+		throw new Error(
+			`approval for escalating to "${requestedMode}" was cancelled — nothing was executed`,
+		);
 	}
 	if (decision.choice === "Deny") {
 		throw new Error(

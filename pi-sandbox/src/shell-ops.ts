@@ -1,21 +1,35 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { access as fsAccess, constants } from "node:fs/promises";
+import {
+	type ChildProcess,
+	type SpawnOptions,
+	spawn,
+} from "node:child_process";
+import { constants, access as fsAccess } from "node:fs/promises";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import {
+	type ConfinedArgv,
+	type ConfineOptions,
 	classifyDenial,
 	classifyRunnerFailure,
 	confine,
 	SandboxUnavailableError,
-	type ConfinedArgv,
-	type ConfineOptions,
 } from "./confine";
-import { escalationHintMarker, sandboxDenialMarker } from "./escalation";
+import { denialFollowupHint, sandboxDenialMarker } from "./escalation";
+import { grantDirectoryForDenial } from "./fence";
+import { extractAbsolutePaths } from "./grant-path";
 import type { ConfinedSandboxMode, SandboxMode } from "./policy";
 
-export type SpawnFn = (program: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+export type SpawnFn = (
+	program: string,
+	args: readonly string[],
+	options: SpawnOptions,
+) => ChildProcess;
 
 /** I3：杀整个进程组（detached spawn → 子进程是组长）；失败（无 pid/组不存在）回退杀直接子进程。 */
-function killTree(child: ChildProcess, signal: NodeJS.Signals, platform: string): void {
+function killTree(
+	child: ChildProcess,
+	signal: NodeJS.Signals,
+	platform: string,
+): void {
 	// win32 没有进程组：杀 runner 即关闭 Job，受限子孙随之灭亡（spec §4.7）
 	if (platform !== "win32" && child.pid !== undefined) {
 		try {
@@ -85,7 +99,11 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 				const rawArgv = opts.shell(command);
 				// Review Focus #3 + Ruling 10：钉消息翻译（LC_MESSAGES）；移除 LC_ALL（POSIX 中它覆盖 LC_MESSAGES，
 				// 保留会使中文环境下 denial 签名全 miss）；不动 LANG/LC_CTYPE（编码/排序行为不变）
-				const env: NodeJS.ProcessEnv = { ...process.env, ...execOpts.env, LC_MESSAGES: "C" };
+				const env: NodeJS.ProcessEnv = {
+					...process.env,
+					...execOpts.env,
+					LC_MESSAGES: "C",
+				};
 				delete env.LC_ALL;
 
 				let argv: readonly string[];
@@ -97,7 +115,12 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 						// win32 bash 拒绝（Ruling 2）等前置守卫：必须在 danger-full-access 早退之后，
 						// 抛错即 fail-closed（不 spawn）。
 						opts.guard?.(opts.mode);
-						confined = confine(rawArgv, opts.mode as ConfinedSandboxMode, opts.workspaceRoot, opts);
+						confined = confine(
+							rawArgv,
+							opts.mode as ConfinedSandboxMode,
+							opts.workspaceRoot,
+							opts,
+						);
 						argv = confined.argv;
 					}
 				} catch (err) {
@@ -118,11 +141,15 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 				let stderrTail = "";
 				child.stdout?.on("data", (chunk: Buffer) => {
 					execOpts.onData(chunk);
-					stdoutTail = (stdoutTail + chunk.toString("utf-8")).slice(-OUTPUT_TAIL_CHARS);
+					stdoutTail = (stdoutTail + chunk.toString("utf-8")).slice(
+						-OUTPUT_TAIL_CHARS,
+					);
 				});
 				child.stderr?.on("data", (chunk: Buffer) => {
 					execOpts.onData(chunk);
-					stderrTail = (stderrTail + chunk.toString("utf-8")).slice(-OUTPUT_TAIL_CHARS);
+					stderrTail = (stderrTail + chunk.toString("utf-8")).slice(
+						-OUTPUT_TAIL_CHARS,
+					);
 				});
 
 				let timer: NodeJS.Timeout | undefined;
@@ -150,14 +177,37 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 				child.on("close", (code) => {
 					cleanup();
 					if (confined && typeof code === "number" && code !== 0) {
-						const fatal = classifyRunnerFailure(code, stderrTail, confined.runnerFailureRules);
+						const fatal = classifyRunnerFailure(
+							code,
+							stderrTail,
+							confined.runnerFailureRules,
+						);
 						if (fatal !== undefined) {
-							reject(new SandboxUnavailableError(opts.mode as ConfinedSandboxMode, fatal));
+							reject(
+								new SandboxUnavailableError(
+									opts.mode as ConfinedSandboxMode,
+									fatal,
+								),
+							);
 							return;
 						}
 						if (classifyDenial(code, stderrTail, confined.denialSignatures)) {
-							opts.onDenial?.({ exitCode: code, stdout: stdoutTail, stderr: stderrTail });
-							execOpts.onData(Buffer.from(`\n${sandboxDenialMarker(opts.mode)}\n${escalationHintMarker("command")}\n`));
+							opts.onDenial?.({
+								exitCode: code,
+								stdout: stdoutTail,
+								stderr: stderrTail,
+							});
+							const customRunner = (opts.runnerCommand?.length ?? 0) > 0;
+							const hint = denialFollowupHint({
+								subject: "command",
+								customRunner,
+								...(customRunner
+									? {}
+									: grantDirectoryForDenial(extractAbsolutePaths(stderrTail))),
+							});
+							execOpts.onData(
+								Buffer.from(`\n${sandboxDenialMarker(opts.mode)}\n${hint}\n`),
+							);
 						}
 					}
 					// I1：对齐 pi 本地 ops 契约（dist bash.js：throw Error("aborted") / throw Error(`timeout:${timeout}`)）——

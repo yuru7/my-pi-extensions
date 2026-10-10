@@ -13,7 +13,7 @@
 import type { DenialReasonPrompt, EscalationDecision } from "./escalation";
 
 /** 进程全局槽位键：带包名前缀，避免与其他扩展的 globalThis 使用相撞。 */
-const BROKER_KEY = Symbol.for("@yandy0725/pi-sandbox:escalation-broker");
+const BROKER_KEY = Symbol.for("@yuru7/pi-sandbox:escalation-broker");
 
 /** 沿 link 向上查找祖先的深度上限：异常数据不得导致长链遍历或死循环。 */
 const MAX_ANCESTOR_DEPTH = 32;

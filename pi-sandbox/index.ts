@@ -1,13 +1,20 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { approvalStatusLine, getSandboxConfig } from "./src/config";
 import { getDenialLedger } from "./src/denial-ledger";
 import { getEscalationBroker } from "./src/escalation-broker";
 import { createPiSandboxCommand } from "./src/init-command";
-import { createPermissionCommand, processPermissionState } from "./src/permission";
+import {
+	createPermissionCommand,
+	processPermissionState,
+} from "./src/permission";
 import { canonicalPath } from "./src/policy";
 import { selectRunner } from "./src/runners";
 import { createSandboxTools } from "./src/tools";
 import { aclSkillPaths } from "./src/win32/skill-paths";
+import { getWritableGrants } from "./src/writable-grants";
 
 /**
  * pi-subagents 的子会话生命周期通道名（约定，非编译期契约；spec §4.1、§8）。
@@ -77,10 +84,18 @@ let powershellHintShown = false;
  * 触发条件应放宽为“仅 powershell ∉ active”（那会让 ≤0.80.x 宿主每次都提示升级）。
  * 任何取值失败（陈旧 ctx / 老宿主 / 取值器抛错）都静默——提示是锦上添花，绝不能阻断激活。
  */
-function maybeWarnMissingPowerShellTool(pi: ExtensionAPI, ctx: ExtensionContext): void {
+function maybeWarnMissingPowerShellTool(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+): void {
 	if (process.platform !== "win32" || powershellHintShown) return;
 	const active = readActiveTools(pi);
-	if (active === undefined || active.includes("powershell") || !active.includes("bash")) return;
+	if (
+		active === undefined ||
+		active.includes("powershell") ||
+		!active.includes("bash")
+	)
+		return;
 	powershellHintShown = true;
 	let notified = false;
 	if (readHasUI(ctx)) {
@@ -94,7 +109,10 @@ function maybeWarnMissingPowerShellTool(pi: ExtensionAPI, ctx: ExtensionContext)
 			notified = false; // ctx 已失效（reload / 会话替换）：继续走 stderr
 		}
 	}
-	if (!notified) console.warn(`sandbox: ${POWERSHELL_HINT_MESSAGE.replaceAll("\n", "\n  ")}`);
+	if (!notified)
+		console.warn(
+			`sandbox: ${POWERSHELL_HINT_MESSAGE.replaceAll("\n", "\n  ")}`,
+		);
 }
 
 /**
@@ -107,8 +125,11 @@ function maybeWarnMissingPowerShellTool(pi: ExtensionAPI, ctx: ExtensionContext)
 function win32ShellStatusLine(pi: ExtensionAPI): string | null {
 	if (process.platform !== "win32") return null;
 	const active = readActiveTools(pi);
-	if (active === undefined) return "shell: powershell only (activation unknown)";
-	return active.includes("powershell") ? "shell: powershell only" : "shell: powershell only (not activated)";
+	if (active === undefined)
+		return "shell: powershell only (activation unknown)";
+	return active.includes("powershell")
+		? "shell: powershell only"
+		: "shell: powershell only (not activated)";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -125,45 +146,55 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(tools.bash as never);
 	pi.registerTool(tools.write as never);
 	pi.registerTool(tools.edit as never);
+	if (tools.grantWrite !== undefined)
+		pi.registerTool(tools.grantWrite as never);
 	// Ruling 9：技能按平台**追加**贡献（pi 侧是 mergePaths 合并语义）。只返回本包的技能路径，
 	// 或空数组 = 什么也不加（非 win32 上零目录条目）；绝不返回“完整集合”而抹掉其他来源。
 	pi.on("resources_discover", () => ({ skillPaths: aclSkillPaths() }));
 	// 老宿主（含本仓 devDependency 0.80.2）没有 createPowerShellToolDefinition → tools.powershell
 	// 为 undefined：跳过注册即可，不报错（此时宿主本来也没有 powershell 工具可覆盖）。
-	if (tools.powershell !== undefined) pi.registerTool(tools.powershell as never);
+	if (tools.powershell !== undefined)
+		pi.registerTool(tools.powershell as never);
 
-	pi.registerCommand("permission", createPermissionCommand({
-		state: processPermissionState,
-		// C2：pi 从不 chdir，会话 cwd 只经命令 ctx.cwd 可达；空串回落 activate 时 cwd。
-		describeStatus: (statusCwd, projectTrusted = null) => {
-			const effectiveCwd = statusCwd || cwd;
-			const cfg = getSandboxConfig(effectiveCwd);
-			const effective = processPermissionState.override ?? cfg.mode;
-			const source = processPermissionState.override !== null ? "/permission override" : "config default";
-			let runnerText: string;
-			// Ruling 19：danger-full-access 首判——自定义 runner 已配置但模式为全放行时，
-			// runner 行必须显示 bypassed（runner 不参与该模式的执行）。
-			if (effective === "danger-full-access") {
-				runnerText = "bypassed (danger-full-access)";
-			} else if (cfg.runnerCommand !== null && cfg.runnerCommand.length > 0) {
-				runnerText = `custom command (${cfg.runnerCommand.join(" ")})`;
-			} else {
-				const selected = selectRunner(cfg.probeTimeoutMs);
-				runnerText = selected.runner === "unavailable"
-					? "unavailable (fail-closed: confined commands will be refused)"
-					: `${selected.runner} (${selected.enforcement} enforcement)`;
-			}
-			const lines = [
-				`sandbox mode: ${effective} (${source})`,
-				approvalStatusLine(cfg, projectTrusted),
-				`runner: ${runnerText}`,
-				`workspace: ${canonicalPath(effectiveCwd)}`,
-			];
-			const shellLine = win32ShellStatusLine(pi);
-			if (shellLine !== null) lines.push(shellLine);
-			return lines.join("\n");
-		},
-	}));
+	pi.registerCommand(
+		"permission",
+		createPermissionCommand({
+			state: processPermissionState,
+			// C2：pi 从不 chdir，会话 cwd 只经命令 ctx.cwd 可达；空串回落 activate 时 cwd。
+			describeStatus: (statusCwd, projectTrusted = null) => {
+				const effectiveCwd = statusCwd || cwd;
+				const cfg = getSandboxConfig(effectiveCwd);
+				const effective = processPermissionState.override ?? cfg.mode;
+				const source =
+					processPermissionState.override !== null
+						? "/permission override"
+						: "config default";
+				let runnerText: string;
+				// Ruling 19：danger-full-access 首判——自定义 runner 已配置但模式为全放行时，
+				// runner 行必须显示 bypassed（runner 不参与该模式的执行）。
+				if (effective === "danger-full-access") {
+					runnerText = "bypassed (danger-full-access)";
+				} else if (cfg.runnerCommand !== null && cfg.runnerCommand.length > 0) {
+					runnerText = `custom command (${cfg.runnerCommand.join(" ")})`;
+				} else {
+					const selected = selectRunner(cfg.probeTimeoutMs);
+					runnerText =
+						selected.runner === "unavailable"
+							? "unavailable (fail-closed: confined commands will be refused)"
+							: `${selected.runner} (${selected.enforcement} enforcement)`;
+				}
+				const lines = [
+					`sandbox mode: ${effective} (${source})`,
+					approvalStatusLine(cfg, projectTrusted),
+					`runner: ${runnerText}`,
+					`workspace: ${canonicalPath(effectiveCwd)}`,
+				];
+				const shellLine = win32ShellStatusLine(pi);
+				if (shellLine !== null) lines.push(shellLine);
+				return lines.join("\n");
+			},
+		}),
+	);
 
 	// /pi-sandbox init writes the default pi-sandbox.json (global or project; confirm before overwrite).
 	pi.registerCommand("pi-sandbox", createPiSandboxCommand());
@@ -176,17 +207,52 @@ export default function (pi: ExtensionAPI) {
 	let registeredSessionId: string | null = null;
 	// 宿主每次 /reload 都复用同一 event bus 并重新调用本 factory：不退订就会无上限累积监听器
 	// （超过 Node 默认 maxListeners 后打印 MaxListenersExceededWarning 污染用户终端）。
-	const unsubscribeCreated = pi.events.on(SUBAGENT_CHILD_SESSION_CREATED, (data) => {
-		const event = data as { sessionId?: unknown; parentSessionId?: unknown };
-		if (typeof event.sessionId !== "string") return; // 契约漂移 → 不 link → 子会话保持 fail-closed
-		broker.linkChild(event.sessionId, typeof event.parentSessionId === "string" ? event.parentSessionId : undefined);
-	});
+	const unsubscribeCreated = pi.events.on(
+		SUBAGENT_CHILD_SESSION_CREATED,
+		(data) => {
+			const event = data as { sessionId?: unknown; parentSessionId?: unknown };
+			if (typeof event.sessionId !== "string") return; // 契约漂移 → 不 link → 子会话保持 fail-closed
+			broker.linkChild(
+				event.sessionId,
+				typeof event.parentSessionId === "string"
+					? event.parentSessionId
+					: undefined,
+			);
+		},
+	);
 	const unsubscribeDisposed = pi.events.on(SUBAGENT_CHILD_DISPOSED, (data) => {
 		const event = data as { sessionId?: unknown };
 		if (typeof event.sessionId !== "string") return;
 		broker.unlinkChild(event.sessionId);
 		getDenialLedger().forget(event.sessionId); // 子会话销毁：清掉未消费的拒绝记录（防 Map 泄漏）
+		getWritableGrants().clear(event.sessionId);
 	});
+	const clearGrants = (ctx: {
+		sessionManager?: { getSessionId(): string };
+	}): void => {
+		try {
+			const sessionId = ctx.sessionManager?.getSessionId();
+			if (typeof sessionId === "string" && sessionId.length > 0)
+				getWritableGrants().clear(sessionId);
+		} catch {
+			// 陈旧 ctx：清不掉就留到下一次拿得到 id 的事件。不让宿主的内部错误冒泡。
+		}
+	};
+	// 新的用户提示开始时先清掉上一轮的目录授权。steering / follow-up 不经过 before_agent_start，
+	// 它们以用户消息进入同一轮，所以 message_start 也清。agent_settled 是这一轮真正结束的点
+	// （重试和压缩还没结束，不能在 agent_end 清）。clear 会删掉这次新建且仍为空的目录。
+	pi.on("before_agent_start", (_event, ctx) => {
+		clearGrants(ctx);
+	});
+	pi.on("message_start", (event, ctx) => {
+		const message = (event as { message?: { role?: string } }).message;
+		if (message?.role !== "user") return;
+		clearGrants(ctx);
+	});
+	pi.on("agent_settled", (_event, ctx) => {
+		clearGrants(ctx);
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		// Ruling 8 的提示不依赖 UI 或会话身份（无 UI 时落 stderr），所以必须在下面的 hasUI
 		// 守卫**之前**——守卫之后的路径是审批通道注册，与提示无关。
@@ -209,7 +275,10 @@ export default function (pi: ExtensionAPI) {
 			hasUI: () => readHasUI(ctx),
 			select: (title, options, opts) => ctx.ui.select(title, options, opts),
 			// 两步式的第二步：Deny 后的可选理由。旧宿主/异常 ctx 可能没有 input——缺失时 broker 跳过追问。
-			input: typeof ctx.ui.input === "function" ? (title, placeholder, opts) => ctx.ui.input(title, placeholder, opts) : undefined,
+			input:
+				typeof ctx.ui.input === "function"
+					? (title, placeholder, opts) => ctx.ui.input(title, placeholder, opts)
+					: undefined,
 		});
 	});
 	pi.on("session_shutdown", () => {
@@ -218,6 +287,7 @@ export default function (pi: ExtensionAPI) {
 		if (registeredSessionId === null) return;
 		broker.unregisterParent(registeredSessionId);
 		getDenialLedger().forget(registeredSessionId); // 会话销毁：清掉未消费的拒绝记录（防 Map 泄漏）
+		getWritableGrants().clear(registeredSessionId);
 		registeredSessionId = null;
 	});
 }

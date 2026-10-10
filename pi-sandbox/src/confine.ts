@@ -1,15 +1,19 @@
-import { canonicalPath, type ConfinedSandboxMode, type SandboxMode } from "./policy";
+import {
+	type ConfinedSandboxMode,
+	canonicalPath,
+	type SandboxMode,
+} from "./policy";
 import {
 	bwrapProfileArgs,
 	LAUNCHER_BIN,
 	LAUNCHER_FAILURE_EXIT,
-	runnerInvocation,
-	selectRunner,
-	windowsAclAvailability,
 	type RunnerHooks,
 	type RunnerPolicy,
+	runnerInvocation,
 	type SandboxEnforcement,
 	type SelectedRunner,
+	selectRunner,
+	windowsAclAvailability,
 } from "./runners";
 
 export interface RunnerFailureRule {
@@ -49,21 +53,35 @@ export const DENIAL_SIGNATURES = {
 	runnerCommand: ["read-only file system", "permission denied"],
 	// 移植契约（Ruling 6）：覆盖 cmd（Access is denied）、pwsh/.NET（Access to the path…）、
 	// Node EACCES/EPERM 与 git-bash（permission denied / operation not permitted）四种方言。
-	"windows-acl": ["access is denied", "access to the path", "permission denied", "operation not permitted"],
+	"windows-acl": [
+		"access is denied",
+		"access to the path",
+		"permission denied",
+		"operation not permitted",
+	],
 } as const;
 
 export const RUNNER_FAILURE_RULES = {
 	bwrap: [{ fatalSignatures: ["bwrap: "] }],
-	landlock: [{
-		allowedExitCodes: [LAUNCHER_FAILURE_EXIT],
-		fatalSignatures: [`${LAUNCHER_BIN}: `],
-		informationalLines: [`${LAUNCHER_BIN}: partial enforcement (older Landlock ABI)`],
-	}],
+	landlock: [
+		{
+			allowedExitCodes: [LAUNCHER_FAILURE_EXIT],
+			fatalSignatures: [`${LAUNCHER_BIN}: `],
+			informationalLines: [
+				`${LAUNCHER_BIN}: partial enforcement (older Landlock ABI)`,
+			],
+		},
+	],
 	seatbelt: [{ fatalSignatures: ["sandbox-exec: "] }],
 	// 移植契约（Ruling 7）：exit 127 门控 + runner 前缀签名，避免把受限命令自己打印的
 	// 同名字样误判为 runner 失败（命令确实跑过时绝不判 runner 失败）。
-	"windows-acl": [{ allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] }],
-} as const satisfies Record<"bwrap" | "landlock" | "seatbelt" | "windows-acl", readonly RunnerFailureRule[]>;
+	"windows-acl": [
+		{ allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] },
+	],
+} as const satisfies Record<
+	"bwrap" | "landlock" | "seatbelt" | "windows-acl",
+	readonly RunnerFailureRule[]
+>;
 
 /** Windows 受限模式只支持 pwsh（Ruling 2）：bash 在任何受限模式下拒绝执行，绝不 spawn。
  *  纵深防御：本包在 win32 上把 bash 注册为 `exposure: "hidden"`（D3 第三版：模型不可达、也无法被
@@ -75,9 +93,9 @@ export class UnsupportedWindowsShellError extends Error {
 	constructor(shell: string) {
 		super(
 			`[sandbox: ${shell} is not supported on Windows]\n` +
-			`pi-sandbox confines Windows commands through the powershell tool only (requires pi >= 1.0.0); use the powershell tool instead of bash — the command was NOT executed.\n` +
-			`bash stays fail-closed on Windows: enabling it explicitly does not unconfine it.\n` +
-			`"danger-full-access" remains the only explicit bypass.`,
+				`pi-sandbox confines Windows commands through the powershell tool only (requires pi >= 1.0.0); use the powershell tool instead of bash — the command was NOT executed.\n` +
+				`bash stays fail-closed on Windows: enabling it explicitly does not unconfine it.\n` +
+				`"danger-full-access" remains the only explicit bypass.`,
 		);
 		this.name = "UnsupportedWindowsShellError";
 	}
@@ -89,8 +107,16 @@ export class UnsupportedWindowsShellError extends Error {
  * @param platform - 宿平台（注入点）。
  * @param mode - 本次调用解析出的生效模式。
  */
-export function assertShellAllowed(shell: string, platform: string, mode: SandboxMode): void {
-	if (platform === "win32" && shell === "bash" && mode !== "danger-full-access") {
+export function assertShellAllowed(
+	shell: string,
+	platform: string,
+	mode: SandboxMode,
+): void {
+	if (
+		platform === "win32" &&
+		shell === "bash" &&
+		mode !== "danger-full-access"
+	) {
 		throw new UnsupportedWindowsShellError(shell);
 	}
 }
@@ -102,6 +128,8 @@ export interface ConfineOptions {
 	runnerFailureSignatures?: string[] | null;
 	probeTimeoutMs?: number;
 	hooks?: RunnerHooks;
+	/** 本轮已批准的额外可写目录。自定义 runner 的工具会拒绝添加，这里只透传已有列表。 */
+	extraRoots?: readonly string[];
 }
 
 /**
@@ -114,19 +142,27 @@ export function confine(
 	workspaceRoot: string,
 	opts: ConfineOptions = {},
 ): ConfinedArgv {
-	const policy: RunnerPolicy = { mode, workspaceRoot: canonicalPath(workspaceRoot) };
+	const policy: RunnerPolicy = {
+		mode,
+		workspaceRoot: canonicalPath(workspaceRoot),
+		extraRoots: opts.extraRoots,
+	};
 
 	if (opts.runnerCommand && opts.runnerCommand.length > 0) {
 		return {
 			argv: [...opts.runnerCommand, ...bwrapProfileArgs(policy), "--", ...argv],
 			enforcement: "full",
 			denialSignatures: DENIAL_SIGNATURES.runnerCommand,
-			runnerFailureRules: [{ fatalSignatures: opts.runnerFailureSignatures ?? [] }],
+			runnerFailureRules: [
+				{ fatalSignatures: opts.runnerFailureSignatures ?? [] },
+			],
 		};
 	}
 
-	const selected = opts.selected ?? selectRunner(opts.probeTimeoutMs ?? 5000, opts.hooks);
-	if (selected.runner === "unavailable") throw new SandboxUnavailableError(mode);
+	const selected =
+		opts.selected ?? selectRunner(opts.probeTimeoutMs ?? 5000, opts.hooks);
+	if (selected.runner === "unavailable")
+		throw new SandboxUnavailableError(mode);
 
 	// win32 的可用性只解析一次并透传给 runnerInvocation（Task 9 约定）；
 	// 注入即权威：hook 存在时其返回值就是结论（含显式 undefined），绝不回退真实探测。
@@ -135,7 +171,10 @@ export function confine(
 	if (selected.runner === "windows-acl") {
 		const hooks = opts.hooks ?? {};
 		const injectedRung = hooks.windowsAclRung;
-		availability = injectedRung !== undefined ? injectedRung() : windowsAclAvailability(hooks);
+		availability =
+			injectedRung !== undefined
+				? injectedRung()
+				: windowsAclAvailability(hooks);
 		if (availability === undefined) {
 			throw new SandboxUnavailableError(
 				mode,
@@ -144,7 +183,11 @@ export function confine(
 		}
 	}
 	return {
-		argv: [...runnerInvocation(selected, policy, opts.hooks, availability), "--", ...argv],
+		argv: [
+			...runnerInvocation(selected, policy, opts.hooks, availability),
+			"--",
+			...argv,
+		],
 		enforcement: selected.enforcement,
 		denialSignatures: DENIAL_SIGNATURES[selected.runner],
 		runnerFailureRules: RUNNER_FAILURE_RULES[selected.runner],
@@ -164,8 +207,11 @@ export function classifyRunnerFailure(
 ): string | undefined {
 	if (exitCode === null || exitCode === 0) return undefined;
 	for (const rule of rules) {
-		if (rule.allowedExitCodes && !rule.allowedExitCodes.includes(exitCode)) continue;
-		const informational = new Set((rule.informationalLines ?? []).map((line) => line.toLowerCase()));
+		if (rule.allowedExitCodes && !rule.allowedExitCodes.includes(exitCode))
+			continue;
+		const informational = new Set(
+			(rule.informationalLines ?? []).map((line) => line.toLowerCase()),
+		);
 		for (const line of stderr.split("\n")) {
 			const trimmed = line.trim();
 			if (trimmed.length === 0) continue;
@@ -180,8 +226,14 @@ export function classifyRunnerFailure(
 }
 
 /** denial 判定：非零 exit + 任一方言子串（大小写不敏感）出现在 stderr。 */
-export function classifyDenial(exitCode: number | null, stderr: string, signatures: readonly string[]): boolean {
+export function classifyDenial(
+	exitCode: number | null,
+	stderr: string,
+	signatures: readonly string[],
+): boolean {
 	if (exitCode === null || exitCode === 0) return false;
 	const lower = stderr.toLowerCase();
-	return signatures.some((signature) => lower.includes(signature.toLowerCase()));
+	return signatures.some((signature) =>
+		lower.includes(signature.toLowerCase()),
+	);
 }

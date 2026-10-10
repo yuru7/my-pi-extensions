@@ -111,6 +111,20 @@ export function workspaceWriteSid(workspaceRoot) {
 }
 
 /**
+ * Derive an extra writable root's SID. The fixed third sub-authority (`-2`)
+ * domain-separates it from workspace SIDs (two sub-authorities) and from the
+ * temp SID (third sub-authority `-1`).
+ * @param {string} directory - the granted directory's absolute path (canonicalized by the caller).
+ * @returns {string} the SDDL string form.
+ */
+export function extraWriteSid(directory) {
+	const digest = createHash("sha256").update("extra\0", "utf8").update(directory, "utf8").digest();
+	const first = (digest.readUInt32LE(0) % SUB_AUTHORITY_MODULUS) + 1;
+	const second = (digest.readUInt32LE(4) % SUB_AUTHORITY_MODULUS) + 1;
+	return `${CAPABILITY_SID_PREFIX}${first}-${second}-2`;
+}
+
+/**
  * Derive the granted temp root's write SID. The absolute path of the granted
  * temp root (canonicalized by the caller) is the capability identity; the
  * fixed third sub-authority (`-1`) domain-separates the result from every

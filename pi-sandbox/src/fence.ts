@@ -1,12 +1,40 @@
-import { basename, dirname, join, resolve as resolvePath, sep } from "node:path";
-import { lstatSync, readlinkSync, realpathSync, statSync, type Stats } from "node:fs";
-import { escalationHintMarker, sandboxDenialMarker } from "./escalation";
-import { writableRoots, type SandboxMode } from "./policy";
+import {
+	lstatSync,
+	readlinkSync,
+	realpathSync,
+	type Stats,
+	statSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import {
+	basename,
+	dirname,
+	join,
+	resolve as resolvePath,
+	sep,
+} from "node:path";
+import { denialFollowupHint, sandboxDenialMarker } from "./escalation";
+import { canonicalPath, type SandboxMode, writableRoots } from "./policy";
 
-/** fs 写围栏拒绝：message 携带模型可见的双行标记（spec §7）。 */
+/** fs 写围栏拒绝：message 携带拒绝标记、下一步提示和 path。 */
 export class FenceDenialError extends Error {
-	constructor(path: string, mode: SandboxMode) {
-		super(`${sandboxDenialMarker(mode)}\n${escalationHintMarker("operation")}\npath: ${path}`);
+	constructor(
+		path: string,
+		mode: SandboxMode,
+		customRunner = false,
+		asDirectory = false,
+	) {
+		const choice = customRunner
+			? {}
+			: grantDirectoryForDenial([path], asDirectory);
+		super(
+			`${sandboxDenialMarker(mode)}\n${denialFollowupHint({
+				subject: "operation",
+				customRunner,
+				targetPath: path,
+				...choice,
+			})}\npath: ${path}`,
+		);
 		this.name = "FenceDenialError";
 	}
 }
@@ -77,7 +105,13 @@ function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
 	// 身份未知 ≠ 身份相同：libuv 的 Windows stat 回退（目录句柄被 Defender/索引器瞬时占用时）
 	// 给出 ino/dev = 0 的“未知身份”，`0 === 0` 会把两个不同目录判成同一（2026-10-04 真机 CI
 	// 捕获）。零身份、以及无法精确化为 BigInt 的身份，两侧任一命中都一律不匹配。
-	if (aIno === undefined || bIno === undefined || aDev === undefined || bDev === undefined) return false;
+	if (
+		aIno === undefined ||
+		bIno === undefined ||
+		aDev === undefined ||
+		bDev === undefined
+	)
+		return false;
 	if (aIno === 0n || bIno === 0n) return false;
 	return aIno === bIno && aDev === bDev;
 }
@@ -97,7 +131,8 @@ function comparablePath(path: string, caseSensitive: boolean): string {
 }
 
 /** win32 上 "/" 与 "\\" 都是分隔符：比较前先统一成 path.sep；POSIX 不动。 */
-const normalizeSeparators = (p: string) => (sep === "\\" ? p.replaceAll("/", "\\") : p);
+const normalizeSeparators = (p: string) =>
+	sep === "\\" ? p.replaceAll("/", "\\") : p;
 
 /** 尾部分隔符：win32 两种都去（盘根 "C:\\" → "C:"）；POSIX 只去 "/"——"\\" 在那里是合法文件名字符。 */
 const TRAILING_SEPARATORS = sep === "\\" ? /[\\/]+$/ : /\/+$/;
@@ -114,11 +149,18 @@ const DRIVE_RELATIVE_PATH = /^[A-Za-z]:(?![\\/])/;
  * 大小写由调用方按平台约定传入；拼写不同（大小写、8.3 短名、junction）时
  * 仍由下面的 dev/ino 身份回退兜底。
  */
-function isLexicallyUnder(target: string, root: string, caseSensitive: boolean): boolean {
+function isLexicallyUnder(
+	target: string,
+	root: string,
+	caseSensitive: boolean,
+): boolean {
 	const t = comparablePath(normalizeSeparators(target), caseSensitive);
 	// 去尾部（重复）分隔符：根前缀不能带分隔符，否则 C:\work\demo2 会被误判为子路径。
 	// POSIX "/" 去尾为空，连同空根一起保持根语义。
-	const r = comparablePath(normalizeSeparators(root).replace(TRAILING_SEPARATORS, "") || sep, caseSensitive);
+	const r = comparablePath(
+		normalizeSeparators(root).replace(TRAILING_SEPARATORS, "") || sep,
+		caseSensitive,
+	);
 	// win32 盘根 "C:\\" 去尾后就是裸盘符 "C:"；裸盘符是"每驱动器当前目录"而非盘根，
 	// 因此必须由分隔符继续（C:\…）才可能是它的子路径——裸 "C:" 与 "C:work" 都不算。
 	if (DRIVE_LETTER_PREFIX.test(r)) return t.startsWith(`${r}${sep}`);
@@ -139,7 +181,8 @@ export function isWithinRoots(
 ): boolean {
 	// win32：裸盘符与盘符相对路径按 per-drive CWD 解析，结果随进程 CWD 漂移；
 	// 围栏判定必须确定，故一律视为不在任何授予根内（POSIX 宿主无此语义，不适用）。
-	if (sep === "\\" && DRIVE_RELATIVE_PATH.test(normalizeSeparators(target))) return false;
+	if (sep === "\\" && DRIVE_RELATIVE_PATH.test(normalizeSeparators(target)))
+		return false;
 	for (const root of roots) {
 		if (isLexicallyUnder(target, root, caseSensitive)) return true;
 	}
@@ -174,6 +217,69 @@ export interface FencePolicy {
 	caseSensitive?: boolean;
 	/** 测试注入（testing.md「参数注入」）：替换缺省 tmp 根（`defaultTmpRoots()`：win32 仅 `os.tmpdir()`，其余 `"/tmp"` + `os.tmpdir()`）；生产不传。 */
 	_tmpRoots?: readonly string[];
+	/** 本轮已批准的额外可写目录。read-only 下也参与比较。 */
+	extraRoots?: readonly string[];
+	/** 自定义 runner 接不住额外可写根。拒绝文案就只给一次性提权。 */
+	customRunner?: boolean;
+}
+
+/**
+ * `/`、家目录、以及家目录的任何祖先。这些宽度等价于整盘放行，应走 danger-full-access。
+ * 放在围栏侧是为了让拒绝文案和授权工具用同一判断，同时避开 grant-path → fence 的环。
+ */
+export function grantTooWide(
+	canonical: string,
+	home: string = homedir(),
+): boolean {
+	if (canonical === sep || canonical === "/" || canonical === "\\") return true;
+	if (/^[A-Za-z]:\\?$/.test(canonical)) return true;
+	let homePath = home;
+	try {
+		homePath = canonicalPath(home);
+	} catch {
+		homePath = home;
+	}
+	return isWithinRoots(homePath, [canonical]);
+}
+
+/**
+ * 拒绝里的路径能否收成一个可授权目录。
+ * 已存在的目录，以及 mkdir 的目标（asDirectory）用路径自身。
+ * 文件或不存在的写文件目标用其父目录。没有路径、或散在不同目录时，不给目录授权。
+ */
+export function grantDirectoryForDenial(
+	paths: readonly string[],
+	asDirectory = false,
+): {
+	grantDirectory?: string;
+	refusedDirectory?: string;
+	split?: boolean;
+} {
+	const directories = new Set<string>();
+	for (const raw of paths) {
+		if (raw.trim().length === 0) continue;
+		directories.add(
+			narrowGrantDirectory(raw, asDirectory && paths.length === 1),
+		);
+	}
+	if (directories.size === 0) return {};
+	if (directories.size > 1) return { split: true };
+	const directory = [...directories][0];
+	if (directory === undefined) return {};
+	if (grantTooWide(directory)) return { refusedDirectory: directory };
+	return { grantDirectory: directory };
+}
+
+/** 目录路径授权目录自身；文件路径授权其父目录。asDirectory 用于尚不存在的 mkdir 目标。 */
+function narrowGrantDirectory(path: string, asDirectory: boolean): string {
+	const canonical = canonicalizeTarget(path);
+	if (asDirectory) return canonical;
+	try {
+		if (statSync(canonical).isDirectory()) return canonical;
+	} catch {
+		// 尚不存在：按文件的父目录。
+	}
+	return dirname(canonical);
 }
 
 /**
@@ -181,10 +287,25 @@ export interface FencePolicy {
  * 要求 canonicalizeTarget 后落在 writableRoots 内。违规抛 FenceDenialError。
  * 调用方（tools.ts）传入的是已对 cwd 解析的路径；此处 resolvePath 兜底相对路径。
  */
-export function assertWriteAllowed(absPath: string, policy: FencePolicy): void {
+export function assertWriteAllowed(
+	absPath: string,
+	policy: FencePolicy,
+	asDirectory = false,
+): void {
 	if (policy.mode === "danger-full-access") return;
-	const roots = writableRoots(policy.mode, policy.workspaceRoot, policy._tmpRoots);
+	const roots = writableRoots(
+		policy.mode,
+		policy.workspaceRoot,
+		policy._tmpRoots,
+		policy.extraRoots,
+	);
 	const target = canonicalizeTarget(absPath);
 	const caseSensitive = policy.caseSensitive ?? process.platform !== "win32";
-	if (!isWithinRoots(target, roots, caseSensitive)) throw new FenceDenialError(resolvePath(absPath), policy.mode);
+	if (!isWithinRoots(target, roots, caseSensitive))
+		throw new FenceDenialError(
+			resolvePath(absPath),
+			policy.mode,
+			policy.customRunner === true,
+			asDirectory,
+		);
 }

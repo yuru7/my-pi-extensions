@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import koffi from "koffi";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as abi from "../src/win32/abi.js";
-import { main } from "../src/win32/runner.js";
 import { RUNNER_FAILURE_EXIT, RUNNER_SIGNATURE } from "../src/win32/cli.js";
+import { main } from "../src/win32/runner.js";
 
 const PVOID = koffi.pointer("void");
 
@@ -36,26 +36,48 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 	const sidPointers = new Map<string, bigint>();
 	// makeWellKnownSid 返回的是它自己 allocBytes 的缓冲区；stub 收到的第 3 个实参就是该指针。
 	const wellKnownPointers = new Map<number, bigint>();
-	const rec = (name: string, result: unknown) => (...args: unknown[]) => {
-		calls.push({ name, args });
-		return typeof result === "function" ? (result as (...a: unknown[]) => unknown)(...args) : (result as never);
-	};
+	const rec =
+		(name: string, result: unknown) =>
+		(...args: unknown[]) => {
+			calls.push({ name, args });
+			return typeof result === "function"
+				? (result as (...a: unknown[]) => unknown)(...args)
+				: (result as never);
+		};
 	const api = {
 		calls,
 		getLastError: () => 0,
 		formatMessage: () => "",
 		openProcess: rec("openProcess", 0x1n),
 		closeHandle: rec("closeHandle", 1),
-		openProcessToken: (process: unknown, access: number, slot: unknown) => { koffi.encode(slot as never, PVOID, 0x2n); return 1 },
-		getTokenInformation: (token: unknown, cls: number, info: Buffer | null, length: number, needed: Buffer) => {
+		openProcessToken: (process: unknown, access: number, slot: unknown) => {
+			koffi.encode(slot as never, PVOID, 0x2n);
+			return 1;
+		},
+		getTokenInformation: (
+			token: unknown,
+			cls: number,
+			info: Buffer | null,
+			length: number,
+			needed: Buffer,
+		) => {
 			if (cls === abi.TokenGroups) {
-				if (info === null) { koffi.encode(needed as never, "uint32", 32); return 0 }
+				if (info === null) {
+					koffi.encode(needed as never, "uint32", 32);
+					return 0;
+				}
 				info.writeUInt32LE(1, 0);
 				info.writeBigUInt64LE(0x30n, abi.TOKEN_GROUPS_OFFSET);
-				info.writeUInt32LE(abi.SE_GROUP_LOGON_ID >>> 0, abi.TOKEN_GROUPS_OFFSET + 8);
+				info.writeUInt32LE(
+					abi.SE_GROUP_LOGON_ID >>> 0,
+					abi.TOKEN_GROUPS_OFFSET + 8,
+				);
 				return 1;
 			}
-			if (info === null) { koffi.encode(needed as never, "uint32", 16); return 0 }
+			if (info === null) {
+				koffi.encode(needed as never, "uint32", 16);
+				return 0;
+			}
 			// TokenDefaultDacl 必须给一条非 NULL 的现 DACL，否则 §4.6 的补丁拒绝继续；
 			// TokenIntegrityLevel 的载荷只被 stub 的 SetTokenInformation 消费，写 0 即可。
 			info.writeBigUInt64LE(cls === abi.TokenDefaultDacl ? 0x9000n : 0n, 0);
@@ -63,22 +85,34 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 		},
 		getLengthSid: rec("getLengthSid", 12),
 		copySid: rec("copySid", 1),
-		convertStringSidToSidW: rec("convertStringSidToSidW", (sid: string, slot: unknown) => {
-			const existing = sidPointers.get(sid);
-			const pointer = existing === undefined ? 0x10000n + BigInt(sidPointers.size) : existing;
-			sidPointers.set(sid, pointer);
-			koffi.encode(slot as never, PVOID, pointer);
-			return 1;
-		}),
-		createWellKnownSid: rec("createWellKnownSid", (type: number, _reserved: unknown, sid: unknown) => {
-			wellKnownPointers.set(type, sid as bigint);
-			return 1;
-		}),
+		convertStringSidToSidW: rec(
+			"convertStringSidToSidW",
+			(sid: string, slot: unknown) => {
+				const existing = sidPointers.get(sid);
+				const pointer =
+					existing === undefined
+						? 0x10000n + BigInt(sidPointers.size)
+						: existing;
+				sidPointers.set(sid, pointer);
+				koffi.encode(slot as never, PVOID, pointer);
+				return 1;
+			},
+		),
+		createWellKnownSid: rec(
+			"createWellKnownSid",
+			(type: number, _reserved: unknown, sid: unknown) => {
+				wellKnownPointers.set(type, sid as bigint);
+				return 1;
+			},
+		),
 		isValidSid: rec("isValidSid", 1),
-		createRestrictedToken: rec("createRestrictedToken", (...args: unknown[]) => {
-			koffi.encode(args[8] as never, PVOID, 0x5000n); // 出参槽必须写成非 NULL 令牌
-			return 1;
-		}),
+		createRestrictedToken: rec(
+			"createRestrictedToken",
+			(...args: unknown[]) => {
+				koffi.encode(args[8] as never, PVOID, 0x5000n); // 出参槽必须写成非 NULL 令牌
+				return 1;
+			},
+		),
 		setTokenInformation: rec("setTokenInformation", 1),
 		localAlloc: rec("localAlloc", Buffer.alloc(256)),
 		localFree: rec("localFree", null),
@@ -90,7 +124,11 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 		addMandatoryAce: rec("addMandatoryAce", 1),
 		getNamedSecurityInfoW: rec("getNamedSecurityInfoW", 0),
 		setNamedSecurityInfoW: rec("setNamedSecurityInfoW", 0),
-		getTempPathW: (length: number, buffer: Buffer) => { const p = `${root}${sep}`; buffer.write(p, 0, "utf16le"); return p.length },
+		getTempPathW: (length: number, buffer: Buffer) => {
+			const p = `${root}${sep}`;
+			buffer.write(p, 0, "utf16le");
+			return p.length;
+		},
 		createFileW: rec("createFileW", 0x6000n),
 		lockFileEx: rec("lockFileEx", 1),
 		unlockFileEx: rec("unlockFileEx", 1),
@@ -100,11 +138,23 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 		calls.push({ name: "spawn", args: [token, options] });
 		return { pid: 4242, process: 0x7000n, job: 0x7100n };
 	};
-	return { calls, api, sidPointers, spawn, wait: (process: unknown) => { calls.push({ name: "wait", args: [process] }); return 99 }, wellKnownPointers, ...overrides };
+	return {
+		calls,
+		api,
+		sidPointers,
+		spawn,
+		wait: (process: unknown) => {
+			calls.push({ name: "wait", args: [process] });
+			return 99;
+		},
+		wellKnownPointers,
+		...overrides,
+	};
 }
 
 /** EXPLICIT_ACCESS_W 里 Trustee.ptstrName（SID 指针）的字节偏移。 */
-const TRUSTEE_NAME_OFFSET = abi.TRUSTEE_W_OFFSET + abi.TRUSTEE_W_PTSTRNAME_OFFSET;
+const TRUSTEE_NAME_OFFSET =
+	abi.TRUSTEE_W_OFFSET + abi.TRUSTEE_W_PTSTRNAME_OFFSET;
 
 /** 读出一条合并条目里 trustee 命名的 SID 指针。 */
 function mergedTrusteePointer(entries: Buffer) {
@@ -116,28 +166,42 @@ function mergedTrusteePointer(entries: Buffer) {
  * 授权路径的两次合并都带 2 条 ACE（环境删除 Deny + 能力 Grant）。
  */
 function defaultDaclTrustee(calls: Array<{ name: string; args: unknown[] }>) {
-	const patches = calls.filter((call) => call.name === "setEntriesInAclW" && call.args[0] === 1);
-	if (patches.length !== 1) throw new Error(`expected exactly one token default-DACL patch, got ${patches.length}`);
+	const patches = calls.filter(
+		(call) => call.name === "setEntriesInAclW" && call.args[0] === 1,
+	);
+	if (patches.length !== 1)
+		throw new Error(
+			`expected exactly one token default-DACL patch, got ${patches.length}`,
+		);
 	return mergedTrusteePointer(patches[0].args[1] as Buffer);
 }
 
-function args(mode: string, command = ["pwsh.exe", "-NoProfile", "-Command", "echo hi"]) {
+function args(
+	mode: string,
+	command = ["pwsh.exe", "-NoProfile", "-Command", "echo hi"],
+) {
 	return ["--workspace", WS, "--temp", TMP, "--mode", mode, "--", ...command];
 }
 
 describe("windows-acl runner main", () => {
 	it("mirrors the confined child's exit code", async () => {
 		const deps = makeDeps();
-		await expect(main(args("workspace-write"), deps as never)).resolves.toBe(99);
+		await expect(main(args("workspace-write"), deps as never)).resolves.toBe(
+			99,
+		);
 		expect(deps.calls.map((c) => c.name)).toContain("wait");
 	});
 
 	it("grants both roots and derives both SIDs in workspace-write", async () => {
 		const deps = makeDeps();
 		await main(args("workspace-write"), deps as never);
-		const granted = deps.calls.filter((c) => c.name === "setNamedSecurityInfoW");
+		const granted = deps.calls.filter(
+			(c) => c.name === "setNamedSecurityInfoW",
+		);
 		expect(granted.length).toBeGreaterThanOrEqual(2); // workspace + %TEMP%
-		const sids = deps.calls.filter((c) => c.name === "convertStringSidToSidW").map((c) => String(c.args[0]));
+		const sids = deps.calls
+			.filter((c) => c.name === "convertStringSidToSidW")
+			.map((c) => String(c.args[0]));
 		// Step 3 要求 #6：两条 SID 都必须派生。toHaveLength(2) 正是「只派生一条、
 		// 两条根共用同一身份」的检出点：旧断言对单条 SID 真空成立。
 		expect(sids).toHaveLength(2);
@@ -153,7 +217,9 @@ describe("windows-acl runner main", () => {
 	it("names the temp SID in the token's default DACL under workspace-write", async () => {
 		const deps = makeDeps();
 		await main(args("workspace-write"), deps as never);
-		const sids = deps.calls.filter((c) => c.name === "convertStringSidToSidW").map((c) => String(c.args[0]));
+		const sids = deps.calls
+			.filter((c) => c.name === "convertStringSidToSidW")
+			.map((c) => String(c.args[0]));
 		const tempSid = sids.find((sid) => sid.split("-").length === 6);
 		const workspaceSid = sids.find((sid) => sid.split("-").length === 5);
 		if (tempSid === undefined || workspaceSid === undefined) {
@@ -164,6 +230,35 @@ describe("windows-acl runner main", () => {
 		const trustee = defaultDaclTrustee(deps.calls);
 		expect(trustee).toBe(deps.sidPointers.get(tempSid));
 		expect(trustee).not.toBe(deps.sidPointers.get(workspaceSid));
+	});
+
+	it("grants only the extra directory under read-only", async () => {
+		const extra = mkdtempSync(join(root, "extra-"));
+		const deps = makeDeps();
+		await main(
+			[
+				"--workspace",
+				WS,
+				"--temp",
+				TMP,
+				"--mode",
+				"read-only",
+				"--extra",
+				extra,
+				"--",
+				"pwsh.exe",
+			],
+			deps as never,
+		);
+		const grantedPaths = deps.calls
+			.filter((call) => call.name === "setNamedSecurityInfoW")
+			.map((call) => call.args[0]);
+		expect(grantedPaths).toContain(extra);
+		expect(grantedPaths).not.toContain(WS);
+		const sids = deps.calls
+			.filter((call) => call.name === "convertStringSidToSidW")
+			.map((call) => String(call.args[0]));
+		expect(sids).toEqual([expect.stringMatching(/-2$/)]);
 	});
 
 	it("names the well-known Everyone SID in the token's default DACL under read-only", async () => {
@@ -178,27 +273,45 @@ describe("windows-acl runner main", () => {
 	it("fails closed without spawning when a root grant cannot be applied", async () => {
 		const deps = makeDeps();
 		deps.api.setNamedSecurityInfoW = () => 5; // ERROR_ACCESS_DENIED：授权失败必须冒泡
-		await expect(main(args("workspace-write"), deps as never)).rejects.toThrowError(/SetNamedSecurityInfoW/);
+		await expect(
+			main(args("workspace-write"), deps as never),
+		).rejects.toThrowError(/SetNamedSecurityInfoW/);
 		// 授权失败绝不降级成「零授权照样跑」：spawn/wait 一次都不能发生。
-		expect(deps.calls.filter((c) => c.name === "spawn" || c.name === "wait")).toEqual([]);
+		expect(
+			deps.calls.filter((c) => c.name === "spawn" || c.name === "wait"),
+		).toEqual([]);
 	});
 
 	it("grants nothing in read-only mode", async () => {
 		const deps = makeDeps();
 		await main(args("read-only"), deps as never);
-		expect(deps.calls.some((c) => c.name === "setNamedSecurityInfoW")).toBe(false);
+		expect(deps.calls.some((c) => c.name === "setNamedSecurityInfoW")).toBe(
+			false,
+		);
 		// 授权路径零调用：没有路径锁、没有能力 SID 解析、没有标签/ACL 读取构造。唯一一次
 		// SetEntriesInAclW 是 §4.6 的令牌默认 DACL 补丁（SID 回退到 Everyone），不是授权根的 DACL 合并。
-		for (const grantCall of ["createFileW", "getNamedSecurityInfoW", "initializeAcl", "addMandatoryAce"]) {
+		for (const grantCall of [
+			"createFileW",
+			"getNamedSecurityInfoW",
+			"initializeAcl",
+			"addMandatoryAce",
+		]) {
 			expect(deps.calls.some((c) => c.name === grantCall)).toBe(false);
 		}
-		expect(deps.calls.some((c) => c.name === "convertStringSidToSidW")).toBe(false);
-		expect(deps.calls.filter((c) => c.name === "setEntriesInAclW").length).toBe(1);
+		expect(deps.calls.some((c) => c.name === "convertStringSidToSidW")).toBe(
+			false,
+		);
+		expect(deps.calls.filter((c) => c.name === "setEntriesInAclW").length).toBe(
+			1,
+		);
 	});
 
 	it("passes the caller's argv verbatim to the spawner", async () => {
 		const deps = makeDeps();
-		await main(args("workspace-write", ["pwsh.exe", "-Command", "echo --temp C:\\x"]), deps as never);
+		await main(
+			args("workspace-write", ["pwsh.exe", "-Command", "echo --temp C:\\x"]),
+			deps as never,
+		);
 		const spawned = deps.calls.find((c) => c.name === "spawn");
 		const options = spawned?.args[1] as { command: string; args: string[] };
 		expect(options.command).toBe("pwsh.exe");
@@ -222,44 +335,103 @@ describe("windows-acl runner main", () => {
 		const names = deps.calls.map((c) => c.name);
 		// 先钉存在性：setConsoleCtrlHandler 缺失时 indexOf 为 -1，顺序比较会恒真。
 		expect(names).toContain("setConsoleCtrlHandler");
-		expect(names.indexOf("setConsoleCtrlHandler")).toBeLessThan(names.indexOf("spawn"));
+		expect(names.indexOf("setConsoleCtrlHandler")).toBeLessThan(
+			names.indexOf("spawn"),
+		);
 	});
 
 	it("fails closed with the signature line and exit 127 on a Win32 error", async () => {
-		const deps = makeDeps({ api: { ...makeDeps().api, createRestrictedToken: () => { throw new Error("Win32 CreateRestrictedToken failed (1314): A required privilege is not held by the client.") } } });
-		await expect(main(args("workspace-write"), deps as never)).rejects.toThrowError(/CreateRestrictedToken/);
+		const deps = makeDeps({
+			api: {
+				...makeDeps().api,
+				createRestrictedToken: () => {
+					throw new Error(
+						"Win32 CreateRestrictedToken failed (1314): A required privilege is not held by the client.",
+					);
+				},
+			},
+		});
+		await expect(
+			main(args("workspace-write"), deps as never),
+		).rejects.toThrowError(/CreateRestrictedToken/);
 	});
 
 	it("rejects a temp root nested inside the workspace before any Win32 call", async () => {
 		const deps = makeDeps();
 		const nestedTemp = join(WS, "tmp");
 		mkdirSync(nestedTemp);
-		await expect(main(["--workspace", WS, "--temp", nestedTemp, "--mode", "workspace-write", "--", "pwsh.exe"], deps as never))
-			.rejects.toThrowError(/temp root must not be inside the workspace/i);
+		await expect(
+			main(
+				[
+					"--workspace",
+					WS,
+					"--temp",
+					nestedTemp,
+					"--mode",
+					"workspace-write",
+					"--",
+					"pwsh.exe",
+				],
+				deps as never,
+			),
+		).rejects.toThrowError(/temp root must not be inside the workspace/i);
 		expect(deps.calls.some((c) => c.name === "openProcess")).toBe(false);
 		expect(deps.calls).toEqual([]); // 任何 Win32 调用都还没发生
 	});
 
 	it("prints exactly one signature line and exits 127 as the entry point", () => {
-		const runner = fileURLToPath(new URL("../src/win32/runner.js", import.meta.url));
+		const runner = fileURLToPath(
+			new URL("../src/win32/runner.js", import.meta.url),
+		);
 		const missing = join(root, "missing-workspace");
-		const result = spawnSync(process.execPath, [runner, "--workspace", missing, "--temp", TMP, "--mode", "read-only", "--", "echo"], { encoding: "utf8" });
-		expect(result.status).toBe(RUNNER_FAILURE_EXIT);
-		expect(result.stderr).toBe(`${RUNNER_SIGNATURE}: --workspace is not an existing directory: ${missing}\n`);
-	});
-
-	it.skipIf(process.platform === "win32")("runs main through a symlinked entry point (realpath guard)", () => {
-		const runner = fileURLToPath(new URL("../src/win32/runner.js", import.meta.url));
-		const symlink = join(root, "runner-symlink.js");
-		symlinkSync(runner, symlink);
 		const result = spawnSync(
 			process.execPath,
-			[symlink, "--workspace", WS, "--temp", TMP, "--mode", "read-only", "--", "pwsh"],
+			[
+				runner,
+				"--workspace",
+				missing,
+				"--temp",
+				TMP,
+				"--mode",
+				"read-only",
+				"--",
+				"echo",
+			],
 			{ encoding: "utf8" },
 		);
-		// 符号链接入口下 main 也必须跑起来：Linux/macOS 上 win32() 抛错 → 签名行 + 127。
-		// 旧的 URL 字面比较在这里判 false，进程会静默 exit 0（TS 分类器视为成功）。
 		expect(result.status).toBe(RUNNER_FAILURE_EXIT);
-		expect(result.stderr).toContain(`${RUNNER_SIGNATURE}: `);
+		expect(result.stderr).toBe(
+			`${RUNNER_SIGNATURE}: --workspace is not an existing directory: ${missing}\n`,
+		);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"runs main through a symlinked entry point (realpath guard)",
+		() => {
+			const runner = fileURLToPath(
+				new URL("../src/win32/runner.js", import.meta.url),
+			);
+			const symlink = join(root, "runner-symlink.js");
+			symlinkSync(runner, symlink);
+			const result = spawnSync(
+				process.execPath,
+				[
+					symlink,
+					"--workspace",
+					WS,
+					"--temp",
+					TMP,
+					"--mode",
+					"read-only",
+					"--",
+					"pwsh",
+				],
+				{ encoding: "utf8" },
+			);
+			// 符号链接入口下 main 也必须跑起来：Linux/macOS 上 win32() 抛错 → 签名行 + 127。
+			// 旧的 URL 字面比较在这里判 false，进程会静默 exit 0（TS 分类器视为成功）。
+			expect(result.status).toBe(RUNNER_FAILURE_EXIT);
+			expect(result.stderr).toContain(`${RUNNER_SIGNATURE}: `);
+		},
+	);
 });

@@ -1,5 +1,13 @@
-import { access as fsAccess, constants, mkdir as fsMkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
-import { Type, type TSchema } from "typebox";
+import {
+	constants,
+	access as fsAccess,
+	mkdir as fsMkdir,
+	readFile as fsReadFile,
+	writeFile as fsWriteFile,
+} from "node:fs/promises";
+// 命名空间导入只用于版本门控探测（createPowerShellToolDefinition 是 pi ≥1.0.0 才有的导出）：
+// pi 是 ESM，静态具名导入一个老宿主不存在的导出会在**链接期**硬失败，属性读取最坏只是 undefined。
+import * as piHost from "@earendil-works/pi-coding-agent";
 import {
 	type AgentToolResult,
 	type BashOperations,
@@ -11,31 +19,68 @@ import {
 	type ToolDefinition,
 	type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
-// 命名空间导入只用于版本门控探测（createPowerShellToolDefinition 是 pi ≥1.0.0 才有的导出）：
-// pi 是 ESM，静态具名导入一个老宿主不存在的导出会在**链接期**硬失败，属性读取最坏只是 undefined。
-import * as piHost from "@earendil-works/pi-coding-agent";
+import { type TSchema, Type } from "typebox";
+import {
+	formatAutoReviewNotice,
+	type ReviewerModelRef,
+	type ReviewerResponse,
+	readRecentDialogue,
+	reviewDirectoryGrant,
+	reviewEscalation,
+} from "./auto-review";
 import { createSandboxBashOps, type SpawnFn } from "./bash-ops";
-import { formatAutoReviewNotice, readRecentDialogue, reviewEscalation, type ReviewerModelRef, type ReviewerResponse } from "./auto-review";
-import { getSandboxConfig, readProjectTrusted, selectApprovalSettings, type SandboxConfig } from "./config";
-import { getDenialLedger, operationFingerprint, type DenialRecord } from "./denial-ledger";
+import {
+	getSandboxConfig,
+	readProjectTrusted,
+	type SandboxConfig,
+	selectApprovalSettings,
+} from "./config";
+import {
+	type DenialRecord,
+	getDenialLedger,
+	operationFingerprint,
+} from "./denial-ledger";
 import {
 	approveEscalation,
+	DENIAL_REASON_PROMPT,
 	type DenialReasonPrompt,
-	escalationAppliedMarker,
-	escalationIgnoredMarker,
+	ESCALATION_OPTIONS,
 	type EscalationDecision,
 	type EscalationUI,
+	escalationAppliedMarker,
+	escalationIgnoredMarker,
 	isStrictlyWider,
 	normalizeEscalationValue,
+	sanitizeDenialReason,
 	stripEscalationPlaceholders,
 	validateEscalationArgs,
 } from "./escalation";
 import { getEscalationBroker } from "./escalation-broker";
-import { assertWriteAllowed, FenceDenialError, type FencePolicy } from "./fence";
+import {
+	assertWriteAllowed,
+	canonicalizeTarget,
+	FenceDenialError,
+	type FencePolicy,
+	isWithinRoots,
+} from "./fence";
+import {
+	assertCanCreateDirectory,
+	createMissingGrantDirectories,
+	grantCoversDenial,
+	grantTooWide,
+	resolveGrantRequest,
+} from "./grant-path";
 import type { PermissionState } from "./permission";
-import { canonicalPath, resolveEffectiveMode, writableRoots, type SandboxMode } from "./policy";
+import {
+	canonicalPath,
+	defaultTmpRoots,
+	resolveEffectiveMode,
+	type SandboxMode,
+	writableRoots,
+} from "./policy";
 import { createSandboxPowerShellOps } from "./powershell-ops";
-import { selectRunner, type RunnerHooks } from "./runners";
+import { type RunnerHooks, selectRunner } from "./runners";
+import { getWritableGrants } from "./writable-grants";
 
 /**
  * 宿主 pwsh 工具工厂的结构类型（pi ≥1.0.0 导出 `createPowerShellToolDefinition(cwd, options)`）。
@@ -53,9 +98,14 @@ type HostCreatePowerShellToolDefinition = (
  * 老宿主（<1.0.0，含本仓 devDependency 0.80.2）上是 undefined——那时 pi 本来就没有 powershell
  * 工具，缺省即“不注册、不报错、不阻断”。
  */
-function hostCreatePowerShellToolDefinition(): HostCreatePowerShellToolDefinition | undefined {
-	const candidate = (piHost as unknown as Record<string, unknown>).createPowerShellToolDefinition;
-	return typeof candidate === "function" ? (candidate as HostCreatePowerShellToolDefinition) : undefined;
+function hostCreatePowerShellToolDefinition():
+	| HostCreatePowerShellToolDefinition
+	| undefined {
+	const candidate = (piHost as unknown as Record<string, unknown>)
+		.createPowerShellToolDefinition;
+	return typeof candidate === "function"
+		? (candidate as HostCreatePowerShellToolDefinition)
+		: undefined;
 }
 
 /**
@@ -114,7 +164,10 @@ function workspaceRootFor(rawCwd: string): string {
 }
 
 /** 逐调用配置（C2）：测试注入优先，否则按会话 cwd 惰性加载（getSandboxConfig 自带缓存）。 */
-function configForCall(deps: SandboxToolDeps, sessionCwd: string): SandboxConfig {
+function configForCall(
+	deps: SandboxToolDeps,
+	sessionCwd: string,
+): SandboxConfig {
 	return deps.getConfig?.() ?? getSandboxConfig(sessionCwd);
 }
 
@@ -129,7 +182,11 @@ function configForCall(deps: SandboxToolDeps, sessionCwd: string): SandboxConfig
  *  宿主链路的可复现验证配方与实测记录见 docs/superpowers/specs/2026-10-02-denial-first-escalation-design.md §4.3。 */
 export const ESCALATION_PROPS = {
 	sandbox_permissions: Type.Optional(
-		Type.Union([Type.Literal("workspace-write"), Type.Literal("danger-full-access"), Type.Null()]),
+		Type.Union([
+			Type.Literal("workspace-write"),
+			Type.Literal("danger-full-access"),
+			Type.Null(),
+		]),
 	),
 	justification: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 };
@@ -144,9 +201,17 @@ interface ToolCtxLike {
 	hasUI: boolean;
 	cwd?: string;
 	ui: {
-		select(title: string, options: string[], opts?: { signal?: AbortSignal }): Promise<string | undefined>;
+		select(
+			title: string,
+			options: string[],
+			opts?: { signal?: AbortSignal },
+		): Promise<string | undefined>;
 		/** 可选：Deny 后的理由输入（两步式第二步）。缺失时仅跳过一次理由追问。 */
-		input?(title: string, placeholder?: string, opts?: { signal?: AbortSignal }): Promise<string | undefined>;
+		input?(
+			title: string,
+			placeholder?: string,
+			opts?: { signal?: AbortSignal },
+		): Promise<string | undefined>;
 		notify?(message: string, type?: "info" | "warning" | "error"): void;
 	};
 	model?: ReviewerModelRef;
@@ -154,7 +219,14 @@ interface ToolCtxLike {
 	modelRegistry?: {
 		find(provider: string, modelId: string): ReviewerModelRef | undefined;
 		hasConfiguredAuth?(model: ReviewerModelRef): boolean;
-		complete?(model: ReviewerModelRef, context: { systemPrompt?: string; messages: { role: "user"; content: string; timestamp: number }[] }, options?: { reasoning?: string; signal?: AbortSignal }): Promise<{
+		complete?(
+			model: ReviewerModelRef,
+			context: {
+				systemPrompt?: string;
+				messages: { role: "user"; content: string; timestamp: number }[];
+			},
+			options?: { reasoning?: string; signal?: AbortSignal },
+		): Promise<{
 			content?: { type?: string; text?: string }[];
 			stopReason?: string;
 			errorMessage?: string;
@@ -174,7 +246,9 @@ interface ToolCtxLike {
 function readSessionId(ctx: ToolCtxLike): string | null {
 	try {
 		const sessionId = ctx.sessionManager?.getSessionId();
-		return typeof sessionId === "string" && sessionId.trim().length > 0 ? sessionId.trim() : null;
+		return typeof sessionId === "string" && sessionId.trim().length > 0
+			? sessionId.trim()
+			: null;
 	} catch {
 		return null;
 	}
@@ -200,16 +274,32 @@ function dialogueFor(ctx: ToolCtxLike) {
  * FIFO 任务内完成，理由输入不会被排队中的下一个审批弹窗顶掉。signal 两条路径都透传（D6）：
  * 中断既能关掉在飞的弹窗，也能让排队中的请求根本不弹。
  */
-function approvalChannelFor(ctx: ToolCtxLike, signal: AbortSignal | undefined): EscalationUI {
+function approvalChannelFor(
+	ctx: ToolCtxLike,
+	signal: AbortSignal | undefined,
+): EscalationUI {
 	const opts = signal === undefined ? undefined : { signal };
 	const broker = getEscalationBroker();
 	const sessionId = readSessionId(ctx);
 	// 直连通道的两步式：select →（Deny 时）input，在同一条异步链上串行 await，天然原子。
-	const directAsk = async (title: string, options: string[], denialReason?: DenialReasonPrompt): Promise<EscalationDecision> => {
+	const directAsk = async (
+		title: string,
+		options: string[],
+		denialReason?: DenialReasonPrompt,
+	): Promise<EscalationDecision> => {
 		const choice = await ctx.ui.select(title, options, opts);
-		if (choice !== "Deny" || denialReason === undefined || typeof ctx.ui.input !== "function") return { choice };
+		if (
+			choice !== "Deny" ||
+			denialReason === undefined ||
+			typeof ctx.ui.input !== "function"
+		)
+			return { choice };
 		try {
-			const reason = await ctx.ui.input(denialReason.title, denialReason.placeholder, opts);
+			const reason = await ctx.ui.input(
+				denialReason.title,
+				denialReason.placeholder,
+				opts,
+			);
 			return { choice, reason };
 		} catch {
 			return { choice }; // 理由输入异常不影响拒绝语义（fail-closed）
@@ -220,13 +310,21 @@ function approvalChannelFor(ctx: ToolCtxLike, signal: AbortSignal | undefined): 
 		if (own === null) {
 			return { hasUI: true, ask: directAsk };
 		}
-		return { hasUI: true, ask: (title, options, denialReason) => broker.request(own, title, options, signal, denialReason) };
+		return {
+			hasUI: true,
+			ask: (title, options, denialReason) =>
+				broker.request(own, title, options, signal, denialReason),
+		};
 	}
 	const channel = sessionId === null ? null : broker.resolveChannel(sessionId);
 	if (channel === null) {
 		return { hasUI: false, ask: async () => ({ choice: undefined }) };
 	}
-	return { hasUI: true, ask: (title, options, denialReason) => broker.request(channel, title, options, signal, denialReason) };
+	return {
+		hasUI: true,
+		ask: (title, options, denialReason) =>
+			broker.request(channel, title, options, signal, denialReason),
+	};
 }
 
 /**
@@ -257,22 +355,31 @@ export async function resolveCall(
 	validateEscalationArgs(requested, justification);
 	const config = configForCall(deps, ctx.cwd ?? deps.cwd);
 	const effective = resolveEffectiveMode(deps.permission.override, config.mode);
-	if (requested === undefined) return { mode: effective, escalated: false, ignoredEscalation: false };
+	if (requested === undefined)
+		return { mode: effective, escalated: false, ignoredEscalation: false };
 	// denial-first 硬门禁：严格更宽的请求必须命中本会话、同一工具、同一操作的未消费拒绝。
 	// 同档请求与非法请求不进门禁：前者免审批，后者由 approveEscalation 报既有 "not strictly wider"。
 	let denial: DenialRecord | undefined;
 	if (isStrictlyWider(effective, requested)) {
 		const sessionId = readSessionId(ctx);
 		const cwd = ctx.cwd ?? deps.cwd;
-		denial = sessionId === null ? undefined : getDenialLedger().consume({
-			sessionId,
-			tool,
-			fingerprint: operationFingerprint(params as Record<string, unknown>),
-			cwd,
-		});
-		if (denial === undefined) return { mode: effective, escalated: false, ignoredEscalation: true };
+		denial =
+			sessionId === null
+				? undefined
+				: getDenialLedger().consume({
+						sessionId,
+						tool,
+						fingerprint: operationFingerprint(
+							params as Record<string, unknown>,
+						),
+						cwd,
+					});
+		if (denial === undefined)
+			return { mode: effective, escalated: false, ignoredEscalation: true };
 		if (signal?.aborted) {
-			throw new Error(`approval for escalating to "${requested}" was cancelled — nothing was executed`);
+			throw new Error(
+				`approval for escalating to "${requested}" was cancelled — nothing was executed`,
+			);
 		}
 		const approval = selectApprovalSettings(config, readProjectTrusted(ctx));
 		if (approval.approvalInvalid) {
@@ -281,7 +388,11 @@ export async function resolveCall(
 			);
 		}
 		if (approval.approvalMode === "allow-all") {
-			return { mode: requested as SandboxMode, escalated: true, ignoredEscalation: false };
+			return {
+				mode: requested as SandboxMode,
+				escalated: true,
+				ignoredEscalation: false,
+			};
 		}
 		if (approval.approvalMode === "auto-review") {
 			const outcome = await reviewEscalation({
@@ -289,9 +400,10 @@ export async function resolveCall(
 				activeModel: ctx.model,
 				activeThinkingLevel: ctx.thinkingLevel,
 				findModel: (provider, id) => ctx.modelRegistry?.find(provider, id),
-				hasAuth: ctx.modelRegistry?.hasConfiguredAuth === undefined
-					? undefined
-					: (model) => ctx.modelRegistry?.hasConfiguredAuth?.(model) ?? false,
+				hasAuth:
+					ctx.modelRegistry?.hasConfiguredAuth === undefined
+						? undefined
+						: (model) => ctx.modelRegistry?.hasConfiguredAuth?.(model) ?? false,
 				complete: (model, request) => completeReview(ctx, model, request),
 				warn: (message) => emitNotice(ctx, message, "warning"),
 				signal,
@@ -300,12 +412,22 @@ export async function resolveCall(
 				justification: justification as string,
 				dialogue: dialogueFor(ctx),
 			});
-			emitNotice(ctx, formatAutoReviewNotice(outcome), outcome.decision === "ALLOW" ? "info" : "warning");
+			emitNotice(
+				ctx,
+				formatAutoReviewNotice(outcome),
+				outcome.decision === "ALLOW" ? "info" : "warning",
+			);
 			if (outcome.decision === "ALLOW") {
-				return { mode: requested as SandboxMode, escalated: true, ignoredEscalation: false };
+				return {
+					mode: requested as SandboxMode,
+					escalated: true,
+					ignoredEscalation: false,
+				};
 			}
 			// denialReason は画面通知だけ。ツールエラーに入れるとエージェントが読んでしまう。
-			throw new Error(autoReviewDeniedMessage(subject, requested, outcome.cause));
+			throw new Error(
+				autoReviewDeniedMessage(subject, requested, outcome.cause),
+			);
 		}
 	}
 	const mode = await approveEscalation(
@@ -321,7 +443,11 @@ export async function resolveCall(
 	return { mode, escalated: mode !== effective, ignoredEscalation: false };
 }
 
-function autoReviewDeniedMessage(subject: "command" | "operation", requested: string, cause: string): string {
+function autoReviewDeniedMessage(
+	subject: "command" | "operation",
+	requested: string,
+	cause: string,
+): string {
 	if (cause === "deny") {
 		return `the auto-reviewer rejected escalating this ${subject} to "${requested}"; it stays denied, so stop and explain instead of working around it — do not retry with a different mode or a rewritten command`;
 	}
@@ -331,7 +457,11 @@ function autoReviewDeniedMessage(subject: "command" | "operation", requested: st
 	return `auto-review denied escalating this ${subject} to "${requested}" (${cause}) — nothing was executed. Stop and explain instead of working around it.`;
 }
 
-function emitNotice(ctx: ToolCtxLike, message: string, level: "info" | "warning"): void {
+function emitNotice(
+	ctx: ToolCtxLike,
+	message: string,
+	level: "info" | "warning",
+): void {
 	let notified = false;
 	if (ctx.hasUI && typeof ctx.ui.notify === "function") {
 		try {
@@ -353,24 +483,41 @@ function emitNotice(ctx: ToolCtxLike, message: string, level: "info" | "warning"
 async function completeReview(
 	ctx: ToolCtxLike,
 	model: ReviewerModelRef,
-	request: { systemPrompt: string; userText: string; thinkingLevel: string; signal: AbortSignal },
+	request: {
+		systemPrompt: string;
+		userText: string;
+		thinkingLevel: string;
+		signal: AbortSignal;
+	},
 ): Promise<ReviewerResponse> {
 	// メソッドを取り出して呼ぶと this が外れ、ModelRegistry.complete は即 TypeError になる。
 	const registry = ctx.modelRegistry;
 	if (registry === undefined || typeof registry.complete !== "function") {
 		throw new Error("reviewer runtime is unavailable");
 	}
-	const message = await registry.complete(model, {
-		systemPrompt: request.systemPrompt,
-		messages: [{ role: "user", content: request.userText, timestamp: Date.now() }],
-	}, {
-		reasoning: request.thinkingLevel === "off" ? undefined : request.thinkingLevel,
-		signal: request.signal,
-	});
+	const message = await registry.complete(
+		model,
+		{
+			systemPrompt: request.systemPrompt,
+			messages: [
+				{ role: "user", content: request.userText, timestamp: Date.now() },
+			],
+		},
+		{
+			reasoning:
+				request.thinkingLevel === "off" ? undefined : request.thinkingLevel,
+			signal: request.signal,
+		},
+	);
 	const parts = message.content ?? [];
 	return {
-		text: parts.filter((part) => part.type === "text").map((part) => part.text ?? "").join(""),
-		hasNonTextContent: parts.some((part) => part.type !== "text" && part.type !== "thinking"),
+		text: parts
+			.filter((part) => part.type === "text")
+			.map((part) => part.text ?? "")
+			.join(""),
+		hasNonTextContent: parts.some(
+			(part) => part.type !== "text" && part.type !== "thinking",
+		),
 		stopReason: message.stopReason,
 		errorMessage: message.errorMessage,
 	};
@@ -386,13 +533,17 @@ export async function resolveCallMode(
 	signal?: AbortSignal,
 	tool?: string,
 ): Promise<SandboxMode> {
-	return (await resolveCall(params, ctx, deps, subject, summary, signal, tool)).mode;
+	return (await resolveCall(params, ctx, deps, subject, summary, signal, tool))
+		.mode;
 }
 
 /** Ruling 15：对象 spread 保留 base schema 的自有 options（如 editSchema 的 additionalProperties:false）。 */
 function extendParams(base: TSchema): TSchema {
 	const b = base as unknown as { properties: Record<string, unknown> };
-	return { ...base, properties: { ...b.properties, ...ESCALATION_PROPS } } as TSchema;
+	return {
+		...base,
+		properties: { ...b.properties, ...ESCALATION_PROPS },
+	} as TSchema;
 }
 
 /**
@@ -403,8 +554,11 @@ function extendParams(base: TSchema): TSchema {
  * 宿主契约（与 src/escalation.ts 的 stripEscalationPlaceholders 注释互为补充）：pi 的
  * `prepareToolCallArguments` 在 `validateToolArguments` 之前执行（0.80.2 与 1.0.0 均如此），剥离因此在校验前生效。
  */
-function withPlaceholderStripping<T>(base: ((args: unknown) => T) | undefined): (args: unknown) => T {
-	return (args: unknown): T => stripEscalationPlaceholders(base === undefined ? args : base(args)) as T;
+function withPlaceholderStripping<T>(
+	base: ((args: unknown) => T) | undefined,
+): (args: unknown) => T {
+	return (args: unknown): T =>
+		stripEscalationPlaceholders(base === undefined ? args : base(args)) as T;
 }
 
 /**
@@ -422,19 +576,138 @@ function escalationDescription(base: string): string {
 }
 
 /** 批准后追加一行按需反馈（其余字段原样保留）。 */
-function withEscalationNote<T>(result: AgentToolResult<T>, mode: SandboxMode): AgentToolResult<T> {
-	return { ...result, content: [...result.content, { type: "text", text: escalationAppliedMarker(mode) }] };
+function withEscalationNote<T>(
+	result: AgentToolResult<T>,
+	mode: SandboxMode,
+): AgentToolResult<T> {
+	return {
+		...result,
+		content: [
+			...result.content,
+			{ type: "text", text: escalationAppliedMarker(mode) },
+		],
+	};
 }
 
 /** denial-first 门禁忽略提权时追加的按需反馈（其余字段原样保留）。
  *  已知边界：只随成功结果下发——bash 非零退出会 throw（pi 的错误路径不经过 execute 的返回值），
  *  那种场景下模型仍能按随错误下发的 escalation hint 正确重试（真实拒绝已记账，重试会弹窗）。 */
-function withIgnoredEscalationNote<T>(result: AgentToolResult<T>, mode: SandboxMode): AgentToolResult<T> {
-	return { ...result, content: [...result.content, { type: "text", text: escalationIgnoredMarker(mode) }] };
+function withIgnoredEscalationNote<T>(
+	result: AgentToolResult<T>,
+	mode: SandboxMode,
+): AgentToolResult<T> {
+	return {
+		...result,
+		content: [
+			...result.content,
+			{ type: "text", text: escalationIgnoredMarker(mode) },
+		],
+	};
 }
 
+const DIRECTORY_GRANT_GUIDELINE =
+	"Call sandbox_grant_write alone only when later calls in this request will write the directory named in the denial hint again. Pass that directory, not a parent of it, with a one-sentence justification, then retry. One use of the directory is not enough. If the hint names no directory, do not call it.";
+
 const ESCALATION_GUIDELINE =
-	"When a sandbox denial marker appears, you may retry the exact same call once with sandbox_permissions (the narrowest wider mode that suffices) plus justification. Escalation is denial-first and one-shot: it must match that denied operation, and the configured approval mode (human, auto-review, or allow-all) decides it. Never send escalation fields before a denial — such requests are ignored and the call runs confined. If denied or unavailable, stop and explain instead of working around it.";
+	'When the denied call uses a directory only once, or the denial hint names no single directory, retry the exact same call once with sandbox_permissions "danger-full-access" and a justification. Escalation is denial-first and one-shot: it must match that denied operation, and the configured approval mode (human, auto-review, or allow-all) decides it. Never send escalation fields before a denial — such requests are ignored and the call runs confined. If denied or unavailable, stop and explain instead of working around it.';
+
+function sandboxGuidelines(base: readonly string[] | undefined): string[] {
+	return [...(base ?? []), DIRECTORY_GRANT_GUIDELINE, ESCALATION_GUIDELINE];
+}
+
+function textResult(text: string): AgentToolResult<undefined> {
+	return { content: [{ type: "text", text }], details: undefined };
+}
+
+function grantDeniedMessage(directory: string, cause: string): string {
+	if (cause === "deny") {
+		return `the auto-reviewer rejected the directory grant for "${directory}"; nothing was granted, so stop and explain instead of working around it — do not retry with a broader directory`;
+	}
+	if (cause === "aborted")
+		return "approval for the directory grant was cancelled — nothing was granted";
+	return `auto-review denied the directory grant for "${directory}" (${cause}) — nothing was granted. Stop and explain instead of working around it.`;
+}
+
+/** 与档位提权同一套审批模式（human / auto-review / allow-all）。配置坏了就拒绝，不降到 allow-all。 */
+async function approveDirectoryGrant(args: {
+	ctx: ToolCtxLike;
+	deps: SandboxToolDeps;
+	signal: AbortSignal | undefined;
+	directory: string;
+	justification: string;
+	mode: SandboxMode;
+	workspace: string;
+	backend: string;
+	writablePaths: readonly string[];
+	denials: readonly DenialRecord[];
+}): Promise<void> {
+	const approval = selectApprovalSettings(
+		configForCall(args.deps, args.ctx.cwd ?? args.deps.cwd),
+		readProjectTrusted(args.ctx),
+	);
+	if (approval.approvalInvalid) {
+		throw new Error(
+			"sandbox_grant_write was denied because the approval config is invalid — nothing was granted. Fix approvalMode / autoReview.model / autoReview.thinkingLevel in pi-sandbox.json.",
+		);
+	}
+	if (approval.approvalMode === "allow-all") return;
+	if (approval.approvalMode === "auto-review") {
+		const outcome = await reviewDirectoryGrant({
+			settings: approval,
+			activeModel: args.ctx.model,
+			activeThinkingLevel: args.ctx.thinkingLevel,
+			findModel: (provider, id) => args.ctx.modelRegistry?.find(provider, id),
+			hasAuth:
+				args.ctx.modelRegistry?.hasConfiguredAuth === undefined
+					? undefined
+					: (model) =>
+							args.ctx.modelRegistry?.hasConfiguredAuth?.(model) ?? false,
+			complete: (model, request) => completeReview(args.ctx, model, request),
+			warn: (message) => emitNotice(args.ctx, message, "warning"),
+			signal: args.signal,
+			dialogue: dialogueFor(args.ctx),
+			grant: {
+				backend: args.backend,
+				mode: args.mode,
+				workspace: args.workspace,
+				writablePaths: args.writablePaths,
+				directory: args.directory,
+				justification: args.justification,
+				denials: args.denials,
+			},
+		});
+		emitNotice(
+			args.ctx,
+			formatAutoReviewNotice(outcome),
+			outcome.decision === "ALLOW" ? "info" : "warning",
+		);
+		if (outcome.decision === "ALLOW") return;
+		throw new Error(grantDeniedMessage(args.directory, outcome.cause));
+	}
+	const decision = await approvalChannelFor(args.ctx, args.signal).ask(
+		[
+			"Sandbox directory grant: allow writes under this directory until this request ends?",
+			"",
+			`Directory: ${args.directory}`,
+			`Reason: ${args.justification}`,
+			"Every later tool call in this run can write this directory. The grant is cleared when this request ends or the next user message starts.",
+		].join("\n"),
+		[...ESCALATION_OPTIONS],
+		DENIAL_REASON_PROMPT,
+	);
+	if (decision.choice === undefined) {
+		throw new Error(
+			"approval for the directory grant was cancelled — nothing was granted",
+		);
+	}
+	if (decision.choice === "Deny") {
+		const reason = sanitizeDenialReason(decision.reason);
+		const suffix = reason === undefined ? "" : `. The user's reason: ${reason}`;
+		throw new Error(
+			`the user rejected the directory grant for "${args.directory}"; nothing was granted, so stop and explain instead of working around it — do not retry with a broader directory${suffix}`,
+		);
+	}
+}
 
 function stripEscalation(params: Record<string, unknown>) {
 	const { sandbox_permissions: _sp, justification: _just, ...rest } = params;
@@ -444,12 +717,17 @@ function stripEscalation(params: Record<string, unknown>) {
 /** fence 移到 ops 层（Ruling 14）：pi execute 用 resolveToCwd 解析后把 absolutePath 传给 ops，
  *  围栏检查的就是将被写入的同一字符串——与落盘构造性一致，杜绝 ~/、@/、file:// 解析分歧绕过。
  *  readFile/access 是读操作，不设围栏（所有模式读全放行）。 */
-function createFencedWriteOps(policy: FencePolicy, onDenial?: (details: { path: string; message: string }) => void): WriteOperations {
-	const guard = (path: string): void => {
+function createFencedWriteOps(
+	policy: FencePolicy,
+	onDenial?: (details: { path: string; message: string }) => void,
+	filePath?: () => string | null,
+): WriteOperations {
+	const guard = (path: string, asDirectory = false): void => {
 		try {
-			assertWriteAllowed(path, policy);
+			assertWriteAllowed(path, policy, asDirectory);
 		} catch (error) {
-			if (error instanceof FenceDenialError) onDenial?.({ path, message: error.message });
+			if (error instanceof FenceDenialError)
+				onDenial?.({ path, message: error.message });
 			throw error;
 		}
 	};
@@ -458,19 +736,41 @@ function createFencedWriteOps(policy: FencePolicy, onDenial?: (details: { path: 
 			guard(path);
 			await fsWriteFile(path, content, "utf-8");
 		},
+		// pi 的 write 会先 mkdir(dirname(file))。那一步被拒时，模型和审查看到的必须仍是文件，
+		// 否则会把「给文件建父目录」当成「改目录本身」而拒绝。
 		mkdir: async (dir) => {
-			guard(dir);
+			try {
+				assertWriteAllowed(dir, policy, true);
+			} catch (error) {
+				if (!(error instanceof FenceDenialError)) throw error;
+				const reported = filePath?.() ?? dir;
+				const fileError =
+					reported === dir
+						? error
+						: new FenceDenialError(
+								reported,
+								policy.mode,
+								policy.customRunner === true,
+								false,
+							);
+				onDenial?.({ path: reported, message: fileError.message });
+				throw fileError;
+			}
 			await fsMkdir(dir, { recursive: true });
 		},
 	};
 }
 
-function createFencedEditOps(policy: FencePolicy, onDenial?: (details: { path: string; message: string }) => void): EditOperations {
+function createFencedEditOps(
+	policy: FencePolicy,
+	onDenial?: (details: { path: string; message: string }) => void,
+): EditOperations {
 	const guard = (path: string): void => {
 		try {
 			assertWriteAllowed(path, policy);
 		} catch (error) {
-			if (error instanceof FenceDenialError) onDenial?.({ path, message: error.message });
+			if (error instanceof FenceDenialError)
+				onDenial?.({ path, message: error.message });
 			throw error;
 		}
 	};
@@ -492,8 +792,11 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 	// pwsh 覆盖（spec §4.8）：仅 win32 且宿主确实导出工厂时装配；否则 undefined。
 	let createHostPowerShell: HostCreatePowerShellToolDefinition | undefined;
 	if (platform === "win32") {
-		const candidate = deps._hostCreatePowerShellToolDefinition ?? hostCreatePowerShellToolDefinition();
-		if (typeof candidate === "function") createHostPowerShell = candidate as HostCreatePowerShellToolDefinition;
+		const candidate =
+			deps._hostCreatePowerShellToolDefinition ??
+			hostCreatePowerShellToolDefinition();
+		if (typeof candidate === "function")
+			createHostPowerShell = candidate as HostCreatePowerShellToolDefinition;
 	}
 	// Ruling 15：以 definition 工厂为 base——自带 promptSnippet/promptGuidelines，
 	// execute 第 5 参 ctx 类型正确（ExtensionContext），spread 后注册不丢系统提示元数据。
@@ -503,12 +806,22 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 	// pwsh 的 base 只用于元数据（label/description/schema/prepareArguments），execute 会被下面的包装覆盖；
 	// 与 bash 一样，builder 在 execute 时按当次 mode 重新装配受限 ops。
 	// I2 fail-safe：构造抛错降级为“无 pwsh 覆盖”，绝不冒泡出 createSandboxTools（fail-open 防线）。
-	const basePowerShell = buildHostPowerShellBase(createHostPowerShell, deps.cwd);
+	const basePowerShell = buildHostPowerShellBase(
+		createHostPowerShell,
+		deps.cwd,
+	);
 
-	const recordDenial = (entry: Omit<DenialRecord, "recordedAt" | "writablePaths">): void => {
-		const paths = deps._tmpRoots === undefined
-			? writableRoots(entry.sandboxMode, entry.workspace)
-			: writableRoots(entry.sandboxMode, entry.workspace, deps._tmpRoots);
+	const extraRootsFor = (sessionId: string | null): readonly string[] =>
+		sessionId === null ? [] : getWritableGrants().list(sessionId);
+	const recordDenial = (
+		entry: Omit<DenialRecord, "recordedAt" | "writablePaths">,
+	): void => {
+		const paths = writableRoots(
+			entry.sandboxMode,
+			entry.workspace,
+			deps._tmpRoots ?? defaultTmpRoots(),
+			extraRootsFor(entry.sessionId),
+		);
 		getDenialLedger().record({
 			...entry,
 			writablePaths: paths,
@@ -518,7 +831,8 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 	const backendName = (mode: SandboxMode, config: SandboxConfig): string => {
 		if (mode === "danger-full-access") return "bypassed";
 		if ((config.runnerCommand?.length ?? 0) > 0) return "custom";
-		return (deps.selected ?? selectRunner(config.probeTimeoutMs, deps.hooks)).runner;
+		return (deps.selected ?? selectRunner(config.probeTimeoutMs, deps.hooks))
+			.runner;
 	};
 
 	// Windows 工具装配（spec D3 第三版，pi 1.0.0 源码实证）：win32 上 bash 必须是“注册但模型不可达”。
@@ -538,19 +852,35 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		...(platform === "win32" ? { exposure: "hidden" as const } : {}),
 		label: `${baseBash.label} (sandboxed)`,
 		description: escalationDescription(baseBash.description),
-		promptGuidelines: [...(baseBash.promptGuidelines ?? []), ESCALATION_GUIDELINE],
+		promptGuidelines: sandboxGuidelines(baseBash.promptGuidelines),
 		parameters: extendParams(baseBash.parameters),
 		prepareArguments: withPlaceholderStripping(baseBash.prepareArguments),
-		async execute(toolCallId: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(
+			toolCallId: string,
+			params: Record<string, unknown>,
+			signal: AbortSignal | undefined,
+			onUpdate: unknown,
+			ctx: ExtensionContext,
+		) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const config = configForCall(deps, sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const { mode, escalated, ignoredEscalation } = await resolveCall(params as EscalationParams, ctx, deps, "command", () => String(params.command ?? ""), signal, "bash");
+			const extraRoots = extraRootsFor(sessionId);
+			const { mode, escalated, ignoredEscalation } = await resolveCall(
+				params as EscalationParams,
+				ctx,
+				deps,
+				"command",
+				() => String(params.command ?? ""),
+				signal,
+				"bash",
+			);
 			// M3：配置了自定义 runnerCommand 时跳过链探测（confine 直接用 runnerCommand）。
-			const selected = mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
-				? undefined
-				: (deps.selected ?? selectRunner(config.probeTimeoutMs, deps.hooks));
+			const selected =
+				mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
+					? undefined
+					: (deps.selected ?? selectRunner(config.probeTimeoutMs, deps.hooks));
 			const tool = createBashToolDefinition(sessionCwd, {
 				operations: buildBashOps({
 					mode,
@@ -562,22 +892,33 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 					probeTimeoutMs: config.probeTimeoutMs,
 					hooks: deps.hooks,
 					spawnFn: deps.spawnFn,
-					onDenial: sessionId === null ? undefined : (details) => recordDenial({
-						sessionId,
-						tool: "bash",
-						fingerprint: operationFingerprint(params),
-						cwd: sessionCwd,
-						workspace: workspaceRoot,
-						sandboxMode: mode,
-						backend: backendName(mode, config),
-						target: String(params.command ?? ""),
-						exitCode: details.exitCode,
-						stdout: details.stdout,
-						stderr: details.stderr,
-					}),
+					extraRoots,
+					onDenial:
+						sessionId === null
+							? undefined
+							: (details) =>
+									recordDenial({
+										sessionId,
+										tool: "bash",
+										fingerprint: operationFingerprint(params),
+										cwd: sessionCwd,
+										workspace: workspaceRoot,
+										sandboxMode: mode,
+										backend: backendName(mode, config),
+										target: String(params.command ?? ""),
+										exitCode: details.exitCode,
+										stdout: details.stdout,
+										stderr: details.stderr,
+									}),
 				}),
 			});
-			const result = await tool.execute(toolCallId, stripEscalation(params) as never, signal, onUpdate as never, ctx as never);
+			const result = await tool.execute(
+				toolCallId,
+				stripEscalation(params) as never,
+				signal,
+				onUpdate as never,
+				ctx as never,
+			);
 			if (ignoredEscalation) return withIgnoredEscalationNote(result, mode);
 			return escalated ? withEscalationNote(result, mode) : result;
 		},
@@ -587,34 +928,69 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		...baseWrite,
 		label: `${baseWrite.label} (sandboxed)`,
 		description: escalationDescription(baseWrite.description),
-		promptGuidelines: [...(baseWrite.promptGuidelines ?? []), ESCALATION_GUIDELINE],
+		promptGuidelines: sandboxGuidelines(baseWrite.promptGuidelines),
 		parameters: extendParams(baseWrite.parameters),
 		prepareArguments: withPlaceholderStripping(baseWrite.prepareArguments),
-		async execute(toolCallId: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(
+			toolCallId: string,
+			params: Record<string, unknown>,
+			signal: AbortSignal | undefined,
+			onUpdate: unknown,
+			ctx: ExtensionContext,
+		) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const { mode, escalated, ignoredEscalation } = await resolveCall(params as EscalationParams, ctx, deps, "operation", () => String(params.path ?? ""), signal, "write");
+			const extraRoots = extraRootsFor(sessionId);
+			const { mode, escalated, ignoredEscalation } = await resolveCall(
+				params as EscalationParams,
+				ctx,
+				deps,
+				"operation",
+				() => String(params.path ?? ""),
+				signal,
+				"write",
+			);
 			// fence 拒绝不捕获：FenceDenialError 从 ops 抛出、经 pi execute 原样上抛
 			//（withFileMutationQueue 不吞错）——pi 的 agent 循环会转成 error result。
 			const config = configForCall(deps, sessionCwd);
 			const tool = createWriteToolDefinition(sessionCwd, {
 				operations: createFencedWriteOps(
-					{ mode, workspaceRoot, _tmpRoots: deps._tmpRoots },
-					sessionId === null ? undefined : (details) => recordDenial({
-						sessionId,
-						tool: "write",
-						fingerprint: operationFingerprint(params),
-						cwd: sessionCwd,
-						workspace: workspaceRoot,
-						sandboxMode: mode,
-						backend: backendName(mode, config),
-						target: details.path,
-						error: details.message,
-					}),
+					{
+						mode,
+						workspaceRoot,
+						_tmpRoots: deps._tmpRoots,
+						extraRoots,
+						customRunner: (config.runnerCommand?.length ?? 0) > 0,
+					},
+					sessionId === null
+						? undefined
+						: (details) =>
+								recordDenial({
+									sessionId,
+									tool: "write",
+									fingerprint: operationFingerprint(params),
+									cwd: sessionCwd,
+									workspace: workspaceRoot,
+									sandboxMode: mode,
+									backend: backendName(mode, config),
+									target: details.path,
+									error: details.message,
+								}),
+					() => {
+						const raw = typeof params.path === "string" ? params.path : "";
+						if (raw.trim().length === 0) return null;
+						return resolveGrantRequest(raw, sessionCwd);
+					},
 				),
 			});
-			const result = await tool.execute(toolCallId, stripEscalation(params) as never, signal, onUpdate as never, ctx as never);
+			const result = await tool.execute(
+				toolCallId,
+				stripEscalation(params) as never,
+				signal,
+				onUpdate as never,
+				ctx as never,
+			);
 			if (ignoredEscalation) return withIgnoredEscalationNote(result, mode);
 			return escalated ? withEscalationNote(result, mode) : result;
 		},
@@ -624,87 +1000,270 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		...baseEdit,
 		label: `${baseEdit.label} (sandboxed)`,
 		description: escalationDescription(baseEdit.description),
-		promptGuidelines: [...(baseEdit.promptGuidelines ?? []), ESCALATION_GUIDELINE],
+		promptGuidelines: sandboxGuidelines(baseEdit.promptGuidelines),
 		parameters: extendParams(baseEdit.parameters),
 		prepareArguments: withPlaceholderStripping(baseEdit.prepareArguments),
-		async execute(toolCallId: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(
+			toolCallId: string,
+			params: Record<string, unknown>,
+			signal: AbortSignal | undefined,
+			onUpdate: unknown,
+			ctx: ExtensionContext,
+		) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const { mode, escalated, ignoredEscalation } = await resolveCall(params as EscalationParams, ctx, deps, "operation", () => String(params.path ?? ""), signal, "edit");
+			const extraRoots = extraRootsFor(sessionId);
+			const { mode, escalated, ignoredEscalation } = await resolveCall(
+				params as EscalationParams,
+				ctx,
+				deps,
+				"operation",
+				() => String(params.path ?? ""),
+				signal,
+				"edit",
+			);
 			const config = configForCall(deps, sessionCwd);
 			const tool = createEditToolDefinition(sessionCwd, {
 				operations: createFencedEditOps(
-					{ mode, workspaceRoot, _tmpRoots: deps._tmpRoots },
-					sessionId === null ? undefined : (details) => recordDenial({
-						sessionId,
-						tool: "edit",
-						fingerprint: operationFingerprint(params),
-						cwd: sessionCwd,
-						workspace: workspaceRoot,
-						sandboxMode: mode,
-						backend: backendName(mode, config),
-						target: details.path,
-						error: details.message,
-					}),
+					{
+						mode,
+						workspaceRoot,
+						_tmpRoots: deps._tmpRoots,
+						extraRoots,
+						customRunner: (config.runnerCommand?.length ?? 0) > 0,
+					},
+					sessionId === null
+						? undefined
+						: (details) =>
+								recordDenial({
+									sessionId,
+									tool: "edit",
+									fingerprint: operationFingerprint(params),
+									cwd: sessionCwd,
+									workspace: workspaceRoot,
+									sandboxMode: mode,
+									backend: backendName(mode, config),
+									target: details.path,
+									error: details.message,
+								}),
 				),
 			});
-			const result = await tool.execute(toolCallId, stripEscalation(params) as never, signal, onUpdate as never, ctx as never);
+			const result = await tool.execute(
+				toolCallId,
+				stripEscalation(params) as never,
+				signal,
+				onUpdate as never,
+				ctx as never,
+			);
 			if (ignoredEscalation) return withIgnoredEscalationNote(result, mode);
 			return escalated ? withEscalationNote(result, mode) : result;
 		},
 	};
 
 	const powershellBuilder = createHostPowerShell;
-	const powershell = basePowerShell === undefined || powershellBuilder === undefined ? undefined : {
-		...basePowerShell,
-		label: `${basePowerShell.label} (sandboxed)`,
-		description: escalationDescription(basePowerShell.description),
-		promptGuidelines: [...(basePowerShell.promptGuidelines ?? []), ESCALATION_GUIDELINE],
-		parameters: extendParams(basePowerShell.parameters),
-		prepareArguments: withPlaceholderStripping(basePowerShell.prepareArguments),
-		async execute(toolCallId: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
-			// 与 bash 完全同路径：同一 sessionCwd 解析、同一 resolveCall（subject 为 command）、同一 ledger 记账、
-			// 同一 prepareArguments/剥参与同档提权标记。
+	const powershell =
+		basePowerShell === undefined || powershellBuilder === undefined
+			? undefined
+			: {
+					...basePowerShell,
+					label: `${basePowerShell.label} (sandboxed)`,
+					description: escalationDescription(basePowerShell.description),
+					promptGuidelines: sandboxGuidelines(basePowerShell.promptGuidelines),
+					parameters: extendParams(basePowerShell.parameters),
+					prepareArguments: withPlaceholderStripping(
+						basePowerShell.prepareArguments,
+					),
+					async execute(
+						toolCallId: string,
+						params: Record<string, unknown>,
+						signal: AbortSignal | undefined,
+						onUpdate: unknown,
+						ctx: ExtensionContext,
+					) {
+						// 与 bash 完全同路径：同一 sessionCwd 解析、同一 resolveCall（subject 为 command）、同一 ledger 记账、
+						// 同一 prepareArguments/剥参与同档提权标记。
+						const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
+						const workspaceRoot = workspaceRootFor(sessionCwd);
+						const config = configForCall(deps, sessionCwd);
+						const sessionId = readSessionId(ctx);
+						const extraRoots = extraRootsFor(sessionId);
+						const { mode, escalated, ignoredEscalation } = await resolveCall(
+							params as EscalationParams,
+							ctx,
+							deps,
+							"command",
+							() => String(params.command ?? ""),
+							signal,
+							"powershell",
+						);
+						const selected =
+							mode === "danger-full-access" ||
+							(config.runnerCommand?.length ?? 0) > 0
+								? undefined
+								: (deps.selected ??
+									selectRunner(config.probeTimeoutMs, deps.hooks));
+						const tool = powershellBuilder(sessionCwd, {
+							operations: createSandboxPowerShellOps({
+								mode,
+								workspaceRoot,
+								selected,
+								platform,
+								runnerCommand: config.runnerCommand,
+								runnerFailureSignatures: config.runnerFailureSignatures,
+								probeTimeoutMs: config.probeTimeoutMs,
+								hooks: deps.hooks,
+								spawnFn: deps.spawnFn,
+								extraRoots,
+								onDenial:
+									sessionId === null
+										? undefined
+										: (details) =>
+												recordDenial({
+													sessionId,
+													tool: "powershell",
+													fingerprint: operationFingerprint(params),
+													cwd: sessionCwd,
+													workspace: workspaceRoot,
+													sandboxMode: mode,
+													backend: backendName(mode, config),
+													target: String(params.command ?? ""),
+													exitCode: details.exitCode,
+													stdout: details.stdout,
+													stderr: details.stderr,
+												}),
+							}),
+						});
+						const result = await tool.execute(
+							toolCallId,
+							stripEscalation(params) as never,
+							signal,
+							onUpdate as never,
+							ctx as never,
+						);
+						if (ignoredEscalation)
+							return withIgnoredEscalationNote(result, mode);
+						return escalated ? withEscalationNote(result, mode) : result;
+					},
+				};
+
+	const grantWrite = {
+		name: "sandbox_grant_write",
+		label: "Grant directory write",
+		description: [
+			"Make one directory writable for the rest of this user request.",
+			"Call it alone, only after a sandbox denial named a path inside that directory, and only when later calls in this request will write there again. One use should retry the denied call with sandbox_permissions instead. Do not send it in parallel with the denied command.",
+			"After it succeeds, retry the denied operation. Later tool calls in this run can write the directory. The grant is cleared when this request ends or the next user message starts.",
+			"/, the home directory, and ancestors of home are rejected. A custom runner cannot accept extra directories.",
+		].join("\n"),
+		promptSnippet:
+			"Grant write access to one directory until this request ends",
+		promptGuidelines: sandboxGuidelines(undefined),
+		executionMode: "sequential" as const,
+		parameters: Type.Object({
+			path: Type.String({
+				description:
+					"Directory to make writable. Not /, the home directory, or an ancestor of home.",
+			}),
+			justification: Type.String({
+				description:
+					"One sentence: why this directory must be writable to carry out the user's request.",
+			}),
+		}),
+		async execute(
+			_toolCallId: string,
+			params: { path?: string; justification?: string },
+			signal: AbortSignal | undefined,
+			_onUpdate: unknown,
+			ctx: ExtensionContext,
+		) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const config = configForCall(deps, sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const { mode, escalated, ignoredEscalation } = await resolveCall(params as EscalationParams, ctx, deps, "command", () => String(params.command ?? ""), signal, "powershell");
-			const selected = mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
-				? undefined
-				: (deps.selected ?? selectRunner(config.probeTimeoutMs, deps.hooks));
-			const tool = powershellBuilder(sessionCwd, {
-				operations: createSandboxPowerShellOps({
-					mode,
-					workspaceRoot,
-					selected,
-					platform,
-					runnerCommand: config.runnerCommand,
-					runnerFailureSignatures: config.runnerFailureSignatures,
-					probeTimeoutMs: config.probeTimeoutMs,
-					hooks: deps.hooks,
-					spawnFn: deps.spawnFn,
-					onDenial: sessionId === null ? undefined : (details) => recordDenial({
-						sessionId,
-						tool: "powershell",
-						fingerprint: operationFingerprint(params),
-						cwd: sessionCwd,
-						workspace: workspaceRoot,
-						sandboxMode: mode,
-						backend: backendName(mode, config),
-						target: String(params.command ?? ""),
-						exitCode: details.exitCode,
-						stdout: details.stdout,
-						stderr: details.stderr,
-					}),
-				}),
+			const effective = resolveEffectiveMode(
+				deps.permission.override,
+				config.mode,
+			);
+			if (effective === "danger-full-access") {
+				return textResult(
+					"sandbox_grant_write: the current mode is danger-full-access, which already allows this write. Nothing was added.",
+				);
+			}
+			if ((config.runnerCommand?.length ?? 0) > 0) {
+				throw new Error(
+					"sandbox_grant_write cannot add a directory because a custom runnerCommand is configured — nothing was granted. Escalate the denied call with sandbox_permissions, or unset runnerCommand.",
+				);
+			}
+			if (sessionId === null)
+				throw new Error(
+					"sandbox_grant_write requires a session id — nothing was granted.",
+				);
+			const rawPath = typeof params.path === "string" ? params.path : "";
+			const justification =
+				typeof params.justification === "string"
+					? params.justification.trim()
+					: "";
+			if (rawPath.trim().length === 0)
+				throw new Error(
+					"sandbox_grant_write requires a directory path — nothing was granted.",
+				);
+			if (justification.length === 0)
+				throw new Error(
+					"sandbox_grant_write requires a one-sentence justification — nothing was granted.",
+				);
+			const requested = canonicalizeTarget(
+				resolveGrantRequest(rawPath, sessionCwd),
+			);
+			assertCanCreateDirectory(requested);
+			if (grantTooWide(requested)) {
+				throw new Error(
+					`sandbox_grant_write refuses ${requested} because it is /, the home directory, or an ancestor of home — nothing was granted. Escalate the denied call with sandbox_permissions "danger-full-access" and a justification.`,
+				);
+			}
+			const roots = writableRoots(
+				effective,
+				workspaceRoot,
+				deps._tmpRoots ?? defaultTmpRoots(),
+				extraRootsFor(sessionId),
+			);
+			if (isWithinRoots(requested, roots)) {
+				return textResult(
+					`Directory ${requested} is already writable under the current sandbox. Nothing new was granted.`,
+				);
+			}
+			const matching = getDenialLedger()
+				.list(sessionId)
+				.filter((record) => grantCoversDenial(requested, record));
+			if (matching.length === 0) {
+				throw new Error(
+					`sandbox_grant_write was not approved — no sandbox denial in this session names a path inside ${requested}. Nothing was granted. Retry the write so the denial names the path, or escalate that call with sandbox_permissions.`,
+				);
+			}
+			if (signal?.aborted)
+				throw new Error(
+					"approval for the directory grant was cancelled — nothing was granted",
+				);
+			await approveDirectoryGrant({
+				ctx,
+				deps,
+				signal,
+				directory: requested,
+				justification,
+				mode: effective,
+				workspace: workspaceRoot,
+				backend: backendName(effective, config),
+				writablePaths: roots,
+				denials: matching,
 			});
-			const result = await tool.execute(toolCallId, stripEscalation(params) as never, signal, onUpdate as never, ctx as never);
-			if (ignoredEscalation) return withIgnoredEscalationNote(result, mode);
-			return escalated ? withEscalationNote(result, mode) : result;
+			const created = createMissingGrantDirectories(requested);
+			const real = canonicalPath(requested);
+			getWritableGrants().grant(sessionId, real, created);
+			return textResult(
+				`Granted write access to ${real} until this request ends. Later tool calls in this run can write this directory. Retry the denied operation as its own call. The grant is cleared when this request ends or the next user message starts.`,
+			);
 		},
 	};
 
-	return { bash, write, edit, powershell };
+	return { bash, write, edit, powershell, grantWrite };
 }

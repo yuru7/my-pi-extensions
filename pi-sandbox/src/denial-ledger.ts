@@ -56,14 +56,23 @@ export interface DenialLedger {
 	record(entry: DenialRecord): void;
 	/** 消费匹配的未过期记录。没有则返回 undefined。一次性，且与查找同步完成。 */
 	consume(match: DenialMatch, now?: number): DenialRecord | undefined;
+	/** 未消费且未过期的记录。不消费。目录授权用它核对拒绝路径。 */
+	list(sessionId: string, now?: number): readonly DenialRecord[];
 	/** 会话销毁时清理。 */
 	forget(sessionId: string): void;
 }
 
-const LEDGER_KEY = Symbol.for("@yandy0725/pi-sandbox:denial-ledger");
+const LEDGER_KEY = Symbol.for("@yuru7/pi-sandbox:denial-ledger");
 
-function sameOperation(entry: DenialRecord, match: Pick<DenialRecord, "tool" | "fingerprint" | "cwd">): boolean {
-	return entry.tool === match.tool && entry.fingerprint === match.fingerprint && entry.cwd === match.cwd;
+function sameOperation(
+	entry: DenialRecord,
+	match: Pick<DenialRecord, "tool" | "fingerprint" | "cwd">,
+): boolean {
+	return (
+		entry.tool === match.tool &&
+		entry.fingerprint === match.fingerprint &&
+		entry.cwd === match.cwd
+	);
 }
 
 function expired(entry: DenialRecord, now: number): boolean {
@@ -93,6 +102,12 @@ class InProcessDenialLedger implements DenialLedger {
 		const [found] = list.splice(index, 1);
 		if (list.length === 0) this.pending.delete(match.sessionId);
 		return found;
+	}
+
+	list(sessionId: string, now = Date.now()): readonly DenialRecord[] {
+		if (!sessionId) return [];
+		this.purge(sessionId, now);
+		return [...(this.pending.get(sessionId) ?? [])];
 	}
 
 	forget(sessionId: string): void {

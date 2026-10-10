@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	approveEscalation,
 	DENIAL_REASON_PROMPT,
+	denialFollowupHint,
 	escalationAppliedMarker,
-	escalationHintMarker,
 	escalationIgnoredMarker,
 	isStrictlyWider,
 	normalizeEscalationValue,
@@ -29,33 +29,45 @@ function ui(hasUI: boolean, choice: string | undefined, reason?: string) {
 
 describe("validateEscalationArgs", () => {
 	it("both present and non-empty: ok", () => {
-		expect(() => validateEscalationArgs("danger-full-access", "because")).not.toThrow();
+		expect(() =>
+			validateEscalationArgs("danger-full-access", "because"),
+		).not.toThrow();
 	});
 	it("permissions without justification: malformed + actionable (nothing ran, fix recipe)", () => {
-		expect(() => validateEscalationArgs("danger-full-access", undefined))
-			.toThrow(/nothing ran.*Cause: sandbox_permissions was sent without justification.*omit BOTH fields/s);
+		expect(() =>
+			validateEscalationArgs("danger-full-access", undefined),
+		).toThrow(
+			/nothing ran.*Cause: sandbox_permissions was sent without justification.*omit BOTH fields/s,
+		);
 	});
 	it("justification without permissions: malformed (the null-placeholder failure mode)", () => {
-		expect(() => validateEscalationArgs(undefined, "because"))
-			.toThrow(/nothing ran.*Cause: justification was sent without sandbox_permissions.*omit BOTH fields/s);
+		expect(() => validateEscalationArgs(undefined, "because")).toThrow(
+			/nothing ran.*Cause: justification was sent without sandbox_permissions.*omit BOTH fields/s,
+		);
 	});
 	it("blank justification: malformed", () => {
-		expect(() => validateEscalationArgs("danger-full-access", "   "))
-			.toThrow(/nothing ran.*Cause: justification was empty/);
+		expect(() => validateEscalationArgs("danger-full-access", "   ")).toThrow(
+			/nothing ran.*Cause: justification was empty/,
+		);
 	});
 	// 2026-10-02 二次修订：配方只给正向表述，不再列负向子句（删掉 `never the string "null" or ""`）。
 	it("fix recipe 只给正向配方：省略或 JSON null（不含与 strict schema 矛盾的 “never null”）", () => {
-		expect(() => validateEscalationArgs("danger-full-access", undefined))
-			.toThrow(/omit BOTH fields or send JSON null for BOTH/);
-		expect(() => validateEscalationArgs("danger-full-access", undefined)).not.toThrow(/never null/);
-		expect(() => validateEscalationArgs("danger-full-access", undefined)).not.toThrow(/never the string/);
+		expect(() =>
+			validateEscalationArgs("danger-full-access", undefined),
+		).toThrow(/omit BOTH fields or send JSON null for BOTH/);
+		expect(() =>
+			validateEscalationArgs("danger-full-access", undefined),
+		).not.toThrow(/never null/);
+		expect(() =>
+			validateEscalationArgs("danger-full-access", undefined),
+		).not.toThrow(/never the string/);
 	});
 	it("both absent: ok (a plain call)", () => {
 		expect(() => validateEscalationArgs(undefined, undefined)).not.toThrow();
 	});
 });
 
-describe('normalizeEscalationValue（占位符归一化，按字段可达性定生死）', () => {
+describe("normalizeEscalationValue（占位符归一化，按字段可达性定生死）", () => {
 	// pi ≥1.0.0 实测：execute 之前有 validateToolArguments（针对 declared schema）。
 	// 2026-10-02 三次修订：工具侧 prepareArguments（stripEscalationPlaceholders）在校验前剥掉字符串占位符，
 	// 真实工具链上 "null" / "" 到不了这里；本函数是 resolveCall 层的兑底，承重于未走钩子的调用路径
@@ -81,31 +93,54 @@ describe('normalizeEscalationValue（占位符归一化，按字段可达性定�
 		expect(normalizeEscalationValue("   ")).toBeUndefined();
 	});
 	it("真实值 → trim 后原样返回", () => {
-		expect(normalizeEscalationValue("danger-full-access")).toBe("danger-full-access");
-		expect(normalizeEscalationValue("  workspace-write  ")).toBe("workspace-write");
+		expect(normalizeEscalationValue("danger-full-access")).toBe(
+			"danger-full-access",
+		);
+		expect(normalizeEscalationValue("  workspace-write  ")).toBe(
+			"workspace-write",
+		);
 	});
 });
 
-describe('stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在工具 prepareArguments 上）', () => {
+describe("stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在工具 prepareArguments 上）", () => {
 	it('两个占位符字符串都剥掉（主导场景：模型把可选字段填成 "null"）', () => {
-		expect(stripEscalationPlaceholders({ command: "ls", sandbox_permissions: "null", justification: "null" }))
-			.toEqual({ command: "ls" });
+		expect(
+			stripEscalationPlaceholders({
+				command: "ls",
+				sandbox_permissions: "null",
+				justification: "null",
+			}),
+		).toEqual({ command: "ls" });
 	});
 	it("大小写无关 + 包裹空白 + 空串 / 纯空白都是占位符", () => {
-		expect(stripEscalationPlaceholders({ sandbox_permissions: "NULL" })).toEqual({});
-		expect(stripEscalationPlaceholders({ sandbox_permissions: "  Null  " })).toEqual({});
+		expect(
+			stripEscalationPlaceholders({ sandbox_permissions: "NULL" }),
+		).toEqual({});
+		expect(
+			stripEscalationPlaceholders({ sandbox_permissions: "  Null  " }),
+		).toEqual({});
 		expect(stripEscalationPlaceholders({ justification: "" })).toEqual({});
 		expect(stripEscalationPlaceholders({ justification: "   " })).toEqual({});
 	});
 	it("JSON null 原样保留：Type.Null() 声明的合法取值仍走 resolveCall 的归一化，本钩子不改这条路径", () => {
 		const args = { sandbox_permissions: null, justification: null };
-		expect(stripEscalationPlaceholders(args)).toEqual({ sandbox_permissions: null, justification: null });
+		expect(stripEscalationPlaceholders(args)).toEqual({
+			sandbox_permissions: null,
+			justification: null,
+		});
 	});
 	it("真提权原样保留（不误剥）；非法值原样保留（交给 pi 校验报错）", () => {
-		const real = { sandbox_permissions: "danger-full-access", justification: "need /etc write" };
+		const real = {
+			sandbox_permissions: "danger-full-access",
+			justification: "need /etc write",
+		};
 		expect(stripEscalationPlaceholders(real)).toBe(real);
-		expect(stripEscalationPlaceholders({ sandbox_permissions: "read-only" })).toEqual({ sandbox_permissions: "read-only" });
-		expect(stripEscalationPlaceholders({ justification: 42 })).toEqual({ justification: 42 });
+		expect(
+			stripEscalationPlaceholders({ sandbox_permissions: "read-only" }),
+		).toEqual({ sandbox_permissions: "read-only" });
+		expect(stripEscalationPlaceholders({ justification: 42 })).toEqual({
+			justification: 42,
+		});
 	});
 	it("非对象输入原样返回（防御模型输出 null / 数组 / 标量）", () => {
 		expect(stripEscalationPlaceholders(null)).toBeNull();
@@ -114,9 +149,17 @@ describe('stripEscalationPlaceholders（pi 校验前的占位符剥离，挂在�
 		expect(stripEscalationPlaceholders(undefined)).toBeUndefined();
 	});
 	it("不 mutation 原对象：会话记录与 UI 里保留模型的原始输出", () => {
-		const args = { command: "ls", sandbox_permissions: "null", justification: "null" };
+		const args = {
+			command: "ls",
+			sandbox_permissions: "null",
+			justification: "null",
+		};
 		stripEscalationPlaceholders(args);
-		expect(args).toEqual({ command: "ls", sandbox_permissions: "null", justification: "null" });
+		expect(args).toEqual({
+			command: "ls",
+			sandbox_permissions: "null",
+			justification: "null",
+		});
 	});
 	it("无占位符时返回同一引用：pi 的 prepareToolCallArguments 据此跳过替换（零扰动）", () => {
 		const args = { command: "ls" };
@@ -128,7 +171,10 @@ describe("isStrictlyWider（denial-first 门禁与 approveEscalation 共用同�
 	it("read-only → 两档都更宽", () => {
 		// 常量 pin（并入原 WIDER_MODES 表复述用例）：门禁与审批共用的这张表内容本身也钉死——
 		// read-only 的更宽目标恰好两档，且 read-only 不在其列（「nothing widens to read-only」）。
-		expect(WIDER_MODES["read-only"]).toEqual(["workspace-write", "danger-full-access"]);
+		expect(WIDER_MODES["read-only"]).toEqual([
+			"workspace-write",
+			"danger-full-access",
+		]);
 		expect(isStrictlyWider("read-only", "workspace-write")).toBe(true);
 		expect(isStrictlyWider("read-only", "danger-full-access")).toBe(true);
 	});
@@ -139,14 +185,20 @@ describe("isStrictlyWider（denial-first 门禁与 approveEscalation 共用同�
 		expect(isStrictlyWider("workspace-write", "banana")).toBe(false);
 	});
 	it("danger-full-access → 没有更宽目标", () => {
-		expect(isStrictlyWider("danger-full-access", "workspace-write")).toBe(false);
-		expect(isStrictlyWider("danger-full-access", "danger-full-access")).toBe(false);
+		expect(isStrictlyWider("danger-full-access", "workspace-write")).toBe(
+			false,
+		);
+		expect(isStrictlyWider("danger-full-access", "danger-full-access")).toBe(
+			false,
+		);
 	});
 });
 
 describe("sanitizeDenialReason", () => {
 	it("折叠空白并 trim（多行理由压成一行，不破坏错误文案格式）", () => {
-		expect(sanitizeDenialReason("  don't   touch\n\n~/.aws ")).toBe("don't touch ~/.aws");
+		expect(sanitizeDenialReason("  don't   touch\n\n~/.aws ")).toBe(
+			"don't touch ~/.aws",
+		);
 	});
 	it("空 / 纯空白 / 非字符串 → undefined（拒绝文案逐字回退原样）", () => {
 		expect(sanitizeDenialReason("")).toBeUndefined();
@@ -162,12 +214,41 @@ describe("sanitizeDenialReason", () => {
 
 describe("markers", () => {
 	it("denial marker names the mode verbatim", () => {
-		expect(sandboxDenialMarker("read-only")).toBe("[sandbox: file access denied under read-only mode]");
-	});
-	it("hint marker names the subject verbatim and offers the writable roots before escalation", () => {
-		expect(escalationHintMarker("command")).toBe(
-			"[sandbox: escalation available — writable here: the workspace + /tmp; retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]",
+		expect(sandboxDenialMarker("read-only")).toBe(
+			"[sandbox: file access denied under read-only mode]",
 		);
+	});
+	it("names one directory when every denied path sits in it, and withholds the grant otherwise", () => {
+		expect(
+			denialFollowupHint({
+				subject: "operation",
+				grantDirectory: "/home/dev/work/20261010/fuga/fuga",
+				targetPath: "/home/dev/work/20261010/fuga/fuga",
+			}),
+		).toBe(
+			'[sandbox: to change only /home/dev/work/20261010/fuga/fuga, retry this exact call once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write in /home/dev/work/20261010/fuga/fuga again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.]',
+		);
+		expect(
+			denialFollowupHint({
+				subject: "command",
+				grantDirectory: "/home/dev/work/20261010/fuga/fuga",
+			}),
+		).toContain("writes in /home/dev/work/20261010/fuga/fuga only once");
+		expect(denialFollowupHint({ subject: "command" })).toContain(
+			"this denial names no directory",
+		);
+		expect(
+			denialFollowupHint({
+				subject: "command",
+				refusedDirectory: "/home/dev",
+			}),
+		).toContain("refuses /home/dev");
+		expect(denialFollowupHint({ subject: "command", split: true })).toContain(
+			"not in one directory",
+		);
+		expect(
+			denialFollowupHint({ subject: "command", customRunner: true }),
+		).toContain("custom runnerCommand cannot accept a directory grant");
 	});
 	it("applied marker says the approval covered this call only", () => {
 		expect(escalationAppliedMarker("danger-full-access")).toBe(
@@ -184,12 +265,16 @@ describe("markers", () => {
 describe("approveEscalation", () => {
 	it("same mode as effective: no approval needed", async () => {
 		const u = ui(true, "Deny");
-		await expect(approveEscalation({ ...base, requestedMode: "workspace-write" }, u)).resolves.toBe("workspace-write");
+		await expect(
+			approveEscalation({ ...base, requestedMode: "workspace-write" }, u),
+		).resolves.toBe("workspace-write");
 		expect(u.ask).not.toHaveBeenCalled();
 	});
 	it("strictly wider + Allow once → granted mode (one-shot)", async () => {
 		const u = ui(true, "Allow once");
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, u)).resolves.toBe("danger-full-access");
+		await expect(
+			approveEscalation({ ...base, requestedMode: "danger-full-access" }, u),
+		).resolves.toBe("danger-full-access");
 		const title = u.ask.mock.calls[0][0] as string;
 		expect(title).toContain("danger-full-access");
 		expect(title).toContain(base.justification);
@@ -199,31 +284,62 @@ describe("approveEscalation", () => {
 		expect(u.ask.mock.calls[0][2]).toEqual(DENIAL_REASON_PROMPT);
 	});
 	it("Deny → rejected error telling the model to stop", async () => {
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, ui(true, "Deny")))
-			.rejects.toThrow(/rejected escalating this command to "danger-full-access".*stop and explain instead of working around it/s);
+		await expect(
+			approveEscalation(
+				{ ...base, requestedMode: "danger-full-access" },
+				ui(true, "Deny"),
+			),
+		).rejects.toThrow(
+			/rejected escalating this command to "danger-full-access".*stop and explain instead of working around it/s,
+		);
 	});
 	it("Deny + reason → 理由追加进错误文案（模型可见，知道为什么不行）", async () => {
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, ui(true, "Deny", "never touch ~/.aws")))
-			.rejects.toThrow(/stop and explain instead of working around it.*The user's reason: never touch ~\/\.aws/s);
+		await expect(
+			approveEscalation(
+				{ ...base, requestedMode: "danger-full-access" },
+				ui(true, "Deny", "never touch ~/.aws"),
+			),
+		).rejects.toThrow(
+			/stop and explain instead of working around it.*The user's reason: never touch ~\/\.aws/s,
+		);
 	});
 	it("Deny + 空白理由 → 不加后缀（拒绝文案逐字回退原样）", async () => {
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, ui(true, "Deny", "   ")))
-			.rejects.toThrow(/rewritten command$/s);
+		await expect(
+			approveEscalation(
+				{ ...base, requestedMode: "danger-full-access" },
+				ui(true, "Deny", "   "),
+			),
+		).rejects.toThrow(/rewritten command$/s);
 	});
 	it("ask returned undefined → cancelled error", async () => {
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, ui(true, undefined)))
-			.rejects.toThrow(/cancelled/);
+		await expect(
+			approveEscalation(
+				{ ...base, requestedMode: "danger-full-access" },
+				ui(true, undefined),
+			),
+		).rejects.toThrow(/cancelled/);
 	});
 	it("narrower target → not-strictly-wider error, no prompt", async () => {
 		const u = ui(true, "Allow once");
-		await expect(approveEscalation({ ...base, effectiveMode: "danger-full-access", requestedMode: "workspace-write" }, u))
-			.rejects.toThrow(/not strictly wider.*nothing was executed/s);
+		await expect(
+			approveEscalation(
+				{
+					...base,
+					effectiveMode: "danger-full-access",
+					requestedMode: "workspace-write",
+				},
+				u,
+			),
+		).rejects.toThrow(/not strictly wider.*nothing was executed/s);
 		expect(u.ask).not.toHaveBeenCalled();
 	});
 	it("hasUI=false → unavailable error BEFORE any ask (Review Focus #4), with the /permission rescue path", async () => {
 		const u = ui(false, "Allow once");
-		await expect(approveEscalation({ ...base, requestedMode: "danger-full-access" }, u))
-			.rejects.toThrow(/no approval channel is available.*nothing was executed.*\/permission danger-full-access/s);
+		await expect(
+			approveEscalation({ ...base, requestedMode: "danger-full-access" }, u),
+		).rejects.toThrow(
+			/no approval channel is available.*nothing was executed.*\/permission danger-full-access/s,
+		);
 		expect(u.ask).not.toHaveBeenCalled();
 	});
 });

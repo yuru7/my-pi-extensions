@@ -234,20 +234,16 @@ function buildRestrictingSids(sids) {
  * optional temp allowlists (workspace-write only; empty under read-only).
  * @param {RestrictingSidSet} known - the well-known SIDs entering the restricting list.
  * @param {"read-only"|"workspace-write"} mode - selects the restricting list (workspace-write adds the capability SIDs).
+ * @param {readonly bigint[]} [extraWriteSids] - directory-grant SIDs. Included in both modes so a
+ * read-only grant stays a hole without re-enabling the workspace or temp capability.
  * @returns {bigint} the restricted token handle.
  */
-export function createRestrictedToken(api, currentToken, logonSid, writeSids, known, mode) {
-	const restrictingSids = buildRestrictingSids(
-		mode === "read-only"
-			? [logonSid, known.world]
-			: writeSids.length === 0
-				? (() => {
-						throw new Error(
-							"createRestrictedToken: workspace-write restricting list requires at least one write SID",
-						);
-					})()
-				: [logonSid, known.world, ...writeSids],
-	);
+export function createRestrictedToken(api, currentToken, logonSid, writeSids, known, mode, extraWriteSids = []) {
+	if (mode !== "read-only" && writeSids.length === 0) {
+		throw new Error("createRestrictedToken: workspace-write restricting list requires at least one write SID");
+	}
+	const capabilitySids = mode === "read-only" ? [...extraWriteSids] : [...writeSids, ...extraWriteSids];
+	const restrictingSids = buildRestrictingSids([logonSid, known.world, ...capabilitySids]);
 	const tokenSlot = allocPtrSlot();
 	const created = api.createRestrictedToken(
 		currentToken,

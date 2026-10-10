@@ -7,7 +7,7 @@
  *
  * Stable argv contract (Task 9 builds it):
  *   [node, runner.js, '--workspace', <dir>, '--temp', <dir>,
- *    '--mode', <read-only|workspace-write>, '--', <argv...>]
+ *    '--mode', <read-only|workspace-write>, [--extra <dir>]..., '--', <argv...>]
  *
  * Deltas from the deepseek-harness reference (`sandbox-windows-acl/src/runner.ts`)
  * by design:
@@ -54,7 +54,7 @@ import { grantWrite } from "./acl.js";
 import { parseArgs, requireDirectory, RUNNER_FAILURE_EXIT, RUNNER_SIGNATURE, RunnerFailure } from "./cli.js";
 import { allocPtrSlot, decodePtr, throwLastError, win32 } from "./ffi.js";
 import { spawnInheritedJobProcess, waitForProcessExit } from "./proc.js";
-import { assertGrantRootsDisjoint, canonicalSidInput, tempWriteSid, workspaceWriteSid } from "./sid.js";
+import { assertGrantRootsDisjoint, canonicalSidInput, extraWriteSid, tempWriteSid, workspaceWriteSid } from "./sid.js";
 import {
 	createRestrictedToken,
 	findLogonSid,
@@ -107,6 +107,7 @@ export async function main(rawArgs, deps = {}) {
 	// a bogus root must fail loudly at the runner boundary, never mid-child.
 	requireDirectory("--workspace", parsed.workspace);
 	requireDirectory("--temp", parsed.temp);
+	for (const extra of parsed.extras) requireDirectory("--extra", extra);
 	if (parsed.mode === "workspace-write") assertGrantRootsDisjoint(parsed.workspace, parsed.temp);
 
 	const api = deps.api ?? (await win32());
@@ -135,12 +136,28 @@ export async function main(rawArgs, deps = {}) {
 		grantWrite(api, parsed.temp, tempSidPtr, lowLabelSid, worldSid);
 		writeSids.push(workspaceSidPtr, tempSidPtr);
 	}
+	const extraSidPtrs = [];
+	for (const extra of parsed.extras) {
+		const extraSid = extraWriteSid(canonicalSidInput(extra));
+		const extraSidPtr = parseSid(api, extraSid);
+		grantWrite(api, extra, extraSidPtr, lowLabelSid, worldSid);
+		extraSidPtrs.push(extraSidPtr);
+	}
 	const logonSid = findLogonSid(api, currentToken);
-	const token = createRestrictedToken(api, currentToken, logonSid, writeSids, { world: worldSid }, parsed.mode);
+	const token = createRestrictedToken(
+		api,
+		currentToken,
+		logonSid,
+		writeSids,
+		{ world: worldSid },
+		parsed.mode,
+		extraSidPtrs,
+	);
 	restrictTokenIntegrity(api, token, lowLabelSid);
-	// temp → workspace → Everyone: new objects created inside the temp tree must
-	// not acquire the shared workspace capability.
-	setTokenDefaultDaclGrant(api, token, writeSids[1] ?? writeSids[0] ?? worldSid);
+	// temp → workspace → extra → Everyone: new objects created inside the temp tree must
+	// not acquire the shared workspace capability. read-only has no workspace/temp SID,
+	// so a directory grant names its own SID and new files under it stay writable.
+	setTokenDefaultDaclGrant(api, token, writeSids[1] ?? writeSids[0] ?? extraSidPtrs[0] ?? worldSid);
 	// Inherit the runner's own cwd: the TypeScript seam spawned this process in
 	// the caller's cwd, so the child must start there too (never the workspace
 	// root, which is only an authorization root).

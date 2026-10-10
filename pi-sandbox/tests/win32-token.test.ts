@@ -2,16 +2,24 @@
 import koffi from "koffi";
 import { describe, expect, it } from "vitest";
 import * as abi from "../src/win32/abi.js";
-import { createRestrictedToken, restrictTokenIntegrity, setTokenDefaultDaclGrant } from "../src/win32/token.js";
+import {
+	createRestrictedToken,
+	restrictTokenIntegrity,
+	setTokenDefaultDaclGrant,
+} from "../src/win32/token.js";
 
 const PVOID = koffi.pointer("void");
 
 function makeApi(overrides: Record<string, unknown> = {}) {
 	const calls: Array<{ name: string; args: unknown[] }> = [];
-	const rec = (name: string, result: unknown) => (...args: unknown[]) => {
-		calls.push({ name, args });
-		return typeof result === "function" ? (result as (...a: unknown[]) => unknown)(...args) : result;
-	};
+	const rec =
+		(name: string, result: unknown) =>
+		(...args: unknown[]) => {
+			calls.push({ name, args });
+			return typeof result === "function"
+				? (result as (...a: unknown[]) => unknown)(...args)
+				: result;
+		};
 	return {
 		calls,
 		getLastError: () => 0,
@@ -21,10 +29,13 @@ function makeApi(overrides: Record<string, unknown> = {}) {
 		getTokenInformation: rec("getTokenInformation", 1),
 		setTokenInformation: rec("setTokenInformation", 1),
 		// 真实 koffi 的 PVOID 出参槽是 BigInt 指针，必须用 koffi.encode 写入句柄。
-		createRestrictedToken: rec("createRestrictedToken", (...args: unknown[]) => {
-			koffi.encode(args[8] as never, PVOID, 0x1234n);
-			return 1;
-		}),
+		createRestrictedToken: rec(
+			"createRestrictedToken",
+			(...args: unknown[]) => {
+				koffi.encode(args[8] as never, PVOID, 0x1234n);
+				return 1;
+			},
+		),
 		convertStringSidToSidW: rec("convertStringSidToSidW", 1),
 		getLengthSid: rec("getLengthSid", 12),
 		setEntriesInAclW: rec("setEntriesInAclW", 0),
@@ -45,24 +56,66 @@ describe("win32 restricted token", () => {
 
 	it("selects the read-only restricting list without capability SIDs", () => {
 		const api = makeApi();
-		createRestrictedToken(api as never, 1n as never, 2n as never, [], { world: 3n as never }, "read-only");
+		createRestrictedToken(
+			api as never,
+			1n as never,
+			2n as never,
+			[],
+			{ world: 3n as never },
+			"read-only",
+		);
 		const { count } = restrictingSlot(api.calls);
 		expect(count).toBe(2); // logon SID + Everyone
-		const flags = api.calls.find((c) => c.name === "createRestrictedToken")?.args[1] as number;
-		expect(flags).toBe(abi.WRITE_RESTRICTED | abi.DISABLE_MAX_PRIVILEGE | abi.LUA_TOKEN);
+		const flags = api.calls.find((c) => c.name === "createRestrictedToken")
+			?.args[1] as number;
+		expect(flags).toBe(
+			abi.WRITE_RESTRICTED | abi.DISABLE_MAX_PRIVILEGE | abi.LUA_TOKEN,
+		);
 	});
 
 	it("adds every capability SID in workspace-write mode", () => {
 		const api = makeApi();
-		createRestrictedToken(api as never, 1n as never, 2n as never, [4n as never, 5n as never], { world: 3n as never }, "workspace-write");
+		createRestrictedToken(
+			api as never,
+			1n as never,
+			2n as never,
+			[4n as never, 5n as never],
+			{ world: 3n as never },
+			"workspace-write",
+		);
 		const { count } = restrictingSlot(api.calls);
 		expect(count).toBe(4); // logon SID + Everyone + workspace SID + temp SID
 	});
 
+	it("keeps a read-only directory grant without restoring workspace SIDs", () => {
+		const api = makeApi();
+		createRestrictedToken(
+			api as never,
+			1n as never,
+			2n as never,
+			[],
+			{ world: 3n as never },
+			"read-only",
+			[9n as never],
+		);
+		const { count } = restrictingSlot(api.calls);
+		expect(count).toBe(3); // logon SID + Everyone + the extra directory SID
+	});
+
 	it("refuses a workspace-write list with no capability SID", () => {
 		const api = makeApi();
-		expect(() => createRestrictedToken(api as never, 1n as never, 2n as never, [], { world: 3n as never }, "workspace-write"))
-			.toThrowError(/workspace-write restricting list requires at least one write SID/);
+		expect(() =>
+			createRestrictedToken(
+				api as never,
+				1n as never,
+				2n as never,
+				[],
+				{ world: 3n as never },
+				"workspace-write",
+			),
+		).toThrowError(
+			/workspace-write restricting list requires at least one write SID/,
+		);
 	});
 
 	it("lowers the token to Low integrity with the verified payload", () => {
@@ -80,13 +133,27 @@ describe("win32 restricted token", () => {
 		const dacl = Buffer.alloc(16);
 		dacl.writeBigUInt64LE(0n, 0);
 		const api = makeApi({
-			getTokenInformation: (token: unknown, cls: number, info: Buffer | null, length: number, needed: Buffer) => {
+			getTokenInformation: (
+				token: unknown,
+				cls: number,
+				info: Buffer | null,
+				length: number,
+				needed: Buffer,
+			) => {
 				if (cls !== abi.TokenDefaultDacl) return 1;
-				if (info === null) { koffi.encode(needed as never, "uint32", 16); return 0 }
+				if (info === null) {
+					koffi.encode(needed as never, "uint32", 16);
+					return 0;
+				}
 				info.writeBigUInt64LE(0x9000n, 0);
 				return 1;
 			},
-			setEntriesInAclW: (count: number, entries: Buffer, old: unknown, slot: Buffer) => {
+			setEntriesInAclW: (
+				count: number,
+				entries: Buffer,
+				old: unknown,
+				slot: Buffer,
+			) => {
 				expect(count).toBe(1);
 				expect(entries.readUInt32LE(0)).toBe(abi.FILE_ALL_ACCESS);
 				koffi.encode(slot as never, PVOID, 0xa000n);
@@ -94,19 +161,32 @@ describe("win32 restricted token", () => {
 			},
 		});
 		setTokenDefaultDaclGrant(api as never, 1n as never, 4n as never);
-		const set = api.calls.find((c) => c.name === "setTokenInformation" && c.args[1] === abi.TokenDefaultDacl);
+		const set = api.calls.find(
+			(c) =>
+				c.name === "setTokenInformation" && c.args[1] === abi.TokenDefaultDacl,
+		);
 		expect(set).toBeDefined();
 	});
 
 	it("fails closed when the token carries no default DACL", () => {
 		const api = makeApi({
-			getTokenInformation: (token: unknown, cls: number, info: Buffer | null, length: number, needed: Buffer) => {
-				if (info === null) { koffi.encode(needed as never, "uint32", 16); return 0 }
+			getTokenInformation: (
+				token: unknown,
+				cls: number,
+				info: Buffer | null,
+				length: number,
+				needed: Buffer,
+			) => {
+				if (info === null) {
+					koffi.encode(needed as never, "uint32", 16);
+					return 0;
+				}
 				info.writeBigUInt64LE(0n, 0); // NULL DACL
 				return 1;
 			},
 		});
-		expect(() => setTokenDefaultDaclGrant(api as never, 1n as never, 4n as never))
-			.toThrowError(/the token carries no default DACL to extend/);
+		expect(() =>
+			setTokenDefaultDaclGrant(api as never, 1n as never, 4n as never),
+		).toThrowError(/the token carries no default DACL to extend/);
 	});
 });

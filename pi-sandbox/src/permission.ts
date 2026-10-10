@@ -15,7 +15,7 @@ export function createPermissionState(): PermissionState {
 }
 
 /** 进程全局槽位键：带包名前缀，避免与其他扩展的 globalThis 使用相撞。 */
-const PERMISSION_STATE_KEY = Symbol.for("@yandy0725/pi-sandbox:permission-state");
+const PERMISSION_STATE_KEY = Symbol.for("@yuru7/pi-sandbox:permission-state");
 
 function getOrCreatePermissionState(): PermissionState {
 	const store = globalThis as Record<symbol, unknown>;
