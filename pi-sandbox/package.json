@@ -3,7 +3,7 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Process-level, path-transparent sandbox for Pi coding agent with fail-closed workspace protection (bwrap, landlock, seatbelt, windows-acl) and denial-first AI auto-review escalation",
 	"license": "MIT",
 	"repository": {
