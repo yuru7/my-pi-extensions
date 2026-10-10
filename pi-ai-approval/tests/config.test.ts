@@ -13,6 +13,7 @@ test("builds the default configuration file contents", () => {
 		primaryThinkingLevel: "low",
 		secondaryThinkingLevel: "low",
 		timeoutMs: 90000,
+		askTimeoutSeconds: null,
 		assessmentLanguage: "auto",
 		riskActions: {
 			very_low: "allow",
@@ -146,6 +147,8 @@ test("warns and falls back to defaults for invalid configured values", () => {
 	assert.equal(config.secondaryModelSource, "default");
 	assert.equal(config.timeoutMs, 90_000);
 	assert.equal(config.timeoutSource, "default");
+	assert.equal(config.askTimeoutSeconds, null);
+	assert.equal(config.askTimeoutSource, "default");
 	assert.equal(config.policy, undefined);
 });
 
@@ -621,4 +624,103 @@ test("warns and falls back to low for invalid thinking levels", () => {
 	assert.match(config.warnings.join("\n"), /Invalid primaryThinkingLevel/);
 	assert.match(config.warnings.join("\n"), /Invalid secondaryThinkingLevel/);
 	assert.match(config.warnings.join("\n"), /PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL/);
+});
+
+test("askTimeoutSeconds defaults to no timeout and treats 0 or less as none", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: 30 }),
+	);
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: 0 }),
+	);
+
+	const disabled = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: {},
+	});
+	assert.equal(disabled.askTimeoutSeconds, null);
+	assert.equal(disabled.askTimeoutSource, "project");
+	assert.equal(disabled.warnings.length, 0);
+
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: -5 }),
+	);
+	const negative = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: {},
+	});
+	assert.equal(negative.askTimeoutSeconds, null);
+	assert.equal(negative.askTimeoutSource, "project");
+
+	const globalOnly = loadApprovalConfig({
+		cwd,
+		projectTrusted: false,
+		agentDir,
+		env: {},
+	});
+	assert.equal(globalOnly.askTimeoutSeconds, 30);
+	assert.equal(globalOnly.askTimeoutSource, "global");
+});
+
+test("a trusted project ask timeout overrides the global one, including null", () => {
+	const root = mkdtempSync(join(tmpdir(), "ai-approval-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: 30 }),
+	);
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: 12.5 }),
+	);
+	const shortened = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: {},
+	});
+	assert.equal(shortened.askTimeoutSeconds, 12.5);
+	assert.equal(shortened.askTimeoutSource, "project");
+
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: null }),
+	);
+	const cleared = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: {},
+	});
+	assert.equal(cleared.askTimeoutSeconds, null);
+	assert.equal(cleared.askTimeoutSource, "project");
+
+	writeFileSync(
+		join(cwd, ".pi", "ai-approval.json"),
+		JSON.stringify({ askTimeoutSeconds: "30" }),
+	);
+	const invalid = loadApprovalConfig({
+		cwd,
+		projectTrusted: true,
+		agentDir,
+		env: {},
+	});
+	assert.equal(invalid.askTimeoutSeconds, 30);
+	assert.equal(invalid.askTimeoutSource, "global");
+	assert.match(invalid.warnings.join("\n"), /Invalid askTimeoutSeconds/);
 });

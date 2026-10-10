@@ -30,6 +30,9 @@ export function riskLabel(level: RiskLevel): string {
 	return RISK_LABELS[level];
 }
 
+/** Shown when an ask prompt closes because its countdown reached zero. */
+export const APPROVAL_TIMEOUT_DETAIL = "Approval prompt timed out.";
+
 export function rejectionReason(
 	result: Exclude<
 		ReviewResult,
@@ -45,7 +48,9 @@ export function rejectionReason(
 			].join("\n");
 		case "user-declined":
 			return [
-				"The user declined this exact action.",
+				result.detail === APPROVAL_TIMEOUT_DETAIL
+					? APPROVAL_TIMEOUT_DETAIL
+					: "The user declined this exact action.",
 				"Do not retry the same action through an equivalent command or workaround.",
 				"Choose a materially safer alternative or ask the user in conversation.",
 			].join("\n");
@@ -78,12 +83,19 @@ export function formatReviewResult(
 				truncate(singleLine(result.assessment.rationale), 240),
 				target,
 			].join("\n");
-		case "user-declined":
+		case "user-declined": {
+			const timedOut = result.detail === APPROVAL_TIMEOUT_DETAIL;
 			return [
-				assessmentSummary("declined by user", result.assessment),
-				...(result.detail ? [truncate(singleLine(result.detail), 240)] : []),
+				assessmentSummary(
+					timedOut ? "timed out" : "declined by user",
+					result.assessment,
+				),
+				...(!timedOut && result.detail
+					? [truncate(singleLine(result.detail), 240)]
+					: []),
 				target,
 			].join("\n");
+		}
 		case "timeout":
 			return `AI Approval · timed out · blocked\n${target}`;
 		case "failure":
@@ -98,7 +110,12 @@ export function formatReviewResult(
 }
 
 function assessmentSummary(
-	verdict: "allowed" | "approved by user" | "blocked" | "declined by user",
+	verdict:
+		| "allowed"
+		| "approved by user"
+		| "blocked"
+		| "declined by user"
+		| "timed out",
 	assessment: RiskAssessment,
 ): string {
 	return `AI Approval · ${verdict} · ${riskLabel(assessment.risk_level)} risk`;

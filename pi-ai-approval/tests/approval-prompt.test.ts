@@ -18,6 +18,7 @@ import {
 } from "../src/approval-prompt.ts";
 import { ApprovalDialog } from "../src/approval-dialog.ts";
 import type { ReviewAction, RiskAssessment, RiskLevel } from "../src/review.ts";
+import { APPROVAL_TIMEOUT_DETAIL } from "../src/review-presentation.ts";
 
 initTheme("dark");
 
@@ -39,16 +40,31 @@ const assessment: RiskAssessment = {
 const assessor = "openai-codex/gpt-5.6-luna (Primary)";
 
 function ctxWithSelect(
-	select: (title: string, options: string[]) => Promise<string | undefined>,
+	select: (
+		title: string,
+		options: string[],
+		opts?: { signal?: AbortSignal; timeout?: number },
+	) => Promise<string | undefined>,
 	signal?: AbortSignal,
-	input?: (title: string, placeholder?: string) => Promise<string | undefined>,
+	input?: (
+		title: string,
+		placeholder?: string,
+		opts?: { signal?: AbortSignal; timeout?: number },
+	) => Promise<string | undefined>,
 ): ExtensionContext {
 	const ui: Record<string, unknown> = {
-		select: async (title: string, options: string[]) => select(title, options),
+		select: async (
+			title: string,
+			options: string[],
+			opts?: { signal?: AbortSignal; timeout?: number },
+		) => select(title, options, opts),
 	};
 	if (input) {
-		ui.input = async (title: string, placeholder?: string) =>
-			input(title, placeholder);
+		ui.input = async (
+			title: string,
+			placeholder?: string,
+			opts?: { signal?: AbortSignal; timeout?: number },
+		) => input(title, placeholder, opts);
 	}
 	return {
 		mode: "rpc",
@@ -836,4 +852,79 @@ test("ringTerminalBell never throws when the output fails", () => {
 			},
 		}),
 	);
+});
+
+test("passes the ask timeout through to a non-TUI selector and declines when it expires", async () => {
+	let timeout: number | undefined;
+	const ctx = ctxWithSelect((_title, _options, opts) => {
+		timeout = opts?.timeout;
+		return new Promise((resolve) => {
+			opts?.signal?.addEventListener("abort", () => resolve(undefined), {
+				once: true,
+			});
+		});
+	});
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			timeoutSeconds: 0.05,
+		}),
+		{ kind: "declined", detail: APPROVAL_TIMEOUT_DETAIL },
+	);
+	assert.ok(timeout !== undefined && timeout > 0 && timeout <= 50);
+});
+
+test("an answer after the ask deadline does not approve", async () => {
+	let now = 0;
+	const ctx = ctxWithSelect(async () => {
+		now = 5_000;
+		return "Approve";
+	});
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			timeoutSeconds: 5,
+			now: () => now,
+		}),
+		{ kind: "declined", detail: APPROVAL_TIMEOUT_DETAIL },
+	);
+});
+
+test("a timeout during session-rule input declines without storing the rule", async () => {
+	let now = 0;
+	let submitted = false;
+	const ctx = ctxWithSelect(
+		async (_title, _options, opts) => {
+			assert.equal(opts?.timeout, 5_000);
+			return ADD_SESSION_RULE_CHOICE;
+		},
+		undefined,
+		async (_title, _placeholder, opts) => {
+			assert.equal(opts?.timeout, 5_000);
+			now = 5_000;
+			return "allow pnpm test";
+		},
+	);
+	assert.deepEqual(
+		await showApprovalPrompt(action, assessment, assessor, ctx, {
+			timeoutSeconds: 5,
+			now: () => now,
+			submitSessionRule: () => {
+				submitted = true;
+				return { ok: true };
+			},
+		}),
+		{ kind: "declined", detail: APPROVAL_TIMEOUT_DETAIL },
+	);
+	assert.equal(submitted, false);
+});
+
+test("the TUI ask dialog shows the remaining seconds", async () => {
+	const tui = ctxWithCustom({ rows: 40 });
+	const pending = showApprovalPrompt(action, assessment, assessor, tui.ctx, {
+		timeoutSeconds: 30,
+	});
+	const text = tui.dialog().render(70).join("\n");
+	assert.match(text, /Times out in 30s/);
+	tui.decide("Deny");
+	tui.dialog().dispose();
+	assert.deepEqual(await pending, { kind: "declined" });
 });

@@ -1904,8 +1904,13 @@ type ToolCallHandler = (event: unknown, ctx: never) => Promise<unknown>;
 
 function approvalHarness(options: {
 	assessment: () => unknown;
-	select: (title: string, choices: string[]) => Promise<string | undefined>;
+	select: (
+		title: string,
+		choices: string[],
+		opts?: { timeout?: number },
+	) => Promise<string | undefined>;
 	input?: (title: string) => Promise<string | undefined>;
+	globalConfig?: Record<string, unknown>;
 }) {
 	const handlers = new Map<string, (event: unknown, ctx: never) => unknown>();
 	aiApproval({
@@ -1919,7 +1924,15 @@ function approvalHarness(options: {
 	const previousPrimary = process.env.PI_AI_APPROVAL_PRIMARY_MODEL;
 	const previousFallback = process.env.PI_AI_APPROVAL_SECONDARY_MODEL;
 	const root = mkdtempSync(join(tmpdir(), "ai-approval-approval-"));
-	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+	const agentDir = join(root, "agent");
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	if (options.globalConfig) {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "ai-approval.json"),
+			JSON.stringify(options.globalConfig),
+		);
+	}
 	process.env.PI_AI_APPROVAL_PRIMARY_MODEL = "test/reviewer";
 	process.env.PI_AI_APPROVAL_SECONDARY_MODEL = "test/reviewer";
 	let reviewCalls = 0;
@@ -1935,7 +1948,7 @@ function approvalHarness(options: {
 		return { kind: "assessed", assessment: options.assessment() };
 	} as typeof originalReview;
 
-	const selects: Array<{ title: string; choices: string[] }> = [];
+	const selects: Array<{ title: string; choices: string[]; timeout?: number }> = [];
 	const inputs: string[] = [];
 	const notices: string[] = [];
 	let branch: unknown[] = [];
@@ -1951,9 +1964,13 @@ function approvalHarness(options: {
 		signal: undefined,
 		abort: () => undefined,
 		ui: {
-			select: async (title: string, choices: string[]) => {
-				selects.push({ title, choices });
-				return options.select(title, choices);
+			select: async (
+				title: string,
+				choices: string[],
+				opts?: { timeout?: number },
+			) => {
+				selects.push({ title, choices, timeout: opts?.timeout });
+				return options.select(title, choices, opts);
 			},
 			...(options.input
 				? {
@@ -2054,6 +2071,28 @@ test("asks for medium-risk actions and executes only after Approve", async () =>
 		assert.match(harness.selects[0].title, /Risk: Medium/);
 		assert.match(harness.selects[0].title, /\$ git reset --hard HEAD~1/);
 		assert.match(harness.selects[0].title, /Force-resets the current branch/);
+		assert.equal(harness.selects[0].timeout, undefined);
+	} finally {
+		harness.restore();
+	}
+});
+
+test("a configured ask timeout is handed to the approval selector", async () => {
+	const harness = approvalHarness({
+		assessment: mediumAssessment,
+		globalConfig: { askTimeoutSeconds: 30 },
+		select: () => Promise.resolve("Deny"),
+	});
+	try {
+		await harness.handlers.get("session_start")?.({}, harness.ctx);
+		const call = harness.queueToolCall("ask-timeout-1", "ask-timeout-batch");
+		const result = (await (handlersToolCall(harness) as ToolCallHandler)(
+			call,
+			harness.ctx,
+		)) as { block?: boolean } | undefined;
+		assert.equal(result?.block, true);
+		assert.equal(harness.selects[0]?.timeout, 30_000);
+		assert.match(harness.notices.join("\n"), /declined by user/);
 	} finally {
 		harness.restore();
 	}

@@ -5,6 +5,7 @@ import {
 	type ApprovalExpansion,
 } from "./approval-dialog.ts";
 import {
+	APPROVAL_TIMEOUT_DETAIL,
 	formatActionPreview,
 	riskLabel,
 	shellCommandPreview,
@@ -258,6 +259,14 @@ export interface ApprovalPromptRequest {
 	submitSessionRule?: SessionRuleSubmitter;
 	/** Session rule that lowered this ask, rendered in the prompt document. */
 	sessionRule?: SessionRuleNote;
+	/**
+	 * How long this ask waits, in seconds. Null, omitted, or a number <= 0
+	 * waits until the user answers. A positive number counts down on the prompt
+	 * and then declines.
+	 */
+	timeoutSeconds?: number | null;
+	/** Clock for the deadline. Defaults to `Date.now`. */
+	now?: () => number;
 }
 
 export async function showApprovalPrompt(
@@ -273,6 +282,11 @@ export async function showApprovalPrompt(
 			detail: "Approval prompt was cancelled before it could be shown.",
 		};
 	}
+	const clock = startAskTimeout(
+		request.timeoutSeconds,
+		ctx.signal,
+		request.now ?? Date.now,
+	);
 	try {
 		ringTerminalBell(ctx.mode);
 		// Only the TUI dialog can expand the Operation block, so only that path is
@@ -282,7 +296,11 @@ export async function showApprovalPrompt(
 			sessionRule: request.sessionRule,
 		});
 		for (;;) {
-			const choice = await selectApprovalChoice(prompt, ctx);
+			if (clock.expired()) return timeoutDecline();
+			const choice = await selectApprovalChoice(prompt, ctx, clock);
+			// A choice that arrives after the deadline never approves, including
+			// one typed into the session-rule input below.
+			if (clock.expired()) return timeoutDecline();
 			if (choice === "Approve") return { kind: "approved" };
 			if (choice !== ADD_SESSION_RULE_CHOICE) return { kind: "declined" };
 			if (!request.submitSessionRule) {
@@ -293,13 +311,15 @@ export async function showApprovalPrompt(
 			}
 			let rejection: string | undefined;
 			for (;;) {
+				if (clock.expired()) return timeoutDecline();
 				const text = await ctx.ui.input(
 					rejection
 						? `${SESSION_RULE_INPUT_TITLE} — ${rejection}`
 						: SESSION_RULE_INPUT_TITLE,
 					SESSION_RULE_INPUT_PLACEHOLDER,
-					ctx.signal ? { signal: ctx.signal } : undefined,
+					clock.uiOptions(),
 				);
+				if (clock.expired()) return timeoutDecline();
 				// Esc leaves the rule input and brings the choices back: a cancelled
 				// input must never approve the action.
 				if (text === undefined) break;
@@ -314,6 +334,8 @@ export async function showApprovalPrompt(
 			kind: "declined",
 			detail: `Approval UI unavailable: ${error instanceof Error ? error.message : String(error)}`,
 		};
+	} finally {
+		clock.dispose();
 	}
 }
 
@@ -325,7 +347,9 @@ export async function showApprovalPrompt(
 async function selectApprovalChoice(
 	prompt: ApprovalPrompt,
 	ctx: ExtensionContext,
+	clock: AskTimeout,
 ): Promise<string | undefined> {
+	const timeoutMs = clock.timeoutMs();
 	if (ctx.mode === "tui") {
 		return showApprovalDialog(
 			{
@@ -334,6 +358,8 @@ async function selectApprovalChoice(
 				emphasis: prompt.emphasis,
 				expansion: prompt.expansion,
 				choices: APPROVAL_CHOICES,
+				...(timeoutMs !== undefined ? { timeoutMs, now: clock.now } : {}),
+				...(clock.signal ? { signal: clock.signal } : {}),
 			},
 			ctx,
 		);
@@ -341,8 +367,91 @@ async function selectApprovalChoice(
 	return ctx.ui.select(
 		`${prompt.title}\n\n${prompt.markdown}`,
 		[...APPROVAL_CHOICES],
-		ctx.signal ? { signal: ctx.signal } : undefined,
+		clock.uiOptions(),
 	);
+}
+
+function timeoutDecline(): ApprovalDecision {
+	return { kind: "declined", detail: APPROVAL_TIMEOUT_DETAIL };
+}
+
+/** Node's setTimeout delay is a 32-bit signed integer. Longer waits are sliced. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+interface AskTimeout {
+	now: () => number;
+	/** Child of the turn signal; aborted when the ask deadline passes. */
+	signal?: AbortSignal;
+	/** Milliseconds still left, or undefined when this ask does not time out. */
+	timeoutMs(): number | undefined;
+	/** Options for `ui.select` / `ui.input`. Undefined when neither signal nor timeout applies. */
+	uiOptions(): { signal?: AbortSignal; timeout?: number } | undefined;
+	expired(): boolean;
+	dispose(): void;
+}
+
+/**
+ * One deadline for the choice dialog and the session-rule input that follows
+ * it. Null, omitted, and numbers <= 0 never expire.
+ */
+function startAskTimeout(
+	seconds: number | null | undefined,
+	parent: AbortSignal | undefined,
+	now: () => number,
+): AskTimeout {
+	if (seconds == null || !(seconds > 0) || !Number.isFinite(seconds)) {
+		return {
+			now,
+			signal: parent,
+			timeoutMs: () => undefined,
+			uiOptions: () => (parent ? { signal: parent } : undefined),
+			expired: () => false,
+			dispose: () => {},
+		};
+	}
+	const deadline = now() + seconds * 1000;
+	const controller = new AbortController();
+	let timedOut = false;
+	const onParent = () => controller.abort();
+	if (parent?.aborted) controller.abort();
+	else parent?.addEventListener("abort", onParent, { once: true });
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
+	const arm = () => {
+		if (disposed) return;
+		const left = deadline - now();
+		if (left <= 0) {
+			timedOut = true;
+			controller.abort();
+			return;
+		}
+		timer = setTimeout(arm, Math.min(left, MAX_TIMER_DELAY_MS));
+		timer.unref?.();
+	};
+	arm();
+	const expired = () => timedOut || now() >= deadline;
+	const timeoutMs = () => {
+		const left = deadline - now();
+		return left > 0 ? left : 0;
+	};
+	return {
+		now,
+		signal: controller.signal,
+		timeoutMs,
+		uiOptions: () => {
+			const left = timeoutMs();
+			return {
+				signal: controller.signal,
+				...(left > 0 ? { timeout: left } : {}),
+			};
+		},
+		expired,
+		dispose: () => {
+			disposed = true;
+			if (timer) clearTimeout(timer);
+			parent?.removeEventListener("abort", onParent);
+		},
+	};
 }
 
 /**

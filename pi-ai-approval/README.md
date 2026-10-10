@@ -26,7 +26,7 @@ deny ─────────→ block
 ```
 
 - **`allow`** runs the tool call without confirmation.
-- **`ask`** shows an approval prompt. The choices are fixed to **Deny / Approve / Approve + Add Rule (Deny preselected)**.
+- **`ask`** shows an approval prompt. The choices are fixed to **Deny / Approve / Approve + Add Rule (Deny preselected)**. `askTimeoutSeconds` can limit how long the prompt stays open; the default `null` waits until you answer. While a limit is active, the remaining seconds count down, and reaching zero declines the action.
 - **`deny`** blocks the tool call and returns the AI's rationale to the agent, together with instructions not to retry the same action through a workaround.
 
 When available, the reviewer also uses the agent reasoning directly associated with the current tool call as supporting evidence. That reasoning is untrusted and does not prove the user authorized or requested the action. If the model or provider does not expose reasoning, the review uses only the conversation and the planned action.
@@ -84,6 +84,7 @@ Example: a command keeps landing on `medium` → `ask`. Choose **Approve + Add R
   "secondaryModel": "CURRENT",
   "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
+  "askTimeoutSeconds": null,
   "riskActions": {
     "very_low": "allow",
     "low": "allow",
@@ -137,6 +138,18 @@ A model that appears more than once in the chain is tried only once: the first c
 ```
 
 Environment overrides (`PI_AI_APPROVAL_PRIMARY_MODEL`, `PI_AI_APPROVAL_SECONDARY_MODEL`, `PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL`, `PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL`, `PI_AI_APPROVAL_TIMEOUT_MS`, `PI_AI_APPROVAL_POLICY`) are also supported.
+
+### Ask timeout
+
+`askTimeoutSeconds` is how long an approval prompt waits, in seconds. The default `null` does not time out. `0` and negative numbers are the same as `null`. A positive number counts down on the prompt, in whole seconds, and declines the action when it reaches zero. That decline blocks the tool call.
+
+```json
+{
+  "askTimeoutSeconds": 30
+}
+```
+
+A trusted project file overrides the global file, including an explicit `null`. `timeoutMs` is a different setting: it limits the reviewer, not the approval prompt.
 
 ### Assessment language
 

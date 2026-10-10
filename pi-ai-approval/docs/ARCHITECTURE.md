@@ -107,7 +107,7 @@ ToolCall の間にある visible な thinking だけを current action reasoning
 
 | モジュール | 役割 |
 | --- | --- |
-| `src/config.ts` | 設定スキーマ、既定値、ファイル・環境変数の読み込み、優先順位、厳格化のみのマージ、警告。`riskActions`、`review` ルール、`primaryModel` / `secondaryModel`（`CURRENT` = セッションモデル）、`primaryThinkingLevel` / `secondaryThinkingLevel`（思考量または `CURRENT` = セッション継承、既定 `low`）、`timeoutMs`、`assessmentLanguage`、`policy`。 |
+| `src/config.ts` | 設定スキーマ、既定値、ファイル・環境変数の読み込み、優先順位、厳格化のみのマージ、警告。`riskActions`、`review` ルール、`primaryModel` / `secondaryModel`（`CURRENT` = セッションモデル）、`primaryThinkingLevel` / `secondaryThinkingLevel`（思考量または `CURRENT` = セッション継承、既定 `low`）、`timeoutMs`（レビュアー期限）、`askTimeoutSeconds`（ask プロンプトの秒数。`null` と 0 以下は期限なし）、`assessmentLanguage`、`policy`。 |
 | `src/tool-actions.ts` | `tool_call` → `ReviewAction \| undefined`。`bash.command` / `powershell.command`、`read/grep/find/ls.path`、`write/edit.path`、および汎用 `<tool>.path`（既定 `private-only`）を振り分ける。`private_data_read` を付与。 |
 | `src/gate.ts` | ゲート共通基盤: `ReviewResult`・決定型、`DenialCircuitBreaker`、`ReviewBatchTracker`、パス分類（`classifyMutationPath`、`classifyReadPath`、`shouldReviewPath`）、ディレクトリのプライベートデータ走査。 |
 | `src/path-rules.ts` | プライベート読み取り・センシティブ変更ルールの監査可能なリテラルカタログ（認証系ベース名、プライベートセグメント、サフィックス、Pi データパス）。I/O なし。 |
@@ -119,10 +119,10 @@ ToolCall の間にある visible な thinking だけを current action reasoning
 | `src/reviewer-channels.ts` | `primary → secondary → current-model` 連鎖: モデル同一性で重複排除（思考量は同一性に含めない）、`CURRENT` 思考量の解決（`resolveReviewerThinkingLevel`。セッション値がなければ `low`）、`reviewerHealth`、`shouldFallbackReview`（failure/timeout のみ）、`runReviewWithFallbackChain`。current-model チャネルは常にセッション思考量を使う。 |
 | `src/reviewer-tools.ts` | レビュアー側ツールのサンドボックス: プライベート範囲に触れる調査は漏洩させる代わりに例外化するガード付き読み取り専用ツール定義。 |
 | `src/risk-policy.ts` | 純粋な `assessment → allow/ask/deny` 変換（`resolveRiskAction` / `applyRiskPolicy`）。手作り設定で迂回されても `very_high` / `critical` の `allow` を拒否。I/O・UI なし。 |
-| `src/approval-prompt.ts` | `ask` の UX と文面: プロンプトのタイトル（`Approval Required`）と本文を1つの Markdown 文書（`**Risk: …**` / `Review Information:` / `Operation (tool: <ツール名>):` + 言語ラベル付きコードブロック / `Operation Summary:` / `Reason:`。見出しは使わず、すべてプレーンな行 + コードブロック）として単一定義し、非 TUI にはタイトルを本文先頭に付けた同じ文書を渡す（TUI はタイトルを罫線に埋め込む）。`Review Information:` には、ルールで分類が下がった場合のみ `Session Rule:` 行（ID・本文・下げ元レベル）を追加する。操作プレビューのシェル別プレフィックス（`$ ` / `PS> `）と言語ラベル（`bash` / `powershell`）、動的値の制御文字/ANSI 除去・単一行化・400 文字上限、リスク行は太字に加えてレベル別の強調色（medium/high = `warning`、very_high/critical = `error`。太字を描画しない端末向け）、選択肢は `Deny / Approve / Approve + Add Rule` の3択で `Deny` が初期選択（Enter = ブロック）、第三選択肢は `ctx.ui.input` を開き Enter で確定・Esc で選択肢に再表示、空入力・上限超過・入力 UI 失敗では許可しない、対話 TUI + TTY では表示時に BEL でベルを鳴らす（失敗してもプロンプト継続、RPC/JSON/print では鳴らさない）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。TUI では `approval-dialog`、それ以外は `ui.select` に振り分ける。コマンドがプレビュー上限で切れた場合のみ省略ヒント `... (truncated, ctrl+o to expand)` を付け、同じ文書の展開版（`expansion`）を TUI にだけ渡す（非 TUI は `… [truncated]` のまま）。 |
+| `src/approval-prompt.ts` | `ask` の UX と文面: プロンプトのタイトル（`Approval Required`）と本文を1つの Markdown 文書（`**Risk: …**` / `Review Information:` / `Operation (tool: <ツール名>):` + 言語ラベル付きコードブロック / `Operation Summary:` / `Reason:`。見出しは使わず、すべてプレーンな行 + コードブロック）として単一定義し、非 TUI にはタイトルを本文先頭に付けた同じ文書を渡す（TUI はタイトルを罫線に埋め込む）。`Review Information:` には、ルールで分類が下がった場合のみ `Session Rule:` 行（ID・本文・下げ元レベル）を追加する。操作プレビューのシェル別プレフィックス（`$ ` / `PS> `）と言語ラベル（`bash` / `powershell`）、動的値の制御文字/ANSI 除去・単一行化・400 文字上限、リスク行は太字に加えてレベル別の強調色（medium/high = `warning`、very_high/critical = `error`。太字を描画しない端末向け）、選択肢は `Deny / Approve / Approve + Add Rule` の3択で `Deny` が初期選択（Enter = ブロック）、第三選択肢は `ctx.ui.input` を開き Enter で確定・Esc で選択肢に再表示、空入力・上限超過・入力 UI 失敗では許可しない、対話 TUI + TTY では表示時に BEL でベルを鳴らす（失敗してもプロンプト継続、RPC/JSON/print では鳴らさない）、`ApprovalQueue` で並行プロンプトを直列化、UI エラー → declined。`askTimeoutSeconds` が正のとき、表示開始からの期限で選択肢とルール入力の両方を閉じ、期限後の Approve は許可しない。TUI は残り秒数を `Times out in Ns` としてピン留めし、それ以外は `ui.select` / `ui.input` の `timeout` に残ミリ秒を渡す。TUI では `approval-dialog`、それ以外は `ui.select` に振り分ける。コマンドがプレビュー上限で切れた場合のみ省略ヒント `... (truncated, ctrl+o to expand)` を付け、同じ文書の展開版（`expansion`）を TUI にだけ渡す（非 TUI は `… [truncated]` のまま）。 |
 | `src/session-rules.ts` | セッション承認ルールの純粋ロジック: メモリ内ストア（追加・編集・削除・全消去、`rule-N` の安定ID）、サニタイズ（制御文字/ANSI 除去・単一行化）、空文字・500字・20件の上限検証、`lowerRiskLevel`（1段階のみ、`very_low` 据え置き）、`applySessionRulePolicy`（一致ルールで `ask`/`deny` を1段階下げて再適用。`allow` は変化なし、下げた先が `deny` なら元の判定と元レベルを維持し、判定を強化しない）。I/O・UI なし。 |
 | `src/session-rules-command.ts` | `/ai-approval session-rules` の対話マネージャ: 一覧（ID・本文）、追加（`ui.input`）、編集（`ui.editor` に現在のテキストを prefill）、削除。`ui.select` / `ui.input` / `ui.editor` のみを使い `ui.custom` は使わないため RPC でも動作する。Esc（`undefined`）は常に無変更で戻る。 |
-| `src/approval-dialog.ts` | TUI 承認ダイアログ: 最上部にタイトル（theme の `accent` 色）を埋め込んだ全幅の罫線（dashes は `border` 色）を固定表示してセッション表示との境界を示し、渡された Markdown 文書を標準の `Markdown` コンポーネントで描画し（コードブロックの言語ラベルとシンタックスハイライトを含む）、リスク行だけをテーマ色で組み直して強調する。罫線 1 行を高さ計算に含め、端末行数から本文ビューポートを算出してスクロール（`shift+↑↓`・ホイール・一時表示スクロールバー）し、選択肢は本文の外側に固定する。`ui.custom()` が `signal` を受け付けないため abort を自前で購読する。`expansion` を持つときは `ctrl+o`、または省略マーカー文字列そのものの左クリック（マーカー行でも文字列の外側は無反応。折り返し時は開始行のマーカー位置から終了行のマーカー末尾までが対象）で本文を展開版に差し替え、展開中はヘルプ行に `ctrl+o collapse` を出す（選択中の選択肢とスクロール位置は維持し、ピン留めした選択肢は常に見えたまま）。マウス入力が届くのはフルスクリーン表示のときだけで、通常会話表示では `ctrl+o` のみ。 |
+| `src/approval-dialog.ts` | TUI 承認ダイアログ: 最上部にタイトル（theme の `accent` 色）を埋め込んだ全幅の罫線（dashes は `border` 色）を固定表示してセッション表示との境界を示し、渡された Markdown 文書を標準の `Markdown` コンポーネントで描画し（コードブロックの言語ラベルとシンタックスハイライトを含む）、リスク行だけをテーマ色で組み直して強調する。罫線 1 行を高さ計算に含め、端末行数から本文ビューポートを算出してスクロール（`shift+↑↓`・ホイール・一時表示スクロールバー）し、選択肢は本文の外側に固定する。`ui.custom()` が `signal` を受け付けないため abort を自前で購読する。`timeoutMs` があるときは選択肢の上に残り秒数を出し、0 で Esc と同じく declined にする。`expansion` を持つときは `ctrl+o`、または省略マーカー文字列そのものの左クリック（マーカー行でも文字列の外側は無反応。折り返し時は開始行のマーカー位置から終了行のマーカー末尾までが対象）で本文を展開版に差し替え、展開中はヘルプ行に `ctrl+o collapse` を出す（選択中の選択肢とスクロール位置は維持し、ピン留めした選択肢は常に見えたまま）。マウス入力が届くのはフルスクリーン表示のときだけで、通常会話表示では `ctrl+o` のみ。 |
 | `src/review-presentation.ts` | 人・ agent 向け文面: `riskLabel`、操作プレビュー、`formatReviewResult`（UI 通知用）、`rejectionReason`（agent 向けブロック理由。回避策禁止の指示付き）。`shellCommandPreview` はシェルコマンドの折りたたみ形（300 文字上限・マーカー無し）と展開形（改行保持・上限無し）を返し、展開できるのはシェルコマンドだけ。 |
 | `src/reviewer-status.ts` | `/ai-approval` の status・`rules` 出力、起動時ヘルス同期、フォールバック通知。両方の設定ファイルが存在しない場合の起動時 `/ai-approval init` 案内を含む。 |
 | `src/authorization-provenance.ts` | `DirectUserInputTracker` + `collectReviewMessages`: 展開前入力と保存済みユーザーメッセージを突合し、完全一致した対話・RPC のみを `direct_user` とする。 |
@@ -134,9 +134,10 @@ ToolCall の間にある visible な thinking だけを current action reasoning
 
 `loadApprovalConfig({ cwd, projectTrusted, agentDir, env })`:
 
-- モデル・思考量・タイムアウト（`primaryModel`、`secondaryModel`、`primaryThinkingLevel`、`secondaryThinkingLevel`、`timeoutMs`）:
+- モデル・思考量・レビュアー期限（`primaryModel`、`secondaryModel`、`primaryThinkingLevel`、`secondaryThinkingLevel`、`timeoutMs`）:
   環境変数 > 信頼済みプロジェクトファイル > グローバルファイル > 組み込み既定値
   （モデル `CURRENT` = セッションモデルであり、既定値でもある。思考量 `CURRENT` = セッション思考量の継承。思考量の既定値は `low`、current-model チャネルは常にセッション思考量）。
+- `askTimeoutSeconds`: 信頼済みプロジェクトファイル > グローバルファイル > 既定値 `null`（期限なし）。`null` と 0 以下は期限なし。不正な値は警告して無視し、次のソースへ落ちる。
 - `assessmentLanguage`: 信頼済みプロジェクトファイル > グローバルファイル > 既定値（`auto`）。
 - `policy`: 上書きではなく連結 —
   グローバルファイル → 信頼済みプロジェクトファイル → `PI_AI_APPROVAL_POLICY` 環境変数。
@@ -184,7 +185,7 @@ ToolCall の間にある visible な thinking だけを current action reasoning
    = 1 回のツール呼び出しのみ。追加されたルール自体は何も許可せず、以降の
    レビューでレビュアーが報告した一致IDをローカル層が検証して初めて意味を持つ。
    `ApprovalQueue` が
-   プロンプトを直列化し、`Deny` が初期選択、Esc/Ctrl-C/UI 不可 = ブロック。TUI ダイアログはタイトルを罫線に、本文全体を標準 Markdown として描画する（明示的なユーザー判断）。動的値は制御文字/ANSI の除去・単一行化・400 文字上限のみを行い、レビュアー出力に含まれる Markdown の見出し・箇条書き・リンクはそのまま描画されうる点を既知の残存リスクとして扱う。例外はコマンドの省略表示で、300 文字で切れた場合だけ `... (truncated, ctrl+o to expand)` と表示し、`ctrl+o` またはマーカークリックで Operation ブロックを展開版に差し替える。展開版も制御文字/ANSI は除去し（改行だけを残す）、`fencedCode` が値より長いフェンスで囲むため、改行やバッククォートで文書構造を崩せない。文字数の上限は置かない（クリックか `ctrl+o` を押したときだけ描画される表示専用の文字列であり、判定には一切使わない）。展開は表示の切り替えのみで、1 回の `Approve` = 1 回のツール呼び出しは不変。
+   プロンプトを直列化し、`Deny` が初期選択、Esc/Ctrl-C/UI 不可/ask タイムアウト = ブロック。ask の期限切れは承認にならない（ルール入力中を含む）。TUI ダイアログはタイトルを罫線に、本文全体を標準 Markdown として描画する（明示的なユーザー判断）。動的値は制御文字/ANSI の除去・単一行化・400 文字上限のみを行い、レビュアー出力に含まれる Markdown の見出し・箇条書き・リンクはそのまま描画されうる点を既知の残存リスクとして扱う。例外はコマンドの省略表示で、300 文字で切れた場合だけ `... (truncated, ctrl+o to expand)` と表示し、`ctrl+o` またはマーカークリックで Operation ブロックを展開版に差し替える。展開版も制御文字/ANSI は除去し（改行だけを残す）、`fencedCode` が値より長いフェンスで囲むため、改行やバッククォートで文書構造を崩せない。文字数の上限は置かない（クリックか `ctrl+o` を押したときだけ描画される表示専用の文字列であり、判定には一切使わない）。展開は表示の切り替えのみで、1 回の `Approve` = 1 回のツール呼び出しは不変。
 6. **TOCTOU ロック**: 承認済み入力は `tool-input-lock` で凍結され、ロック失敗は
    ブロックする。
 7. **リトライループの遮断**: `DenialCircuitBreaker`（連続 3 回または直近 50 件中 10 回の

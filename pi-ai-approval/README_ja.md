@@ -26,7 +26,7 @@ deny ─────────→ ブロック
 ```
 
 - **`allow`**: ユーザー確認なしでツール呼び出しを実行します。
-- **`ask`**: 承認プロンプトを表示します。選択肢は **Deny / Approve / Approve + Add Rule（デフォルト選択は Deny）** に固定されています。
+- **`ask`**: 承認プロンプトを表示します。選択肢は **Deny / Approve / Approve + Add Rule（デフォルト選択は Deny）** に固定されています。`askTimeoutSeconds` でプロンプトを開いておく秒数を制限できます。デフォルトの `null` は回答があるまで待ちます。制限があるあいだは残り秒数がカウントダウンされ、0 になると操作は拒否されます。
 - **`deny`**: ツール呼び出しをブロックし、AI による判定理由とともに「回避策などで同じ操作を再試行しないこと」という指示をエージェントへ返します。
 
 レビュワーは利用可能な場合、現在のツール呼び出しに直接関連するエージェントの思考プロセス（reasoning）も補助的な判断材料として参照します。ただし reasoning は信頼できない情報として扱われ、ユーザーがその操作を許可または指示したことの証明にはなりません。モデルやプロバイダーが reasoning を公開していない場合、レビューは会話履歴と実行予定の操作内容のみを用いて行われます。
@@ -84,6 +84,7 @@ Approve（`Approve + Add Rule` を含む）が適用されるのは**その1件�
   "secondaryModel": "CURRENT",
   "secondaryThinkingLevel": "low",
   "timeoutMs": 90000,
+  "askTimeoutSeconds": null,
   "riskActions": {
     "very_low": "allow",
     "low": "allow",
@@ -137,6 +138,18 @@ Approve（`Approve + Add Rule` を含む）が適用されるのは**その1件�
 ```
 
 環境変数による設定の上書き（`PI_AI_APPROVAL_PRIMARY_MODEL`、`PI_AI_APPROVAL_SECONDARY_MODEL`、`PI_AI_APPROVAL_PRIMARY_THINKING_LEVEL`、`PI_AI_APPROVAL_SECONDARY_THINKING_LEVEL`、`PI_AI_APPROVAL_TIMEOUT_MS`、`PI_AI_APPROVAL_POLICY`）にも対応しています。
+
+### ask のタイムアウト
+
+`askTimeoutSeconds` は、承認プロンプトが待つ時間（秒）です。デフォルトの `null` はタイムアウトしません。`0` 以下の数値も `null` と同じです。正の数を指定すると、プロンプト上で残り秒数がカウントダウンされ、0 になると操作は拒否されてブロックされます。
+
+```json
+{
+  "askTimeoutSeconds": 30
+}
+```
+
+信頼されたプロジェクトの設定ファイルは、明示的な `null` を含めてグローバル設定を上書きします。`timeoutMs` は別の設定で、承認プロンプトではなくレビュワーの制限時間です。
 
 ### 判定コメントの言語
 

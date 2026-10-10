@@ -266,6 +266,7 @@ export async function showApprovalConfiguration(
 			`Secondary: ${modelSettingDisplay(config.secondaryModel, secondaryChannel)} (${config.secondaryModelSource}) · thinking ${thinkingSettingDisplay(config.secondaryThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL, secondaryChannel, ctx.thinkingLevel)} (${config.secondaryThinkingLevelSource ?? "default"}) · ${secondaryStatus}`,
 			`Current-model fallback: ${currentChannel?.modelSpec ?? "unavailable"} · thinking ${currentChannel ? thinkingSettingDisplay(CURRENT_MODEL_SETTING, currentChannel, ctx.thinkingLevel) : "unavailable"} · ${currentFallbackStatus}`,
 			`${formatDuration(config.timeoutMs)} deadline (${config.timeoutSource}) · up to 3 attempts per distinct reviewer channel`,
+			`Ask timeout: ${config.askTimeoutSeconds === null ? "none" : `${config.askTimeoutSeconds}s`} (${config.askTimeoutSource})`,
 			`Assessment language: ${config.assessmentLanguage} (${config.assessmentLanguageSource})`,
 			`Policy: ${config.policy ? `customized (${config.policySources.join(" + ")})` : "default"}`,
 			`Global config: ${config.globalConfigPresent ? "present" : "absent"} · ${config.globalPath}`,

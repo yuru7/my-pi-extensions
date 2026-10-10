@@ -8,7 +8,11 @@ import {
 	RTK_COMMAND_REVIEW_GUIDANCE,
 	UPSTREAM_GUARDIAN_COMMIT,
 } from "../src/policy.ts";
-import { rejectionReason } from "../src/review-presentation.ts";
+import {
+	APPROVAL_TIMEOUT_DETAIL,
+	formatReviewResult,
+	rejectionReason,
+} from "../src/review-presentation.ts";
 import {
 	buildReviewPrompt,
 	buildReviewTranscript,
@@ -767,6 +771,28 @@ test("declined approvals tell the agent not to retry the same action", () => {
 	assert.equal(
 		lines[2],
 		"Choose a materially safer alternative or ask the user in conversation.",
+	);
+});
+
+test("an ask timeout tells the agent the prompt expired", () => {
+	const assessment = {
+		risk_level: "medium" as const,
+		instruction_alignment: "direct" as const,
+		action_summary: "Rewrites the project settings file.",
+		rationale: "Bounded configuration change.",
+	};
+	const reason = rejectionReason({
+		kind: "user-declined",
+		assessment,
+		detail: APPROVAL_TIMEOUT_DETAIL,
+	});
+	assert.equal(reason.split("\n")[0], APPROVAL_TIMEOUT_DETAIL);
+	assert.match(
+		formatReviewResult(
+			{ kind: "user-declined", assessment, detail: APPROVAL_TIMEOUT_DETAIL },
+			{ tool: "bash", cwd: "/repo", payload: { command: "true" } },
+		),
+		/AI Approval · timed out · Medium risk/,
 	);
 });
 

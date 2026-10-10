@@ -112,6 +112,7 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 		secondaryModel: CURRENT_MODEL_SETTING,
 		secondaryThinkingLevel: DEFAULT_REVIEWER_THINKING_LEVEL,
 		timeoutMs: REVIEW_TIMEOUT_MS,
+		askTimeoutSeconds: null,
 		assessmentLanguage: "auto",
 		riskActions: { ...DEFAULT_RISK_ACTIONS },
 		review: { ...DEFAULT_REVIEW_RULES },
@@ -124,6 +125,8 @@ interface ApprovalConfigFile {
 	primaryThinkingLevel?: unknown;
 	secondaryThinkingLevel?: unknown;
 	timeoutMs?: unknown;
+	/** Ask-prompt limit in seconds. Null, or a number <= 0, waits with no limit. */
+	askTimeoutSeconds?: unknown;
 	policy?: unknown;
 	review?: unknown;
 	riskActions?: unknown;
@@ -142,6 +145,11 @@ export interface ApprovalConfig {
 	/** Reviewer thinking setting: a thinking level or "CURRENT". */
 	secondaryThinkingLevel: ReviewerThinkingSetting;
 	timeoutMs: number;
+	/**
+	 * How long an ask prompt waits, in seconds. Null waits until the user
+	 * answers. A configured 0 or negative number is stored as null too.
+	 */
+	askTimeoutSeconds: number | null;
 	policy?: string;
 	review: Record<string, ReviewLevel>;
 	globalPath: string;
@@ -153,6 +161,7 @@ export interface ApprovalConfig {
 	primaryThinkingLevelSource: ConfigSource;
 	secondaryThinkingLevelSource: ConfigSource;
 	timeoutSource: ConfigSource;
+	askTimeoutSource: ConfigSource;
 	policySources: Array<"environment" | "project" | "global">;
 	riskActions: RiskActions;
 	/** Language for reviewer comments: "auto" or a fixed language name. */
@@ -246,6 +255,10 @@ export function loadApprovalConfig(
 		["project", projectConfig.timeoutMs],
 		["global", globalConfig.timeoutMs],
 	);
+	const askTimeoutValue = firstAskTimeoutWithSource(
+		["project", projectConfig.askTimeoutSeconds],
+		["global", globalConfig.askTimeoutSeconds],
+	);
 	const policies = [
 		["global", globalConfig.policy],
 		["project", projectConfig.policy],
@@ -291,6 +304,7 @@ export function loadApprovalConfig(
 		secondaryThinkingLevel:
 			secondaryThinkingValue?.value ?? DEFAULT_REVIEWER_THINKING_LEVEL,
 		timeoutMs: timeoutValue?.value ?? REVIEW_TIMEOUT_MS,
+		askTimeoutSeconds: askTimeoutValue?.seconds ?? null,
 		policy:
 			policySources.length > 0
 				? policies
@@ -312,6 +326,7 @@ export function loadApprovalConfig(
 		primaryThinkingLevelSource: primaryThinkingValue?.source ?? "default",
 		secondaryThinkingLevelSource: secondaryThinkingValue?.source ?? "default",
 		timeoutSource: timeoutValue?.source ?? "default",
+		askTimeoutSource: askTimeoutValue?.source ?? "default",
 		policySources,
 		warnings,
 	};
@@ -342,6 +357,7 @@ const CONFIG_FILE_KEYS = new Set([
 	"primaryThinkingLevel",
 	"secondaryThinkingLevel",
 	"timeoutMs",
+	"askTimeoutSeconds",
 	"policy",
 	"review",
 	"riskActions",
@@ -477,6 +493,14 @@ function validateConfigFile(
 			`Invalid timeoutMs in ${path}: expected an integer from 1000 to 300000.`,
 		);
 	}
+	if (
+		config.askTimeoutSeconds !== undefined &&
+		readAskTimeoutSeconds(config.askTimeoutSeconds) === "invalid"
+	) {
+		warnings.push(
+			`Invalid askTimeoutSeconds in ${path}: expected null or a number. 0 or less disables the timeout.`,
+		);
+	}
 	if (config.policy !== undefined && typeof config.policy !== "string") {
 		warnings.push(`Invalid policy in ${path}: expected a string.`);
 	}
@@ -599,6 +623,32 @@ function firstTimeoutWithSource(
 	for (const [source, value] of values) {
 		const timeout = firstTimeout(value);
 		if (timeout !== undefined) return { source, value: timeout };
+	}
+	return undefined;
+}
+
+/**
+ * Null and numbers <= 0 mean "no ask timeout". Anything else that is not a
+ * finite number is invalid and left for the caller to warn about.
+ */
+function readAskTimeoutSeconds(
+	value: unknown,
+): "absent" | "invalid" | { seconds: number | null } {
+	if (value === undefined) return "absent";
+	if (value === null) return { seconds: null };
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return { seconds: value > 0 ? value : null };
+	}
+	return "invalid";
+}
+
+function firstAskTimeoutWithSource(
+	...values: Array<[ApprovalConfig["askTimeoutSource"], unknown]>
+): { source: ApprovalConfig["askTimeoutSource"]; seconds: number | null } | undefined {
+	for (const [source, value] of values) {
+		const parsed = readAskTimeoutSeconds(value);
+		if (parsed === "absent" || parsed === "invalid") continue;
+		return { source, seconds: parsed.seconds };
 	}
 	return undefined;
 }

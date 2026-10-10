@@ -35,6 +35,8 @@ const FALLBACK_WIDTH = 80;
 const SCROLLBAR_HIDE_DELAY_MS = 1_200;
 const CHOICE_CHARS = 40;
 const HELP_TEXT = "\u2191\u2193 select \u00b7 enter confirm \u00b7 esc cancel";
+/** Node's setTimeout delay is a 32-bit signed integer. Longer waits are sliced. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 /** Added to the help line while the expanded document is on screen. */
 const COLLAPSE_HINT = "ctrl+o collapse";
 
@@ -95,6 +97,12 @@ function markerTargets(
 	return targets;
 }
 
+function defaultSchedule(callback: () => void, delayMs: number): () => void {
+	const timer = setTimeout(callback, delayMs);
+	timer.unref?.();
+	return () => clearTimeout(timer);
+}
+
 /** Alternate rendering of the prompt with the Operation block shown in full. */
 export interface ApprovalExpansion {
 	/** Document rendered while the block is expanded. */
@@ -120,6 +128,18 @@ export interface ApprovalDialogRequest {
 	 * marker then swap the body between the collapsed and the expanded document.
 	 */
 	expansion?: ApprovalExpansion;
+	/**
+	 * Ask-prompt limit in milliseconds. Omitted or not positive means the dialog
+	 * waits until the user answers. While it is open, the remaining whole seconds
+	 * count down above the help line, and reaching zero declines.
+	 */
+	timeoutMs?: number;
+	/** Abort that declines the dialog, including an ask-timeout signal. */
+	signal?: AbortSignal;
+	/** Clock for the countdown. Defaults to `Date.now`. */
+	now?: () => number;
+	/** Schedules the next countdown tick. Defaults to `setTimeout`. */
+	schedule?: (callback: () => void, delayMs: number) => () => void;
 }
 
 export interface ApprovalDialogOptions extends ApprovalDialogRequest {
@@ -170,6 +190,11 @@ export class ApprovalDialog implements Component {
 	private abortSignal?: AbortSignal;
 	private abortHandler?: () => void;
 	private closed = false;
+	private readonly now: () => number;
+	private readonly schedule: (callback: () => void, delayMs: number) => () => void;
+	private deadline?: number;
+	private remainingSeconds?: number;
+	private cancelTimeout?: () => void;
 
 	constructor(options: ApprovalDialogOptions) {
 		this.markdown = options.markdown;
@@ -184,7 +209,10 @@ export class ApprovalDialog implements Component {
 		this.onDecision = options.onDecision;
 		this.scrollbarHideDelayMs =
 			options.scrollbarHideDelayMs ?? SCROLLBAR_HIDE_DELAY_MS;
+		this.now = options.now ?? Date.now;
+		this.schedule = options.schedule ?? defaultSchedule;
 		this.body = this.createBody();
+		this.armTimeout(options.timeoutMs);
 	}
 
 	/** Current scroll offset of the body, in lines. */
@@ -301,6 +329,7 @@ export class ApprovalDialog implements Component {
 	dispose(): void {
 		if (this.hideTimer) clearTimeout(this.hideTimer);
 		this.hideTimer = undefined;
+		this.clearTimeoutTimer();
 		this.detachAbort();
 	}
 
@@ -388,7 +417,46 @@ export class ApprovalDialog implements Component {
 	private decide(choice: string | undefined): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.clearTimeoutTimer();
 		this.onDecision(choice);
+	}
+
+	/**
+	 * Starts the visible countdown. The tick lands when the displayed second
+	 * changes, and zero declines. No timer is armed when there is no timeout.
+	 */
+	private armTimeout(timeoutMs: number | undefined): void {
+		if (timeoutMs === undefined || !(timeoutMs > 0) || !Number.isFinite(timeoutMs)) {
+			return;
+		}
+		this.deadline = this.now() + timeoutMs;
+		this.syncTimeout();
+	}
+
+	private syncTimeout(): void {
+		if (this.closed || this.deadline === undefined) return;
+		const remainingMs = this.deadline - this.now();
+		const seconds = Math.ceil(remainingMs / 1000);
+		if (seconds <= 0) {
+			this.clearTimeoutTimer();
+			this.cancel();
+			return;
+		}
+		const changed = seconds !== this.remainingSeconds;
+		this.remainingSeconds = seconds;
+		if (changed && this.lastWidth !== undefined) this.requestRender();
+		const untilNextSecond = remainingMs - (seconds - 1) * 1000;
+		const delay = Math.min(
+			untilNextSecond > 0 ? untilNextSecond : 1000,
+			MAX_TIMER_DELAY_MS,
+		);
+		this.clearTimeoutTimer();
+		this.cancelTimeout = this.schedule(() => this.syncTimeout(), delay);
+	}
+
+	private clearTimeoutTimer(): void {
+		this.cancelTimeout?.();
+		this.cancelTimeout = undefined;
 	}
 
 	private detachAbort(): void {
@@ -454,7 +522,11 @@ export class ApprovalDialog implements Component {
 				? `${this.theme.fg("accent", "\u2192 ")}${this.theme.fg("accent", label)}`
 				: `  ${this.theme.fg("text", label)}`;
 		});
-		return ["", ...rows, this.theme.fg("dim", this.helpText())];
+		const timeout =
+			this.remainingSeconds === undefined
+				? []
+				: [this.theme.fg("dim", `Times out in ${this.remainingSeconds}s`)];
+		return ["", ...rows, ...timeout, this.theme.fg("dim", this.helpText())];
 	}
 
 	/** Help line, which also names the way back out of the expanded body. */
@@ -574,7 +646,7 @@ export function showApprovalDialog(
 				requestRender: () => tui.requestRender(),
 				onDecision: (choice) => done(choice),
 			});
-			dialog.watchAbort(ctx.signal);
+			dialog.watchAbort(request.signal ?? ctx.signal);
 			return dialog;
 		},
 	);

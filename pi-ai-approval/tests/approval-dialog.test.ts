@@ -91,6 +91,9 @@ function harness(
 		scrollbarHideDelayMs?: number;
 		theme?: Theme;
 		markdownTheme?: MarkdownTheme;
+		timeoutMs?: number;
+		now?: () => number;
+		schedule?: (callback: () => void, delayMs: number) => () => void;
 	} = {},
 ): DialogHarness {
 	const choices: (string | undefined)[] = [];
@@ -112,6 +115,9 @@ function harness(
 		requestRender: () => {},
 		onDecision: (choice) => choices.push(choice),
 		scrollbarHideDelayMs: options.scrollbarHideDelayMs,
+		timeoutMs: options.timeoutMs,
+		now: options.now,
+		schedule: options.schedule,
 	});
 	return {
 		dialog,
@@ -599,4 +605,70 @@ test("a fitting body never scrolls and every line fits the width", () => {
 			);
 		}
 	}
+});
+
+test("counts down an ask timeout and declines when it reaches zero", () => {
+	let now = 1_000;
+	const pending: Array<{ at: number; fn: () => void }> = [];
+	const { dialog, choices, render } = harness({
+		timeoutMs: 2_500,
+		now: () => now,
+		schedule: (fn, delay) => {
+			const item = { at: now + delay, fn };
+			pending.push(item);
+			return () => {
+				const index = pending.indexOf(item);
+				if (index >= 0) pending.splice(index, 1);
+			};
+		},
+	});
+	const fire = () => {
+		for (const item of pending.filter((entry) => entry.at <= now)) {
+			const index = pending.indexOf(item);
+			if (index < 0) continue;
+			pending.splice(index, 1);
+			item.fn();
+		}
+	};
+
+	assert.match(render().join("\n"), /Times out in 3s/);
+	assert.match(render().join("\n"), /enter confirm/);
+	now = 1_500;
+	fire();
+	assert.match(render().join("\n"), /Times out in 2s/);
+	assert.deepEqual(choices, []);
+
+	now = 2_500;
+	fire();
+	assert.match(render().join("\n"), /Times out in 1s/);
+
+	now = 3_500;
+	fire();
+	assert.deepEqual(choices, [undefined]);
+	dialog.dispose();
+	assert.equal(pending.length, 0);
+});
+
+test("an answer before the ask timeout cancels the countdown", () => {
+	let now = 0;
+	const pending: Array<{ at: number; fn: () => void }> = [];
+	const { dialog, choices } = harness({
+		timeoutMs: 5_000,
+		now: () => now,
+		schedule: (fn, delay) => {
+			const item = { at: now + delay, fn };
+			pending.push(item);
+			return () => {
+				const index = pending.indexOf(item);
+				if (index >= 0) pending.splice(index, 1);
+			};
+		},
+	});
+	dialog.handleInput("\x1b[B");
+	dialog.handleInput("\r");
+	assert.deepEqual(choices, ["Approve"]);
+	assert.equal(pending.length, 0);
+	now = 10_000;
+	assert.deepEqual(choices, ["Approve"]);
+	dialog.dispose();
 });

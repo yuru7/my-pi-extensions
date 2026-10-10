@@ -672,6 +672,7 @@ export default function aiApproval(
 		const approval = await approvalQueue.runExclusive(() =>
 			showApprovalPrompt(action, decision.assessment, assessor, ctx, {
 				submitSessionRule: (text) => addSessionRule(text, ctx),
+				timeoutSeconds: config.askTimeoutSeconds,
 				...(ruleNote ? { sessionRule: ruleNote } : {}),
 			}),
 		);
