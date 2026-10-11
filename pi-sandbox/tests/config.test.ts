@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SANDBOX_CONFIG, getSandboxConfig, isAutoReviewTimeoutMs, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, validateSandboxConfig } from "../src/config";
+import { DEFAULT_SANDBOX_CONFIG, buildDefaultConfigFile, getSandboxConfig, isAutoReviewTimeoutMs, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, validateSandboxConfig } from "../src/config";
 
 let dir: string;
 let agentDir: string;
@@ -220,5 +220,27 @@ describe("validateSandboxConfig", () => {
 		expect(() => validateSandboxConfig({ probeTimeoutMs: 0 }, "t")).toThrow(/probeTimeoutMs/);
 		expect(() => validateSandboxConfig({ probeTimeoutMs: Number.NaN }, "t")).toThrow(/probeTimeoutMs/);
 		expect(validateSandboxConfig({ probeTimeoutMs: 100 }, "t").probeTimeoutMs).toBe(100);
+	});
+	it("includeGitRoot defaults to true and turns the git-root widening off when false", () => {
+		expect(validateSandboxConfig({}, "t").includeGitRoot).toBe(true);
+		expect(validateSandboxConfig({ includeGitRoot: false }, "t").includeGitRoot).toBe(false);
+	});
+	it("includeGitRoot must be a boolean; null does not slip through as the default", () => {
+		expect(() => validateSandboxConfig({ includeGitRoot: "false" }, "t")).toThrow(/includeGitRoot must be a boolean/);
+		expect(() => validateSandboxConfig({ includeGitRoot: 0 }, "t")).toThrow(/includeGitRoot must be a boolean/);
+		expect(() => validateSandboxConfig({ includeGitRoot: null }, "t")).toThrow(/includeGitRoot must be a boolean/);
+		expect(validateSandboxConfig({ includeGitRoot: true }, "t").includeGitRoot).toBe(true);
+	});
+	it("includeGitRoot merges fieldwise: project overrides global, absent means on", () => {
+		expect(loadSandboxConfig(projectDir).includeGitRoot).toBe(true);
+		writeGlobal({ includeGitRoot: false }, "pi-sandbox.json");
+		expect(loadSandboxConfig(projectDir).includeGitRoot).toBe(false);
+		writeProject({ includeGitRoot: true }, "pi-sandbox.json");
+		expect(loadSandboxConfig(projectDir).includeGitRoot).toBe(true);
+		writeProject({ includeGitRoot: false }, "pi-sandbox.json");
+		expect(loadSandboxConfig(projectDir).includeGitRoot).toBe(false);
+	});
+	it("buildDefaultConfigFile writes includeGitRoot: true (the built-in default)", () => {
+		expect(buildDefaultConfigFile().includeGitRoot).toBe(true);
 	});
 });

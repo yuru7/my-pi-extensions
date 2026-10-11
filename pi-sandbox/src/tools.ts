@@ -63,6 +63,7 @@ import {
 	type FencePolicy,
 	isWithinRoots,
 } from "./fence";
+import { gitWritableRoots } from "./git-root";
 import {
 	assertCanCreateDirectory,
 	createMissingGrantDirectories,
@@ -811,8 +812,18 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		deps.cwd,
 	);
 
-	const extraRootsFor = (sessionId: string | null): readonly string[] =>
-		sessionId === null ? [] : getWritableGrants().list(sessionId);
+	/** Extra writable roots of one call: git metadata roots (workspace-write only, and only while `includeGitRoot` is on — read-only opens nothing) plus the session's approved grants. */
+	const extraRootsFor = (
+		sessionId: string | null,
+		mode: SandboxMode,
+		sessionCwd: string,
+	): readonly string[] => [
+		...(mode === "workspace-write" &&
+		configForCall(deps, sessionCwd).includeGitRoot
+			? gitWritableRoots(sessionCwd)
+			: []),
+		...(sessionId === null ? [] : getWritableGrants().list(sessionId)),
+	];
 	const recordDenial = (
 		entry: Omit<DenialRecord, "recordedAt" | "writablePaths">,
 	): void => {
@@ -820,7 +831,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			entry.sandboxMode,
 			entry.workspace,
 			deps._tmpRoots ?? defaultTmpRoots(),
-			extraRootsFor(entry.sessionId),
+			extraRootsFor(entry.sessionId, entry.sandboxMode, entry.cwd),
 		);
 		getDenialLedger().record({
 			...entry,
@@ -866,7 +877,6 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const config = configForCall(deps, sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const extraRoots = extraRootsFor(sessionId);
 			const { mode, escalated, ignoredEscalation } = await resolveCall(
 				params as EscalationParams,
 				ctx,
@@ -876,6 +886,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"bash",
 			);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
 			// M3: when a custom runnerCommand is configured, skip chain probing (confine uses runnerCommand directly).
 			const selected =
 				mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
@@ -941,7 +952,6 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const extraRoots = extraRootsFor(sessionId);
 			const { mode, escalated, ignoredEscalation } = await resolveCall(
 				params as EscalationParams,
 				ctx,
@@ -951,6 +961,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"write",
 			);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
 			// Do not catch a fence denial: FenceDenialError is thrown from ops and rethrown as-is through pi's execute
 			// (withFileMutationQueue does not swallow errors)—pi's agent loop turns it into an error result.
 			const config = configForCall(deps, sessionCwd);
@@ -1013,7 +1024,6 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			const sessionCwd = (ctx as { cwd?: string }).cwd ?? deps.cwd;
 			const workspaceRoot = workspaceRootFor(sessionCwd);
 			const sessionId = readSessionId(ctx);
-			const extraRoots = extraRootsFor(sessionId);
 			const { mode, escalated, ignoredEscalation } = await resolveCall(
 				params as EscalationParams,
 				ctx,
@@ -1023,6 +1033,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"edit",
 			);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
 			const config = configForCall(deps, sessionCwd);
 			const tool = createEditToolDefinition(sessionCwd, {
 				operations: createFencedEditOps(
@@ -1087,7 +1098,6 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 						const workspaceRoot = workspaceRootFor(sessionCwd);
 						const config = configForCall(deps, sessionCwd);
 						const sessionId = readSessionId(ctx);
-						const extraRoots = extraRootsFor(sessionId);
 						const { mode, escalated, ignoredEscalation } = await resolveCall(
 							params as EscalationParams,
 							ctx,
@@ -1097,6 +1107,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 							signal,
 							"powershell",
 						);
+						const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
 						const selected =
 							mode === "danger-full-access" ||
 							(config.runnerCommand?.length ?? 0) > 0
@@ -1225,7 +1236,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				effective,
 				workspaceRoot,
 				deps._tmpRoots ?? defaultTmpRoots(),
-				extraRootsFor(sessionId),
+				extraRootsFor(sessionId, effective, sessionCwd),
 			);
 			if (isWithinRoots(requested, roots)) {
 				return textResult(

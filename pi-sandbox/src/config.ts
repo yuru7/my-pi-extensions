@@ -47,6 +47,8 @@ export interface SandboxConfig {
 	runnerFailureSignatures: string[] | null;
 	/** Timeout for each capability probe; must be a positive finite number (0 means no timeout in Node). */
 	probeTimeoutMs: number;
+	/** Widen workspace-write to the git repository root when the workspace is a git-managed subdirectory (git commit writes into .git). */
+	includeGitRoot: boolean;
 	approvalMode: ApprovalMode;
 	autoReview: AutoReviewConfig;
 	/** Reviewer 1 試行の上限（ミリ秒）。 */
@@ -73,6 +75,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
 	runnerCommand: null,
 	runnerFailureSignatures: null,
 	probeTimeoutMs: 5000,
+	includeGitRoot: true,
 	approvalMode: DEFAULT_APPROVAL.approvalMode,
 	autoReview: DEFAULT_APPROVAL.autoReview,
 	autoReviewTimeoutMs: DEFAULT_APPROVAL.autoReviewTimeoutMs,
@@ -89,6 +92,7 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 		runnerCommand: DEFAULT_SANDBOX_CONFIG.runnerCommand,
 		runnerFailureSignatures: DEFAULT_SANDBOX_CONFIG.runnerFailureSignatures,
 		probeTimeoutMs: DEFAULT_SANDBOX_CONFIG.probeTimeoutMs,
+		includeGitRoot: DEFAULT_SANDBOX_CONFIG.includeGitRoot,
 		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
 		autoReview: {
 			model: DEFAULT_SANDBOX_CONFIG.autoReview.model,
@@ -100,7 +104,7 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 
 const APPROVAL_MODES = ["human", "auto-review", "allow-all"] as const;
 const LEGACY_GROUPS = ["image", "runtime", "host"] as const;
-const SANDBOX_FIELD_KEYS = ["mode", "runnerCommand", "runnerFailureSignatures", "probeTimeoutMs"] as const;
+const SANDBOX_FIELD_KEYS = ["mode", "runnerCommand", "runnerFailureSignatures", "probeTimeoutMs", "includeGitRoot"] as const;
 const NEW_CONFIG_NAME = "pi-sandbox.json";
 const LEGACY_CONFIG_NAME = "sandbox.json";
 
@@ -327,11 +331,21 @@ export function validateSandboxConfig(raw: Record<string, unknown>, source: stri
 		throw new Error(`sandbox: ${source}: probeTimeoutMs must be a positive finite number`);
 	}
 
+	// `??` would accept null as the default; only an absent key falls back to the default.
+	const includeGitRoot =
+		raw.includeGitRoot === undefined
+			? DEFAULT_SANDBOX_CONFIG.includeGitRoot
+			: raw.includeGitRoot;
+	if (typeof includeGitRoot !== "boolean") {
+		throw new Error(`sandbox: ${source}: includeGitRoot must be a boolean`);
+	}
+
 	return {
 		mode,
 		runnerCommand: runnerCommand as string[] | null,
 		runnerFailureSignatures: runnerFailureSignatures as string[] | null,
 		probeTimeoutMs,
+		includeGitRoot,
 		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
 		autoReview: DEFAULT_SANDBOX_CONFIG.autoReview,
 		autoReviewTimeoutMs: DEFAULT_SANDBOX_CONFIG.autoReviewTimeoutMs,

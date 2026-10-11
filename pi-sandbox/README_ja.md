@@ -21,11 +21,19 @@ pi install .
 
 | モード | ファイルへの影響 |
 |---|---|
-| `workspace-write`（デフォルト） | 作業ディレクトリ（ワークスペース） + `/tmp` + `os.tmpdir()` のみ書き込み可能。その他はすべて読み取り専用 |
+| `workspace-write`（デフォルト） | 作業ディレクトリ（ワークスペース） + `/tmp` + `os.tmpdir()` のみ書き込み可能（ワークスペースが git 管理サブディレクトリの場合はリポジトリルートも追加。`includeGitRoot` がオフなら加えない）。その他はすべて読み取り専用 |
 | `read-only` | 書き込み不可（`/dev/null` や Windows の `NUL` デバイスのみ書き込み可能）。その他はすべて読み取り専用 |
 | `danger-full-access` | サンドボックスを完全にバイパスし、無制限のフルアクセスを許可（明示的なエスケープハッチ） |
 
 > **注意**: ネットワーク通信は常に許可されています（ネットワーク分離はありません）。
+
+### git 管理サブディレクトリ
+
+`workspace-write` では、作業ディレクトリが git 管理サブディレクトリ（祖先に `.git` がある）のとき、書き込み可能の範囲にリポジトリルートも加えます。`git commit` は `.git` に書き込むため、これがフェンスの外にあると必ず拒否されてしまうからです。`.git` があるディレクトリを書き込み可能にし、`.git` がファイルのとき（リンクされた worktree や submodule）は、`gitdir:` の参照先とその `commondir` も加えます。検出は作業ディレクトリから上へたどってディレクトリごとに1回だけ行い、結果を記憶するので呼び出しごとの再走査は起きません。適用は `workspace-write` のみで、`read-only` では何も開きません。
+
+> **注意**: これは意図的な範囲拡大です。`workspace-write` ではリポジトリルート配下すべて（ワークスペースのサブディレクトリだけでなく）が書き込み可能になります。
+
+この拡大は既定でオンで、`pi-sandbox.json` の `"includeGitRoot": false` で止められます。オフにしても止まるのは git 由来のルート追加だけで、作業ディレクトリ・一時ディレクトリ・明示的な `sandbox_grant_write` 許可はそのままです。そのため、git のメタデータが書き込み可能な範囲の外に残るようになると、サブディレクトリからの `git commit` はワークスペース外への書き込みと同じように拒否されます。
 
 ### ディレクトリ許可
 
@@ -174,6 +182,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
   "runnerCommand": null,
   "runnerFailureSignatures": null,
   "probeTimeoutMs": 5000,
+  "includeGitRoot": true,
   "approvalMode": "auto-review",
   "autoReview": {
     "model": "CURRENT",
@@ -191,6 +200,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 | `runnerCommand` | `null` | カスタムの bwrap 互換ランナー引数配列（argv）（`runnerFailureSignatures` とのペア指定が必須） |
 | `runnerFailureSignatures` | `null` | カスタムランナーの致命的な診断シグネチャ文字列（空でない単一行文字列） |
 | `probeTimeoutMs` | `5000` | ランナーの機能確認プローブのタイムアウトミリ秒（正の整数） |
+| `includeGitRoot` | `true` | 作業ディレクトリが git 管理サブディレクトリのとき、`workspace-write` をリポジトリルートまで広げる。`false` はこの拡大だけを止める（ワークスペース・`/tmp`・明示的な許可はそのまま） |
 | `approvalMode` | `auto-review` | 承認方式（`human` / `auto-review` / `allow-all`）。不正な値の場合はエスカレーションを拒否します |
 | `autoReview.model` | `CURRENT` | 自動レビューに使用するモデル（`CURRENT` または `provider/model-id`） |
 | `autoReview.thinkingLevel` | `CURRENT` | 自動レビューの思考レベル（`CURRENT` または Pi の思考レベル） |

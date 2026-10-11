@@ -21,11 +21,19 @@ pi install .
 
 | Mode | File effects |
 |---|---|
-| `workspace-write` (default) | Working directory (workspace) + `/tmp` + `os.tmpdir()` writable; everything else read-only |
+| `workspace-write` (default) | Working directory (workspace) + `/tmp` + `os.tmpdir()` writable (plus the git repository root when the workspace is a git-managed subdirectory, unless `includeGitRoot` is disabled); everything else read-only |
 | `read-only` | No write access (only `/dev/null` or Windows `NUL` writable); everything else read-only |
 | `danger-full-access` | Bypasses the sandbox completely (explicit escape hatch) |
 
 > **Note**: Network access is always allowed (there is no network isolation).
+
+### Git-managed subdirectories
+
+In `workspace-write`, the writable set also covers the repository root when the working directory is a git-managed subdirectory (an ancestor holds `.git`): `git commit` writes into `.git`, which would otherwise sit outside the fence and be denied. The directory holding `.git` is made writable, and when `.git` is a file (linked worktree or submodule) the resolved `gitdir:` target and its `commondir` are included. Detection walks up from the working directory once per directory (memoized, so repeated tool calls do not rescan) and applies only in `workspace-write`; `read-only` opens nothing.
+
+> **Note**: this widens the writable area on purpose: everything under the repository root (not only the workspace subdirectory) becomes writable in `workspace-write`.
+
+The widening is on by default and can be turned off with `"includeGitRoot": false` in `pi-sandbox.json`. The switch stops only the git-derived root additions: the working directory, the temporary directories, and explicit `sandbox_grant_write` grants are unchanged. Once the git metadata stays outside the writable set, `git commit` from a subdirectory is denied like any other write outside the workspace.
 
 ### Directory grants
 
@@ -176,6 +184,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
   "runnerCommand": null,
   "runnerFailureSignatures": null,
   "probeTimeoutMs": 5000,
+  "includeGitRoot": true,
   "approvalMode": "auto-review",
   "autoReview": {
     "model": "CURRENT",
@@ -193,6 +202,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 | `runnerCommand` | `null` | Custom bwrap-compatible runner argv array (must be paired with `runnerFailureSignatures`) |
 | `runnerFailureSignatures` | `null` | Fatal diagnostic signatures for custom runner (non-empty single-line strings) |
 | `probeTimeoutMs` | `5000` | Capability probe timeout in milliseconds (positive integer) |
+| `includeGitRoot` | `true` | Widen `workspace-write` to the git repository root when the working directory is a git-managed subdirectory; `false` skips only that widening (workspace, `/tmp`, and explicit grants still apply) |
 | `approvalMode` | `auto-review` | Approval mode (`human`, `auto-review`, or `allow-all`); invalid values deny escalation |
 | `autoReview.model` | `CURRENT` | Reviewer model (`CURRENT` or `provider/model-id`) |
 | `autoReview.thinkingLevel` | `CURRENT` | Reviewer thinking level (`CURRENT` or supported Pi thinking level) |

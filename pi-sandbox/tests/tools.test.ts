@@ -689,6 +689,140 @@ describe("bash tool wiring", () => {
 	});
 });
 
+describe("git-managed subdirectory wiring", () => {
+	/** The workspace sits inside a git repository: the repository root must be writable too (git commit writes into .git). */
+	function seedRepo() {
+		mkdirSync(join(dir, ".git"), { recursive: true });
+		return realpathSync.native(dir);
+	}
+
+	async function runBash(
+		deps: Parameters<typeof createSandboxTools>[0],
+		child: ReturnType<typeof fakeChild>,
+		spawnFn: ReturnType<typeof vi.fn>,
+		callId: string,
+	) {
+		const { bash } = createSandboxTools(deps);
+		const p = bash.execute(
+			callId,
+			{ command: "git commit -m x" },
+			undefined,
+			undefined,
+			toolCtx(),
+		);
+		await vi.waitFor(() => {
+			expect(spawnFn).toHaveBeenCalled();
+		});
+		child.stdout.write("");
+		child.emit("close", 0, undefined);
+		await p;
+		return spawnFn.mock.calls[0][1] as string[];
+	}
+
+	it("workspace-write rw-binds the repository root above the workspace", async () => {
+		const repoRoot = seedRepo();
+		const { deps, child, spawnFn } = makeDeps();
+		const argv = await runBash(deps, child, spawnFn, "call-git-1");
+		const at = argv.indexOf(repoRoot);
+		expect(at).toBeGreaterThan(0);
+		expect(argv[at - 1]).toBe("--bind");
+	});
+
+	it("read-only keeps the repository root closed (semantics unchanged)", async () => {
+		const repoRoot = seedRepo();
+		const { deps, child, spawnFn } = makeDeps();
+		deps.permission.override = "read-only";
+		const argv = await runBash(deps, child, spawnFn, "call-git-2");
+		expect(argv).not.toContain(repoRoot);
+	});
+
+	it("write outside the workspace but inside the repository root is allowed", async () => {
+		seedRepo();
+		const target = join(realpathSync.native(dir), "notes.txt");
+		// Self-checking pair: the same write is denied without a repository above the workspace ("write outside workspace" case).
+		const { deps } = makeDeps();
+		const { write } = createSandboxTools(deps);
+		const result = (await write.execute(
+			"call-git-3",
+			{ path: target, content: "hi" },
+			undefined,
+			undefined,
+			toolCtx(),
+		)) as { content: { text: string }[] };
+		expect(result.content[0].text).toContain("Successfully wrote");
+		const { readFile } = await import("node:fs/promises");
+		expect(await readFile(target, "utf-8")).toBe("hi");
+	});
+
+	it("includeGitRoot: false keeps the repository root out of the bash argv", async () => {
+		const repoRoot = seedRepo();
+		const { deps, child, spawnFn } = makeDeps({
+			getConfig: () => ({ ...humanSandboxConfig(), includeGitRoot: false }),
+		});
+		const argv = await runBash(deps, child, spawnFn, "call-git-4");
+		expect(argv).not.toContain(repoRoot);
+	});
+
+	it("includeGitRoot: false denies write/edit above the workspace and records writablePaths without the repository root", async () => {
+		const repoRoot = seedRepo();
+		const { deps } = makeDeps({
+			getConfig: () => ({ ...humanSandboxConfig(), includeGitRoot: false }),
+		});
+		const { write, edit } = createSandboxTools(deps);
+		const outside = join(repoRoot, "notes.txt");
+		await expect(
+			write.execute(
+				"call-git-5",
+				{ path: outside, content: "hi" },
+				undefined,
+				undefined,
+				toolCtx(),
+			),
+		).rejects.toThrow(/file access denied under workspace-write mode/);
+		const target = join(repoRoot, "edit-me.txt");
+		writeFileSync(target, "hi");
+		await expect(
+			edit.execute(
+				"call-git-6",
+				{ path: target, edits: [{ oldText: "hi", newText: "ho" }] },
+				undefined,
+				undefined,
+				toolCtx(),
+			),
+		).rejects.toThrow(/file access denied under workspace-write mode/);
+		const records = getDenialLedger().list(TEST_SESSION);
+		expect(records).toHaveLength(2);
+		for (const record of records) {
+			expect(record.writablePaths).not.toContain(repoRoot);
+		}
+		expect(existsSync(outside)).toBe(false);
+		const { readFile } = await import("node:fs/promises");
+		expect(await readFile(target, "utf-8")).toBe("hi");
+	});
+
+	it("includeGitRoot: false opens none of a linked worktree's gitdir/commondir (paired contrast with the default-on run)", async () => {
+		// A `.git` file (linked worktree style): both metadata directories live outside the workspace tree.
+		const repoRoot = realpathSync.native(dir);
+		const gitDir = join(outsideDir, "wt-gitdir");
+		const commonDir = join(outsideDir, "wt-common");
+		mkdirSync(gitDir, { recursive: true });
+		mkdirSync(commonDir, { recursive: true });
+		writeFileSync(join(gitDir, "commondir"), `${commonDir}\n`);
+		writeFileSync(join(dir, ".git"), `gitdir: ${gitDir}\n`);
+		const on = makeDeps();
+		const onArgv = await runBash(on.deps, on.child, on.spawnFn, "call-git-7");
+		expect(onArgv).toContain(gitDir);
+		expect(onArgv).toContain(commonDir);
+		const off = makeDeps({
+			getConfig: () => ({ ...humanSandboxConfig(), includeGitRoot: false }),
+		});
+		const offArgv = await runBash(off.deps, off.child, off.spawnFn, "call-git-8");
+		expect(offArgv).not.toContain(gitDir);
+		expect(offArgv).not.toContain(commonDir);
+		expect(offArgv).not.toContain(repoRoot);
+	});
+});
+
 describe("resolveCallMode approval-channel routing (spec 2026-09-30)", () => {
 	/** Child-session ctx: hasUI=false; if select is called locally it fails loudly (approval must use the parent channel). */
 	function subagentCtx(sessionId: string) {
