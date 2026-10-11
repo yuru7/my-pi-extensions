@@ -23,10 +23,18 @@ export interface AutoReviewConfig {
 	thinkingLevel: string;
 }
 
+/** auto-review の 1 試行の既定上限（ミリ秒）。設定キー `autoReviewTimeoutMs` も同じ単位。 */
+export const DEFAULT_AUTO_REVIEW_TIMEOUT_MS = 90_000;
+
+/** Node のタイマーが扱える上限（2^31-1 ms）。これを超える値は setTimeout が誤動作するので不正扱い。 */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 /** 承認方式だけを切り出した結果。未信頼時はグローバル側を使う。 */
 export interface ApprovalSettings {
 	approvalMode: ApprovalMode;
 	autoReview: AutoReviewConfig;
+	/** Reviewer 1 試行の上限（ミリ秒）。 */
+	autoReviewTimeoutMs: number;
 	/** 明示された承認設定が不正。昇格は DENY し、allow-all へは倒さない。 */
 	approvalInvalid: boolean;
 }
@@ -41,6 +49,8 @@ export interface SandboxConfig {
 	probeTimeoutMs: number;
 	approvalMode: ApprovalMode;
 	autoReview: AutoReviewConfig;
+	/** Reviewer 1 試行の上限（ミリ秒）。 */
+	autoReviewTimeoutMs: number;
 	approvalInvalid: boolean;
 	/** プロジェクト設定を除いた承認設定。信頼できないときはこちらだけを使う。 */
 	globalApproval: ApprovalSettings;
@@ -54,6 +64,7 @@ const DEFAULT_AUTO_REVIEW: AutoReviewConfig = {
 const DEFAULT_APPROVAL: ApprovalSettings = {
 	approvalMode: "auto-review",
 	autoReview: DEFAULT_AUTO_REVIEW,
+	autoReviewTimeoutMs: DEFAULT_AUTO_REVIEW_TIMEOUT_MS,
 	approvalInvalid: false,
 };
 
@@ -64,6 +75,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
 	probeTimeoutMs: 5000,
 	approvalMode: DEFAULT_APPROVAL.approvalMode,
 	autoReview: DEFAULT_APPROVAL.autoReview,
+	autoReviewTimeoutMs: DEFAULT_APPROVAL.autoReviewTimeoutMs,
 	approvalInvalid: false,
 	globalApproval: DEFAULT_APPROVAL,
 };
@@ -82,6 +94,7 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 			model: DEFAULT_SANDBOX_CONFIG.autoReview.model,
 			thinkingLevel: DEFAULT_SANDBOX_CONFIG.autoReview.thinkingLevel,
 		},
+		autoReviewTimeoutMs: DEFAULT_SANDBOX_CONFIG.autoReviewTimeoutMs,
 	};
 }
 
@@ -119,6 +132,14 @@ export function isReviewerThinkingSetting(value: string): boolean {
 	return value === "CURRENT" || isReviewerThinkingLevel(value);
 }
 
+/** `autoReviewTimeoutMs`（ミリ秒）。正の有限数で、Node のタイマー上限を超えないこと。 */
+export function isAutoReviewTimeoutMs(value: unknown): value is number {
+	return typeof value === "number"
+		&& Number.isFinite(value)
+		&& value > 0
+		&& value <= MAX_TIMEOUT_MS;
+}
+
 /**
  * プロジェクトを信頼できるか。
  * メソッドが無い・例外・真偽以外は「確認できない」として null（承認はグローバルに限定する）。
@@ -141,6 +162,7 @@ export function selectApprovalSettings(config: SandboxConfig, projectTrusted: bo
 		return {
 			approvalMode: config.approvalMode,
 			autoReview: config.autoReview,
+			autoReviewTimeoutMs: config.autoReviewTimeoutMs,
 			approvalInvalid: config.approvalInvalid,
 		};
 	}
@@ -150,7 +172,7 @@ export function selectApprovalSettings(config: SandboxConfig, projectTrusted: bo
 export function describeApproval(settings: ApprovalSettings): string {
 	if (settings.approvalInvalid) return "approval: deny (invalid approval config)";
 	if (settings.approvalMode === "auto-review") {
-		return `approval: auto-review (reviewer ${settings.autoReview.model}, thinking ${settings.autoReview.thinkingLevel})`;
+		return `approval: auto-review (reviewer ${settings.autoReview.model}, thinking ${settings.autoReview.thinkingLevel}, timeout ${settings.autoReviewTimeoutMs}ms)`;
 	}
 	return `approval: ${settings.approvalMode}`;
 }
@@ -159,7 +181,8 @@ function sameApproval(a: ApprovalSettings, b: ApprovalSettings): boolean {
 	return a.approvalMode === b.approvalMode
 		&& a.approvalInvalid === b.approvalInvalid
 		&& a.autoReview.model === b.autoReview.model
-		&& a.autoReview.thinkingLevel === b.autoReview.thinkingLevel;
+		&& a.autoReview.thinkingLevel === b.autoReview.thinkingLevel
+		&& a.autoReviewTimeoutMs === b.autoReviewTimeoutMs;
 }
 
 /** `/permission` 用。未信頼・信頼不明のときはプロジェクト側の緩和を使っていないことを示す。 */
@@ -168,6 +191,7 @@ export function approvalStatusLine(config: SandboxConfig, projectTrusted: boolea
 	const merged: ApprovalSettings = {
 		approvalMode: config.approvalMode,
 		autoReview: config.autoReview,
+		autoReviewTimeoutMs: config.autoReviewTimeoutMs,
 		approvalInvalid: config.approvalInvalid,
 	};
 	let line = describeApproval(effective);
@@ -201,6 +225,8 @@ interface ApprovalState {
 	modelInvalid: boolean;
 	thinking: string;
 	thinkingInvalid: boolean;
+	timeoutMs: number;
+	timeoutInvalid: boolean;
 }
 
 function defaultApprovalState(): ApprovalState {
@@ -211,6 +237,8 @@ function defaultApprovalState(): ApprovalState {
 		modelInvalid: false,
 		thinking: DEFAULT_AUTO_REVIEW.thinkingLevel,
 		thinkingInvalid: false,
+		timeoutMs: DEFAULT_APPROVAL.autoReviewTimeoutMs,
+		timeoutInvalid: false,
 	};
 }
 
@@ -218,7 +246,8 @@ function toApprovalSettings(state: ApprovalState): ApprovalSettings {
 	return {
 		approvalMode: state.mode,
 		autoReview: { model: state.model, thinkingLevel: state.thinking },
-		approvalInvalid: state.modeInvalid || state.modelInvalid || state.thinkingInvalid,
+		autoReviewTimeoutMs: state.timeoutMs,
+		approvalInvalid: state.modeInvalid || state.modelInvalid || state.thinkingInvalid || state.timeoutInvalid,
 	};
 }
 
@@ -230,6 +259,14 @@ function applyApproval(state: ApprovalState, raw: Record<string, unknown>): void
 			state.modeInvalid = false;
 		} else {
 			state.modeInvalid = true;
+		}
+	}
+	if ("autoReviewTimeoutMs" in raw) {
+		if (isAutoReviewTimeoutMs(raw.autoReviewTimeoutMs)) {
+			state.timeoutMs = raw.autoReviewTimeoutMs;
+			state.timeoutInvalid = false;
+		} else {
+			state.timeoutInvalid = true;
 		}
 	}
 	if (!("autoReview" in raw)) return;
@@ -297,6 +334,7 @@ export function validateSandboxConfig(raw: Record<string, unknown>, source: stri
 		probeTimeoutMs,
 		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
 		autoReview: DEFAULT_SANDBOX_CONFIG.autoReview,
+		autoReviewTimeoutMs: DEFAULT_SANDBOX_CONFIG.autoReviewTimeoutMs,
 		approvalInvalid: false,
 		globalApproval: DEFAULT_SANDBOX_CONFIG.globalApproval,
 	};
@@ -338,6 +376,7 @@ export function loadSandboxConfig(hostCwd: string, agentDir = getAgentDir()): Sa
 		...sandbox,
 		approvalMode: mergedApproval.approvalMode,
 		autoReview: mergedApproval.autoReview,
+		autoReviewTimeoutMs: mergedApproval.autoReviewTimeoutMs,
 		approvalInvalid: mergedApproval.approvalInvalid,
 		globalApproval: toApprovalSettings(globalApproval),
 	};

@@ -5,15 +5,19 @@ import {
 	formatFallbackWarning,
 	GRANT_REVIEWER_SYSTEM_PROMPT,
 	parseReviewerDecision,
-	REVIEW_TIMEOUT_MS,
 	REVIEWER_SYSTEM_PROMPT,
 	type ReviewerModelRef,
 	type ReviewerRequest,
 	type ReviewerResponse,
 	readRecentDialogue,
+	reviewDirectoryGrant,
 	reviewEscalation,
 } from "../src/auto-review";
-import { DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from "../src/config";
+import {
+	DEFAULT_AUTO_REVIEW_TIMEOUT_MS,
+	DEFAULT_SANDBOX_CONFIG,
+	type SandboxConfig,
+} from "../src/config";
 import {
 	type DenialRecord,
 	getDenialLedger,
@@ -70,6 +74,7 @@ function deny(reason = DENY_REASON): ReviewerResponse {
 interface HarnessOptions {
 	modelSetting?: string;
 	thinkingSetting?: string;
+	autoReviewTimeoutMs?: number;
 	activeModel?: ReviewerModelRef;
 	activeThinkingLevel?: string;
 	findModel?: (provider: string, id: string) => ReviewerModelRef | undefined;
@@ -98,6 +103,8 @@ function harness(options: HarnessOptions = {}) {
 				model: options.modelSetting ?? "anthropic/reviewer",
 				thinkingLevel: options.thinkingSetting ?? "low",
 			},
+			autoReviewTimeoutMs:
+				options.autoReviewTimeoutMs ?? DEFAULT_AUTO_REVIEW_TIMEOUT_MS,
 		},
 		activeModel: active,
 		activeThinkingLevel: options.activeThinkingLevel ?? "medium",
@@ -215,6 +222,55 @@ describe("GRANT_REVIEWER_SYSTEM_PROMPT", () => {
 		expect(GRANT_REVIEWER_SYSTEM_PROMPT).not.toContain(
 			"The directory should be the narrow parent that contains the denied path",
 		);
+	});
+});
+
+describe("reviewDirectoryGrant", () => {
+	it("applies settings.autoReviewTimeoutMs (milliseconds) to each attempt", async () => {
+		vi.useFakeTimers();
+		const calls: ReviewerModelRef[] = [];
+		const reviewer = model("anthropic", "reviewer");
+		const active = model("openai", "active");
+		const review = reviewDirectoryGrant({
+			settings: {
+				approvalMode: "auto-review",
+				approvalInvalid: false,
+				autoReview: { model: "anthropic/reviewer", thinkingLevel: "low" },
+				autoReviewTimeoutMs: 50,
+			},
+			activeModel: active,
+			activeThinkingLevel: "low",
+			findModel: (provider, id) => {
+				if (provider === "anthropic" && id === "reviewer") return reviewer;
+				if (provider === active.provider && id === active.id) return active;
+				return undefined;
+			},
+			hasAuth: () => true,
+			complete: (reviewed) => {
+				calls.push(reviewed);
+				return new Promise((resolve) => {
+					setTimeout(() => resolve(allow()), 80);
+				});
+			},
+			warn: () => {},
+			grant: {
+				backend: "bwrap",
+				mode: "workspace-write",
+				workspace: "/work",
+				writablePaths: ["/work", "/tmp"],
+				directory: "/work/app",
+				justification: "the generated config lives there",
+				denials: [record],
+			},
+			dialogue: [{ user: "generate the app config", assistant: "" }],
+		});
+		await vi.advanceTimersByTimeAsync(80);
+		await vi.advanceTimersByTimeAsync(80);
+		await expect(review).resolves.toEqual({
+			decision: "DENY",
+			cause: "unavailable",
+		});
+		expect(calls.map((call) => call.id)).toEqual(["reviewer", "active"]);
 	});
 });
 
@@ -516,7 +572,25 @@ describe("reviewEscalation", () => {
 			cause: "unavailable",
 		});
 		expect(calls).toHaveLength(2);
-		expect(REVIEW_TIMEOUT_MS).toBe(15_000);
+	});
+
+	it("settings.autoReviewTimeoutMs (milliseconds) is the per-attempt deadline", async () => {
+		vi.useFakeTimers();
+		const { review, calls, warnings } = harness({
+			autoReviewTimeoutMs: 50,
+			complete: () =>
+				new Promise((resolve) => {
+					setTimeout(() => resolve(allow()), 80);
+				}),
+		});
+		await vi.advanceTimersByTimeAsync(80);
+		await vi.advanceTimersByTimeAsync(80);
+		await expect(review).resolves.toEqual({
+			decision: "DENY",
+			cause: "unavailable",
+		});
+		expect(calls).toHaveLength(2);
+		expect(warnings[0]).toContain("timed out");
 	});
 
 	it("denies an oversized request without calling a model", async () => {

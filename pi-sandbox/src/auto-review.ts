@@ -2,9 +2,6 @@ import type { ApprovalSettings } from "./config";
 import { isReviewerThinkingLevel } from "./config";
 import type { DenialRecord } from "./denial-ledger";
 
-/** 1 回の Reviewer 試行の上限。2 試行でも合計 30 秒を超えない。 */
-export const REVIEW_TIMEOUT_MS = 15_000;
-
 /** これを超える入力は安全に評価できないので、モデルを呼ばず DENY する。 */
 export const REVIEWER_INPUT_LIMIT_BYTES = 64 * 1024;
 
@@ -725,7 +722,7 @@ async function runReview(
 		return { decision: "DENY", cause: "input-too-large" };
 	}
 
-	const timeoutMs = options.timeoutMs ?? REVIEW_TIMEOUT_MS;
+	const timeoutMs = options.timeoutMs ?? options.settings.autoReviewTimeoutMs;
 	const thinkingLevel = resolveThinking(
 		options.settings.autoReview.thinkingLevel,
 		options.activeThinkingLevel,

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SANDBOX_CONFIG, getSandboxConfig, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, validateSandboxConfig } from "../src/config";
+import { DEFAULT_SANDBOX_CONFIG, getSandboxConfig, isAutoReviewTimeoutMs, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, validateSandboxConfig } from "../src/config";
 
 let dir: string;
 let agentDir: string;
@@ -130,6 +130,7 @@ describe("validateSandboxConfig", () => {
 		expect(cfg.globalApproval).toEqual({
 			approvalMode: "allow-all",
 			autoReview: { model: "CURRENT", thinkingLevel: "CURRENT" },
+			autoReviewTimeoutMs: 90_000,
 			approvalInvalid: false,
 		});
 	});
@@ -153,6 +154,53 @@ describe("validateSandboxConfig", () => {
 		expect(selectApprovalSettings(cfg, true).approvalMode).toBe("allow-all");
 		expect(selectApprovalSettings(cfg, false).approvalMode).toBe("human");
 		expect(selectApprovalSettings(cfg, null).approvalMode).toBe("human");
+	});
+	it("autoReviewTimeoutMs defaults to 90000 milliseconds", () => {
+		const cfg = loadSandboxConfig(projectDir);
+		expect(cfg.autoReviewTimeoutMs).toBe(90_000);
+		expect(cfg.globalApproval.autoReviewTimeoutMs).toBe(90_000);
+	});
+	it("autoReviewTimeoutMs merges project over global", () => {
+		writeGlobal({ autoReviewTimeoutMs: 90_000 }, "pi-sandbox.json");
+		writeProject({ autoReviewTimeoutMs: 30_000 }, "pi-sandbox.json");
+		const cfg = loadSandboxConfig(projectDir);
+		expect(cfg.autoReviewTimeoutMs).toBe(30_000);
+		expect(cfg.globalApproval.autoReviewTimeoutMs).toBe(90_000);
+	});
+	it("an untrusted project cannot change autoReviewTimeoutMs", () => {
+		writeGlobal({ autoReviewTimeoutMs: 90_000 }, "pi-sandbox.json");
+		writeProject({ autoReviewTimeoutMs: 1_000 }, "pi-sandbox.json");
+		const cfg = loadSandboxConfig(projectDir);
+		expect(selectApprovalSettings(cfg, true).autoReviewTimeoutMs).toBe(1_000);
+		expect(selectApprovalSettings(cfg, false).autoReviewTimeoutMs).toBe(90_000);
+		expect(selectApprovalSettings(cfg, null).autoReviewTimeoutMs).toBe(90_000);
+	});
+	it("an invalid autoReviewTimeoutMs denies escalation and a later valid value repairs it", () => {
+		writeGlobal({ autoReviewTimeoutMs: "90000" }, "pi-sandbox.json");
+		expect(loadSandboxConfig(projectDir).approvalInvalid).toBe(true);
+		writeProject({ autoReviewTimeoutMs: 90_000 }, "pi-sandbox.json");
+		const cfg = loadSandboxConfig(projectDir);
+		expect(cfg.approvalInvalid).toBe(false);
+		expect(cfg.autoReviewTimeoutMs).toBe(90_000);
+	});
+	it("rejects non-positive and timer-overflowing autoReviewTimeoutMs", () => {
+		for (const autoReviewTimeoutMs of [0, -1, "90000", null, 2_147_483_648]) {
+			writeProject({ autoReviewTimeoutMs }, "pi-sandbox.json");
+			expect(loadSandboxConfig(projectDir).approvalInvalid).toBe(true);
+		}
+		writeProject({ autoReviewTimeoutMs: 2_147_483_647 }, "pi-sandbox.json");
+		expect(loadSandboxConfig(projectDir).approvalInvalid).toBe(false);
+	});
+	it("isAutoReviewTimeoutMs accepts only positive finite numbers within the timer range", () => {
+		expect(isAutoReviewTimeoutMs(90_000)).toBe(true);
+		expect(isAutoReviewTimeoutMs(50)).toBe(true);
+		expect(isAutoReviewTimeoutMs(0)).toBe(false);
+		expect(isAutoReviewTimeoutMs(-1)).toBe(false);
+		expect(isAutoReviewTimeoutMs(Number.NaN)).toBe(false);
+		expect(isAutoReviewTimeoutMs(Number.POSITIVE_INFINITY)).toBe(false);
+		expect(isAutoReviewTimeoutMs("90000")).toBe(false);
+		expect(isAutoReviewTimeoutMs(2_147_483_648)).toBe(false);
+		expect(isAutoReviewTimeoutMs(2_147_483_647)).toBe(true);
 	});
 	it("follows an explicit agent directory instead of HOME", () => {
 		const sdkDir = join(dir, "sdk-agent");

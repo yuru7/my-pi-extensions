@@ -141,7 +141,8 @@ The reviewer strictly adheres to the following criteria:
 
 - `autoReview.model`: Specify `CURRENT` (active agent model at time of escalation) or `provider/model-id`.
 - `autoReview.thinkingLevel`: Specify `CURRENT` or a supported Pi thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Explicitly configuring an unsupported level causes the attempt to fail.
-- **Fallback**: If the configured reviewer model is unavailable (auth failure, API error, 15s timeout, etc.), pi-sandbox warns once and **retries the review on the active agent model with the same thinking setting**. If this second attempt also fails, escalation is denied.
+- `autoReviewTimeoutMs`: Per-attempt deadline for one reviewer call, in milliseconds (default `90000`, positive number). It applies to escalation reviews and directory-grant reviews, including the fallback attempt.
+- **Fallback**: If the configured reviewer model is unavailable (auth failure, API error, `autoReviewTimeoutMs` deadline exceeded, etc.), pi-sandbox warns once and **retries the review on the active agent model with the same thinking setting**. If this second attempt also fails, escalation is denied.
 
 ### Security and Privacy Considerations
 
@@ -165,7 +166,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 5. `<project>/.pi/pi-sandbox.json`
 6. Runtime overrides via `/permission` (always takes precedence)
 
-> **Project Trust Protection**: In untrusted projects, or environments where `isProjectTrusted()` cannot be resolved, project configurations cannot override `approvalMode` or `autoReview` (global configuration values remain enforced). This prevents malicious repositories from enabling `allow-all`.
+> **Project Trust Protection**: In untrusted projects, or environments where `isProjectTrusted()` cannot be resolved, project configurations cannot override `approvalMode`, `autoReview`, or `autoReviewTimeoutMs` (global configuration values remain enforced). This prevents malicious repositories from enabling `allow-all`.
 
 ### Example Configuration (`pi-sandbox.json`)
 
@@ -179,7 +180,8 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
   "autoReview": {
     "model": "CURRENT",
     "thinkingLevel": "CURRENT"
-  }
+  },
+  "autoReviewTimeoutMs": 90000
 }
 ```
 
@@ -194,6 +196,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 | `approvalMode` | `auto-review` | Approval mode (`human`, `auto-review`, or `allow-all`); invalid values deny escalation |
 | `autoReview.model` | `CURRENT` | Reviewer model (`CURRENT` or `provider/model-id`) |
 | `autoReview.thinkingLevel` | `CURRENT` | Reviewer thinking level (`CURRENT` or supported Pi thinking level) |
+| `autoReviewTimeoutMs` | `90000` | Reviewer call timeout per attempt, in milliseconds (positive number); invalid values deny escalation |
 
 `/permission` prints the approval mode that will actually be used (global value when the project is untrusted).
 

@@ -384,7 +384,7 @@ export async function resolveCall(
 		const approval = selectApprovalSettings(config, readProjectTrusted(ctx));
 		if (approval.approvalInvalid) {
 			throw new Error(
-				`sandbox escalation to "${requested}" was denied because the approval config is invalid — nothing was executed. Fix approvalMode / autoReview.model / autoReview.thinkingLevel in pi-sandbox.json.`,
+				`sandbox escalation to "${requested}" was denied because the approval config is invalid — nothing was executed. Fix approvalMode / autoReview.model / autoReview.thinkingLevel / autoReviewTimeoutMs in pi-sandbox.json.`,
 			);
 		}
 		if (approval.approvalMode === "allow-all") {
@@ -647,7 +647,7 @@ async function approveDirectoryGrant(args: {
 	);
 	if (approval.approvalInvalid) {
 		throw new Error(
-			"sandbox_grant_write was denied because the approval config is invalid — nothing was granted. Fix approvalMode / autoReview.model / autoReview.thinkingLevel in pi-sandbox.json.",
+			"sandbox_grant_write was denied because the approval config is invalid — nothing was granted. Fix approvalMode / autoReview.model / autoReview.thinkingLevel / autoReviewTimeoutMs in pi-sandbox.json.",
 		);
 	}
 	if (approval.approvalMode === "allow-all") return;
