@@ -159,11 +159,14 @@ keeps working normally.
   1s) after startup, session name changes, and tree navigation, and re-applies
   it on the next prompt input as a safety net. There is no event for Pi's
   write, so keeping the title is best effort, not a guarantee.
-- Quitting Pi sets the terminal title to the empty string. Depending on the
-  terminal this shows its own default again, or leaves the tab title empty;
-  the previous title is not readable, so it cannot be brought back. Only a
-  normal quit does this; `/reload` and session switches keep the title for the
-  session that follows. A killed process cannot clear anything.
+- Quitting Pi sets the terminal title to the empty string. Pi writes its own
+  title again while tearing down its UI, right after the extension sees the
+  shutdown, so the empty title is written once more at process exit and is the
+  last title write. Depending on the terminal this shows its own default
+  again, or leaves the tab title empty; the previous title is not readable, so
+  it cannot be brought back. Only a normal quit does this; `/reload` and
+  session switches keep the title for the session that follows. A killed
+  process cannot clear anything.
 - `/reload` reloads the configuration. A session switch, fork, tree navigation,
   or reload cancels an in-flight title request, and results that come back
   afterwards are dropped.

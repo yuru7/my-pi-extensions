@@ -64,6 +64,7 @@ type FakePi = ReturnType<typeof createFakePi>;
 interface CtxOptions {
 	cwd?: string;
 	hasUI?: boolean;
+	mode?: ExtensionContext["mode"];
 	sessionId?: string;
 	entries?: SessionEntryLike[];
 	currentModel?: Model<Api>;
@@ -87,7 +88,7 @@ function createCtx(options: CtxOptions) {
 		sessionId: options.sessionId ?? "session-1",
 	};
 	const ctx = {
-		mode: "tui",
+		mode: options.mode ?? "tui",
 		hasUI: options.hasUI ?? true,
 		cwd: options.cwd ?? "/home/user/projects/web-app",
 		model: options.currentModel,
@@ -170,6 +171,8 @@ function setup(options: SetupOptions = {}) {
 	const loaded: LoadConfigResult = {
 		config: options.config ?? defaultConfig(),
 	};
+	const { ctx, state } = createCtx(options);
+	const exitHooks: (() => void)[] = [];
 	registerAutoTitle(pi as unknown as ExtensionAPI, {
 		loadConfig: () => loaded,
 		configPath: () => configPath,
@@ -177,9 +180,15 @@ function setup(options: SetupOptions = {}) {
 		timeoutMs: options.timeoutMs ?? 5_000,
 		setTimeout: scheduler.setTimeout,
 		clearTimeout: scheduler.clearTimeout,
+		onProcessExit: (handler) => {
+			exitHooks.push(handler);
+		},
+		clearTitleAtExit: () => {
+			state.titles.push("");
+			state.terminalTitle = "";
+		},
 		log: (message) => logs.push(message),
 	});
-	const { ctx, state } = createCtx(options);
 	return {
 		pi,
 		ctx,
@@ -188,6 +197,10 @@ function setup(options: SetupOptions = {}) {
 		configPath,
 		logs,
 		runScheduled: scheduler.run,
+		exitHooks,
+		runProcessExit(): void {
+			for (const handler of exitHooks.splice(0)) handler();
+		},
 	};
 }
 
@@ -755,6 +768,78 @@ describe("title restore on quit", () => {
 			ctx,
 		);
 		assert.deepEqual(state.titles, [""]);
+	});
+
+	test("a quit clears the title again at process exit, after Pi rewrites it", () => {
+		const { pi, ctx, state, runProcessExit } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		pi.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			ctx,
+		);
+		assert.equal(state.terminalTitle, "");
+		// Pi writes `π - <dir>` again while tearing down its UI, after the event.
+		state.terminalTitle = "π - web-app";
+		state.titles.length = 0;
+		runProcessExit();
+		assert.deepEqual(state.titles, [""]);
+		assert.equal(state.terminalTitle, "");
+	});
+
+	test("the exit restore is registered at most once per process", () => {
+		const { pi, ctx, exitHooks } = setup();
+		startSession(pi, ctx);
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			pi.emit(
+				"session_shutdown",
+				{ type: "session_shutdown", reason: "quit" },
+				ctx,
+			);
+		}
+		assert.equal(exitHooks.length, 1);
+	});
+
+	test("an RPC quit clears the title once and registers no exit restore", () => {
+		const { pi, ctx, state, exitHooks, runProcessExit } = setup({
+			mode: "rpc",
+		});
+		startSession(pi, ctx);
+		state.titles.length = 0;
+		pi.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			ctx,
+		);
+		assert.deepEqual(state.titles, [""]);
+		assert.deepEqual(exitHooks, []);
+		runProcessExit();
+		assert.deepEqual(state.titles, [""]);
+	});
+
+	test("session replacement and headless runs register no exit restore", () => {
+		for (const reason of ["reload", "new", "resume", "fork"]) {
+			const { pi, ctx, state, exitHooks, runProcessExit } = setup();
+			startSession(pi, ctx);
+			state.titles.length = 0;
+			pi.emit("session_shutdown", { type: "session_shutdown", reason }, ctx);
+			assert.deepEqual(exitHooks, []);
+			runProcessExit();
+			assert.deepEqual(state.titles, []);
+		}
+		const { pi, ctx, state, exitHooks, runProcessExit } = setup({
+			hasUI: false,
+		});
+		startSession(pi, ctx);
+		pi.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			ctx,
+		);
+		assert.deepEqual(exitHooks, []);
+		runProcessExit();
+		assert.deepEqual(state.titles, []);
 	});
 
 	test("session replacement and reload keep the title", () => {

@@ -11,10 +11,12 @@
  * Pi writes its own terminal title (`π - <dir>`) right after extensions bind,
  * so the title is re-asserted a moment after the events where that happens. On
  * a normal quit the title is restored to the empty string, because terminals
- * otherwise keep the last title forever.
+ * otherwise keep the last title forever. Pi writes its own title once more
+ * while tearing down its UI, after `session_shutdown` has run, so the restore
+ * is repeated at process exit, the last write before the process dies.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -74,6 +76,10 @@ export interface AutoTitleDeps {
 	setTimeout?: (callback: () => void, delayMs: number) => TimerHandle;
 	/** Cancels a handle from {@link AutoTitleDeps.setTimeout}; defaults to `clearTimeout`. */
 	clearTimeout?: (handle: TimerHandle) => void;
+	/** Registers a one-shot process-exit hook; defaults to `process.once("exit", ...)`. */
+	onProcessExit?: (handler: () => void) => void;
+	/** Synchronous empty-title write for the exit-time restore; defaults to {@link clearTerminalTitle}. */
+	clearTitleAtExit?: () => void;
 	/** Log sink; defaults to `console.error`. */
 	log?: (message: string) => void;
 }
@@ -96,6 +102,26 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** OSC 0 sequence setting the terminal title, with an empty title. */
+const EMPTY_TITLE_SEQUENCE = "\x1b]0;\x07";
+
+/**
+ * Clear the terminal title by writing the OSC sequence to stdout.
+ *
+ * `ctx.ui.setTitle()` ends in `process.stdout.write`, which Windows terminals
+ * handle asynchronously and can drop when the process exits right after. The
+ * exit-time restore therefore writes the same bytes Pi's TUI writes, with
+ * `writeSync`. Writing to an already dead terminal throws, and nothing can
+ * report an error while the process is exiting, so the failure is swallowed.
+ */
+function clearTerminalTitle(): void {
+	try {
+		writeSync(1, EMPTY_TITLE_SEQUENCE);
+	} catch {
+		// The terminal is gone; nothing left to restore the title on.
+	}
+}
+
 /** Register the title management handlers on a Pi extension API. */
 export function registerAutoTitle(
 	pi: ExtensionAPI,
@@ -108,6 +134,12 @@ export function registerAutoTitle(
 	const createClient = deps.createClient ?? registryClient;
 	const schedule = deps.setTimeout ?? setTimeout;
 	const cancelTimer = deps.clearTimeout ?? clearTimeout;
+	const onProcessExit =
+		deps.onProcessExit ??
+		((handler: () => void) => {
+			process.once("exit", handler);
+		});
+	const clearTitleAtExit = deps.clearTitleAtExit ?? clearTerminalTitle;
 
 	let config: AutoTitleConfig = defaultConfig();
 	/** Startup directory name, fixed on the first `session_start` of this runtime. */
@@ -124,6 +156,8 @@ export function registerAutoTitle(
 	let generationController: AbortController | undefined;
 	const enforceTimers = new Set<TimerHandle>();
 	let warningShown = false;
+	/** The process-exit restore is registered at most once. */
+	let exitRestoreRegistered = false;
 
 	const display = new TitleDisplay((title) => {
 		ctxRef?.ui.setTitle(title);
@@ -356,6 +390,15 @@ export function registerAutoTitle(
 		// the window open and must not clear it.
 		if (event.reason === "quit" && ctx.hasUI) {
 			ctx.ui.setTitle("");
+			// Pi writes `π - <dir>` once more while tearing down its UI, right after
+			// this handler, which undoes the restore above. Clearing at process exit
+			// runs after that write and is the last one before the process dies. Raw
+			// bytes go to a TUI only: an RPC client owns its terminal and already got
+			// the `setTitle` call above.
+			if (ctx.mode === "tui" && !exitRestoreRegistered) {
+				exitRestoreRegistered = true;
+				onProcessExit(clearTitleAtExit);
+			}
 		}
 		ctxRef = undefined;
 	});
