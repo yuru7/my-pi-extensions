@@ -13,6 +13,7 @@ Each package lives in its own directory and is published independently. See that
 | [pi-native-notify](./pi-native-notify) | Send a native OS notification when a long-running task completes or Pi waits for your input |
 | [pi-ai-approval](./pi-ai-approval) | Fail-closed approval gate: an AI reviewer classifies each tool call's risk level, and local `riskActions` config allows, asks, or denies it |
 | [pi-metrics](./pi-metrics) | Print one dim metrics line when a run settles: elapsed, TPS, TTFT, input and output tokens |
+| [pi-auto-title](./pi-auto-title) | Manage the terminal tab title: an AI-generated session title plus a running/idle status indicator |
 
 ## License
 
