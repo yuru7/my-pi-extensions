@@ -934,6 +934,35 @@ describe("GenerationTracker", () => {
 	});
 });
 
+describe("non-UI modes", () => {
+	test("a mode without UI keeps the extension fully inert", async () => {
+		const { pi, ctx, state, stallClock, client } = setup({
+			hasUI: false,
+			currentModel: fakeModel("openai", "gpt-5.4"),
+			responders: [() => assistant("停滞せず")],
+		});
+		startSession(pi, ctx);
+		assert.equal(state.titles.length, 0);
+		// Agent activity and tool events produce neither titles nor watches.
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.length, 0);
+		assert.equal(stallClock.pendingCount(), 0);
+		// No AI request is sent for the title either.
+		firstUserPrompt(pi, ctx, "タイトル生成は不要");
+		await flush();
+		assert.equal(client.calls.length, 0);
+		// Shutdown (and anything after it) stays harmless.
+		pi.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			ctx,
+		);
+		assert.equal(state.titles.length, 0);
+	});
+});
+
 describe("stall detection", () => {
 	test("a silent tool switches the running marker to the stalled one", () => {
 		const { pi, ctx, state, stallClock } = setup();

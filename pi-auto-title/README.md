@@ -185,8 +185,10 @@ keeps working normally.
 
 ## Behavior notes
 
-- The tab title is set in interactive and RPC sessions; JSON and print runs
-  render no title and skip generation entirely.
+- The tab title is set in interactive and RPC sessions. In UI-less modes (JSON,
+  print) the extension switches itself off entirely at the first `session_start`:
+  every event handler is disposed, so there are no title writes, no stall
+  watches or timers, and no AI requests for the rest of the process.
 - Pi writes its own terminal title (`π - <dir>`) right after extensions bind.
   The extension re-asserts its own title at short delays (immediately, 250ms,
   1s) after startup, session name changes, and tree navigation, and re-applies

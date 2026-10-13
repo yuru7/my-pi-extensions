@@ -197,6 +197,26 @@ export function registerAutoTitle(
 		return stallMonitor.stalled ? "stalled" : "running";
 	}
 
+	/** Disposers for every event handler, so the whole extension can switch itself off. */
+	const disposers: (() => void)[] = [];
+
+	/**
+	 * One-way switch for modes without UI (JSON, print): dispose every handler
+	 * so the extension goes fully inert — no timers, no title writes, no AI
+	 * requests. The mode is fixed per process, so one decision at the first
+	 * `session_start` holds for the whole runtime.
+	 */
+	let deactivated = false;
+	function deactivate(): void {
+		if (deactivated) return;
+		deactivated = true;
+		disposed = true;
+		clearEnforceTimers();
+		stallMonitor.clear();
+		cancelGeneration();
+		for (const dispose of disposers.splice(0)) dispose();
+	}
+
 	const display = new TitleDisplay((title) => {
 		ctxRef?.ui.setTitle(title);
 	});
@@ -333,78 +353,99 @@ export function registerAutoTitle(
 		void startGeneration(ctx, firstUserText);
 	}
 
-	pi.on("session_start", (_event, ctx: ExtensionContext) => {
-		disposed = false;
-		ctxRef = ctx;
-		sessionId = ctx.sessionManager.getSessionId();
-		const loaded = load();
-		config = loaded.config;
-		if (loaded.warning !== undefined && !warningShown) {
-			warningShown = true;
-			ctx.ui.notify(loaded.warning, "warning");
-		}
-		directoryTitle ??= workspaceNameFromPath(ctx.cwd);
-		agentRunning = false;
-		agentStarted = false;
-		clearEnforceTimers();
-		stallMonitor.clear();
-		cancelGeneration();
-		generationAttempted = false;
-		const entries: readonly SessionEntryLike[] = ctx.sessionManager.getBranch();
-		const restored = findStoredTitle(entries);
-		manager = new SessionTitleManager(
-			ctx.sessionManager.getSessionId(),
-			directoryTitle,
-			restored,
-		);
-		renderTitle();
-		scheduleTitleEnforce();
-		// Resuming a session that already has a stored title keeps it; one without
-		// gets a title generated from its first user message.
-		if (restored === undefined) maybeGenerateFromHistory(ctx, entries);
-	});
+	disposers.push(
+		pi.on("session_start", (_event, ctx: ExtensionContext) => {
+			// Modes without UI (JSON, print) get nothing at all: no title writes,
+			// no AI requests, no stall watches. `session_start` always precedes
+			// any agent activity, so the whole extension stops before doing work.
+			if (!ctx.hasUI) {
+				deactivate();
+				return;
+			}
+			disposed = false;
+			ctxRef = ctx;
+			sessionId = ctx.sessionManager.getSessionId();
+			const loaded = load();
+			config = loaded.config;
+			if (loaded.warning !== undefined && !warningShown) {
+				warningShown = true;
+				ctx.ui.notify(loaded.warning, "warning");
+			}
+			directoryTitle ??= workspaceNameFromPath(ctx.cwd);
+			agentRunning = false;
+			agentStarted = false;
+			clearEnforceTimers();
+			stallMonitor.clear();
+			cancelGeneration();
+			generationAttempted = false;
+			const entries: readonly SessionEntryLike[] =
+				ctx.sessionManager.getBranch();
+			const restored = findStoredTitle(entries);
+			manager = new SessionTitleManager(
+				ctx.sessionManager.getSessionId(),
+				directoryTitle,
+				restored,
+			);
+			renderTitle();
+			scheduleTitleEnforce();
+			// Resuming a session that already has a stored title keeps it; one without
+			// gets a title generated from its first user message.
+			if (restored === undefined) maybeGenerateFromHistory(ctx, entries);
+		}),
+	);
 
 	// Pi rewrites the terminal title when the session name changes; reclaim it.
-	pi.on("session_info_changed", (_event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		scheduleTitleEnforce();
-	});
+	disposers.push(
+		pi.on("session_info_changed", (_event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			scheduleTitleEnforce();
+		}),
+	);
 
 	// A late Pi title write (for example a Windows package check) can outlive the
 	// re-assertion shots; the next prompt input heals the title deterministically.
-	pi.on("input", (_event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		renderTitle(true);
-	});
+	disposers.push(
+		pi.on("input", (_event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			renderTitle(true);
+		}),
+	);
 
 	// The first user message of a new session is the generation trigger. History
 	// wins over the prompt text so steered or resumed runs see the same input.
-	pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		const firstUserText =
-			findFirstUserText(ctx.sessionManager.getBranch()) ?? event.prompt.trim();
-		if (firstUserText === "") return;
-		void startGeneration(ctx, firstUserText);
-	});
+	disposers.push(
+		pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			const firstUserText =
+				findFirstUserText(ctx.sessionManager.getBranch()) ??
+				event.prompt.trim();
+			if (firstUserText === "") return;
+			void startGeneration(ctx, firstUserText);
+		}),
+	);
 
-	pi.on("agent_start", (_event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		agentStarted = true;
-		agentRunning = true;
-		// Watches from a previous run (an aborted one, say) must not bleed in.
-		stallMonitor.clear();
-		renderTitle();
-	});
+	disposers.push(
+		pi.on("agent_start", (_event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			agentStarted = true;
+			agentRunning = true;
+			// Watches from a previous run (an aborted one, say) must not bleed in.
+			stallMonitor.clear();
+			renderTitle();
+		}),
+	);
 
 	// `agent_settled` is the boundary where Pi will not continue on its own, so
 	// queued continuations and tool loops stay "running" until it fires. It also
 	// covers aborts and errors, which cannot leave a running marker behind.
-	pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		agentRunning = false;
-		stallMonitor.clear();
-		renderTitle();
-	});
+	disposers.push(
+		pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			agentRunning = false;
+			stallMonitor.clear();
+			renderTitle();
+		}),
+	);
 
 	// Every tool execution is watched the same way, whatever kind of tool it
 	// is; the monitor's map ignores events for ids it does not know. Events are
@@ -417,66 +458,76 @@ export function registerAutoTitle(
 		return ctx.sessionManager.getSessionId() === sessionId;
 	}
 
-	pi.on("tool_execution_start", (event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		if (!acceptsToolEvents(ctx)) return;
-		stallMonitor.start(event.toolCallId, event.toolName);
-	});
+	disposers.push(
+		pi.on("tool_execution_start", (event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			if (!acceptsToolEvents(ctx)) return;
+			stallMonitor.start(event.toolCallId, event.toolName);
+		}),
+	);
 
-	pi.on("tool_execution_update", (event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		if (!acceptsToolEvents(ctx)) return;
-		stallMonitor.update(event.toolCallId);
-	});
+	disposers.push(
+		pi.on("tool_execution_update", (event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			if (!acceptsToolEvents(ctx)) return;
+			stallMonitor.update(event.toolCallId);
+		}),
+	);
 
-	pi.on("tool_execution_end", (event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		if (!acceptsToolEvents(ctx)) return;
-		stallMonitor.end(event.toolCallId);
-	});
+	disposers.push(
+		pi.on("tool_execution_end", (event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			if (!acceptsToolEvents(ctx)) return;
+			stallMonitor.end(event.toolCallId);
+		}),
+	);
 
 	// Tree navigation changes the branch, so the stored title and any in-flight
 	// generation for the old branch are rebuilt here.
-	pi.on("session_tree", (_event, ctx: ExtensionContext) => {
-		ctxRef = ctx;
-		const current = manager;
-		if (current === undefined) return;
-		cancelGeneration();
-		stallMonitor.clear();
-		manager = new SessionTitleManager(
-			current.sessionId,
-			directoryTitle ?? FALLBACK_DIRECTORY_NAME,
-			findStoredTitle(ctx.sessionManager.getBranch()),
-		);
-		renderTitle();
-		scheduleTitleEnforce();
-	});
+	disposers.push(
+		pi.on("session_tree", (_event, ctx: ExtensionContext) => {
+			ctxRef = ctx;
+			const current = manager;
+			if (current === undefined) return;
+			cancelGeneration();
+			stallMonitor.clear();
+			manager = new SessionTitleManager(
+				current.sessionId,
+				directoryTitle ?? FALLBACK_DIRECTORY_NAME,
+				findStoredTitle(ctx.sessionManager.getBranch()),
+			);
+			renderTitle();
+			scheduleTitleEnforce();
+		}),
+	);
 
-	pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
-		disposed = true;
-		clearEnforceTimers();
-		stallMonitor.clear();
-		cancelGeneration();
-		manager?.invalidate();
-		manager = undefined;
-		// Pi leaves its terminal title behind on quit. Clearing the title is the
-		// closest public restore: terminals then show their own default again, or
-		// an empty title when they keep the last value. Session replacement keeps
-		// the window open and must not clear it.
-		if (event.reason === "quit" && ctx.hasUI) {
-			ctx.ui.setTitle("");
-			// Pi writes `π - <dir>` once more while tearing down its UI, right after
-			// this handler, which undoes the restore above. Clearing at process exit
-			// runs after that write and is the last one before the process dies. Raw
-			// bytes go to a TUI only: an RPC client owns its terminal and already got
-			// the `setTitle` call above.
-			if (ctx.mode === "tui" && !exitRestoreRegistered) {
-				exitRestoreRegistered = true;
-				onProcessExit(clearTitleAtExit);
+	disposers.push(
+		pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
+			disposed = true;
+			clearEnforceTimers();
+			stallMonitor.clear();
+			cancelGeneration();
+			manager?.invalidate();
+			manager = undefined;
+			// Pi leaves its terminal title behind on quit. Clearing the title is the
+			// closest public restore: terminals then show their own default again, or
+			// an empty title when they keep the last value. Session replacement keeps
+			// the window open and must not clear it.
+			if (event.reason === "quit" && ctx.hasUI) {
+				ctx.ui.setTitle("");
+				// Pi writes `π - <dir>` once more while tearing down its UI, right after
+				// this handler, which undoes the restore above. Clearing at process exit
+				// runs after that write and is the last one before the process dies. Raw
+				// bytes go to a TUI only: an RPC client owns its terminal and already got
+				// the `setTitle` call above.
+				if (ctx.mode === "tui" && !exitRestoreRegistered) {
+					exitRestoreRegistered = true;
+					onProcessExit(clearTitleAtExit);
+				}
 			}
-		}
-		ctxRef = undefined;
-	});
+			ctxRef = undefined;
+		}),
+	);
 
 	async function runInit(ctx: ExtensionContext): Promise<void> {
 		const path = configPath();
@@ -513,6 +564,9 @@ export function registerAutoTitle(
 	pi.registerCommand("auto-title", {
 		description: "Manage pi-auto-title settings (/auto-title init)",
 		handler: async (args, ctx) => {
+			// Unreachable in the deactivated modes (commands need an input line),
+			// but a deactivated extension must not act if one ever arrives.
+			if (deactivated) return;
 			if (args.trim() !== "init") {
 				ctx.ui.notify(
 					"pi-auto-title: 利用可能なコマンド:\n  /auto-title init デフォルト設定ファイルを生成します（既存ファイルは確認のうえリセット）",
