@@ -10,12 +10,13 @@ import {
 } from "../src/title.ts";
 
 describe("formatTitle", () => {
+	const markers = { running: "⏳", stalled: "⏸️", idle: "✅" };
+
 	test("running state puts the running marker first", () => {
 		assert.equal(
 			formatTitle({
+				...markers,
 				statusEnabled: true,
-				running: "⏳",
-				idle: "✅",
 				status: "running",
 				title: "web-app",
 			}),
@@ -23,12 +24,23 @@ describe("formatTitle", () => {
 		);
 	});
 
+	test("stalled state puts the stalled marker first", () => {
+		assert.equal(
+			formatTitle({
+				...markers,
+				statusEnabled: true,
+				status: "stalled",
+				title: "web-app",
+			}),
+			"⏸️ Pi - web-app",
+		);
+	});
+
 	test("idle state puts the idle marker first", () => {
 		assert.equal(
 			formatTitle({
+				...markers,
 				statusEnabled: true,
-				running: "⏳",
-				idle: "✅",
 				status: "idle",
 				title: "web-app",
 			}),
@@ -39,10 +51,18 @@ describe("formatTitle", () => {
 	test("a disabled status indicator omits the marker entirely", () => {
 		assert.equal(
 			formatTitle({
+				...markers,
 				statusEnabled: false,
-				running: "⏳",
-				idle: "✅",
 				status: "running",
+				title: "web-app",
+			}),
+			"Pi - web-app",
+		);
+		assert.equal(
+			formatTitle({
+				...markers,
+				statusEnabled: false,
+				status: "stalled",
 				title: "web-app",
 			}),
 			"Pi - web-app",
@@ -54,11 +74,12 @@ describe("formatTitle", () => {
 			formatTitle({
 				statusEnabled: true,
 				running: "[run]",
+				stalled: "[wait]",
 				idle: "[ok]",
-				status: "idle",
+				status: "stalled",
 				title: "x",
 			}),
-			"[ok] Pi - x",
+			"[wait] Pi - x",
 		);
 	});
 
@@ -67,7 +88,8 @@ describe("formatTitle", () => {
 			formatTitle({
 				statusEnabled: true,
 				running: "",
-				idle: "",
+				stalled: "",
+				idle: "✅",
 				status: "running",
 				title: "x",
 			}),
@@ -76,9 +98,10 @@ describe("formatTitle", () => {
 		assert.equal(
 			formatTitle({
 				statusEnabled: true,
-				running: "",
+				running: "⏳",
+				stalled: "",
 				idle: "✅",
-				status: "running",
+				status: "stalled",
 				title: "x",
 			}),
 			"Pi - x",

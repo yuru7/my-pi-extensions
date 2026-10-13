@@ -22,10 +22,12 @@ import {
 } from "../src/session.ts";
 import {
 	assistant,
+	createStallClock,
 	fakeModel,
 	flush,
 	recordingClient,
 	type Responder,
+	type StallClock,
 } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
@@ -173,6 +175,7 @@ function setup(options: SetupOptions = {}) {
 	};
 	const { ctx, state } = createCtx(options);
 	const exitHooks: (() => void)[] = [];
+	const stallClock = createStallClock();
 	registerAutoTitle(pi as unknown as ExtensionAPI, {
 		loadConfig: () => loaded,
 		configPath: () => configPath,
@@ -180,6 +183,9 @@ function setup(options: SetupOptions = {}) {
 		timeoutMs: options.timeoutMs ?? 5_000,
 		setTimeout: scheduler.setTimeout,
 		clearTimeout: scheduler.clearTimeout,
+		now: stallClock.now,
+		stallSetTimeout: stallClock.setTimeout,
+		stallClearTimeout: stallClock.clearTimeout,
 		onProcessExit: (handler) => {
 			exitHooks.push(handler);
 		},
@@ -198,6 +204,7 @@ function setup(options: SetupOptions = {}) {
 		logs,
 		runScheduled: scheduler.run,
 		exitHooks,
+		stallClock,
 		runProcessExit(): void {
 			for (const handler of exitHooks.splice(0)) handler();
 		},
@@ -234,6 +241,20 @@ function deferred<T>() {
 		resolve = r;
 	});
 	return { promise, resolve };
+}
+
+function toolEvent(
+	pi: FakePi,
+	ctx: ExtensionContext,
+	type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end",
+	toolCallId: string,
+	toolName = "bash",
+): void {
+	pi.emit(
+		type,
+		{ type, toolCallId, toolName, args: {}, partialResult: null },
+		ctx,
+	);
 }
 
 describe("tab title", () => {
@@ -910,6 +931,212 @@ describe("GenerationTracker", () => {
 		assert.equal(tracker.busy, false);
 		tracker.finish(token);
 		assert.equal(tracker.busy, false);
+	});
+});
+
+describe("stall detection", () => {
+	test("a silent tool switches the running marker to the stalled one", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(29_999);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(1);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+	});
+
+	test("a tool update restores the running marker and re-arms the deadline", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		toolEvent(pi, ctx, "tool_execution_update", "t1");
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(29_999);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(1);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+	});
+
+	test("a tool end returns to running and leaves no timer behind", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		toolEvent(pi, ctx, "tool_execution_end", "t1");
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		// The armed deadline was cancelled through the stall timer pair.
+		assert.equal(stallClock.pendingCount(), 0);
+		assert.ok(stallClock.cancelCount() > 0);
+		stallClock.advance(120_000);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+	});
+
+	test("tool events while idle open no watches", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.at(-1), "Pi - web-app");
+		assert.equal(stallClock.pendingCount(), 0);
+	});
+
+	test("tool events after the run settled open no watches", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx);
+		// A late start and a late end for the aborted run change nothing.
+		toolEvent(pi, ctx, "tool_execution_start", "t2");
+		toolEvent(pi, ctx, "tool_execution_end", "t1");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.at(-1), "✅ Pi - web-app");
+		assert.equal(stallClock.pendingCount(), 0);
+	});
+
+	test("one stalled tool keeps the title stalled while a parallel tool runs", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "a", "bash");
+		stallClock.advance(10_000);
+		toolEvent(pi, ctx, "tool_execution_start", "b", "read");
+		stallClock.advance(20_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		// b's update does not clear a's stalled state.
+		toolEvent(pi, ctx, "tool_execution_update", "b", "read");
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		toolEvent(pi, ctx, "tool_execution_end", "a", "bash");
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+	});
+
+	test("an AI title update keeps the current status marker", async () => {
+		const pending = deferred<ReturnType<typeof assistant>>();
+		const { pi, ctx, state, stallClock } = setup({
+			currentModel: fakeModel("openai", "gpt-5.4"),
+			responders: [() => pending.promise],
+		});
+		startSession(pi, ctx);
+		firstUserPrompt(pi, ctx, "Lambdaフォーム公開APIを実装して");
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		pending.resolve(assistant("Lambdaフォーム公開API"));
+		await flush();
+		assert.equal(state.titles.at(-1), "⏸️ Pi - Lambdaフォーム公開API");
+	});
+
+	test("agent_settled resets to idle and late deadlines change nothing", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx);
+		assert.equal(state.titles.at(-1), "✅ Pi - web-app");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.at(-1), "✅ Pi - web-app");
+		assert.equal(stallClock.pendingCount(), 0);
+	});
+
+	test("a session restart clears the stalled state", () => {
+		const { pi, ctx, state, stallClock } = setup();
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		startSession(pi, ctx, "resume");
+		assert.equal(state.titles.at(-1), "Pi - web-app");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.at(-1), "Pi - web-app");
+	});
+
+	test("a disabled stall detection never shows the stalled marker", () => {
+		const { pi, ctx, state, stallClock } = setup({
+			config: withConfig((config) => {
+				config.statusIndicator.stallDetection.enabled = false;
+			}),
+		});
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(300_000);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		assert.equal(stallClock.pendingCount(), 0);
+	});
+
+	test("a disabled status indicator shows a plain title even while stalled", () => {
+		const { pi, ctx, state, stallClock } = setup({
+			config: withConfig((config) => {
+				config.statusIndicator.enabled = false;
+			}),
+		});
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(30_000);
+		assert.equal(state.titles.at(-1), "Pi - web-app");
+	});
+
+	test("a custom threshold is used for the deadline", () => {
+		const { pi, ctx, state, stallClock } = setup({
+			config: withConfig((config) => {
+				config.statusIndicator.stallDetection.thresholdSeconds = 5;
+			}),
+		});
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(4_999);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(1);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+	});
+
+	test("/auto-title init re-arms watches for the restored threshold", async () => {
+		const { pi, ctx, state, stallClock, configPath } = setup({
+			config: withConfig((config) => {
+				config.statusIndicator.stallDetection.thresholdSeconds = 5;
+			}),
+		});
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		await pi.commands.get("auto-title")?.handler("init", ctx);
+		// The 5s timer was dropped; the new 30s deadline applies.
+		stallClock.advance(5_000);
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(25_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		assert.match(readFileSync(configPath, "utf8"), /"thresholdSeconds": 30/);
+	});
+
+	test("/auto-title init recovers a tool stalled under the smaller threshold", async () => {
+		const { pi, ctx, state, stallClock } = setup({
+			config: withConfig((config) => {
+				config.statusIndicator.stallDetection.thresholdSeconds = 5;
+			}),
+		});
+		startSession(pi, ctx);
+		pi.emit("agent_start", { type: "agent_start" }, ctx);
+		toolEvent(pi, ctx, "tool_execution_start", "t1");
+		stallClock.advance(5_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
+		await pi.commands.get("auto-title")?.handler("init", ctx);
+		// The same silence is well under the restored 30s threshold.
+		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
+		stallClock.advance(25_000);
+		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
 	});
 });
 

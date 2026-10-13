@@ -44,6 +44,7 @@ import {
 	titleEntryData,
 	type SessionEntryLike,
 } from "../src/session.ts";
+import { StallMonitor } from "../src/stall-monitor.ts";
 import {
 	FALLBACK_DIRECTORY_NAME,
 	formatTitle,
@@ -80,6 +81,12 @@ export interface AutoTitleDeps {
 	onProcessExit?: (handler: () => void) => void;
 	/** Synchronous empty-title write for the exit-time restore; defaults to {@link clearTerminalTitle}. */
 	clearTitleAtExit?: () => void;
+	/** Monotonic clock for stall detection; defaults to `performance.now`. */
+	now?: () => number;
+	/** One-shot scheduler for stall-deadline timers; defaults to `setTimeout`. */
+	stallSetTimeout?: (callback: () => void, delayMs: number) => unknown;
+	/** Cancels a handle from {@link AutoTitleDeps.stallSetTimeout}; defaults to `clearTimeout`. */
+	stallClearTimeout?: (handle: unknown) => void;
 	/** Log sink; defaults to `console.error`. */
 	log?: (message: string) => void;
 }
@@ -145,7 +152,8 @@ export function registerAutoTitle(
 	/** Startup directory name, fixed on the first `session_start` of this runtime. */
 	let directoryTitle: string | undefined;
 	let manager: SessionTitleManager | undefined;
-	let status: TitleStatus = "idle";
+	/** Whether the agent loop is currently executing; the display flag is `agentStarted`. */
+	let agentRunning = false;
 	/** The status marker appears once the agent has run at least once. */
 	let agentStarted = false;
 	let ctxRef: ExtensionContext | undefined;
@@ -158,6 +166,36 @@ export function registerAutoTitle(
 	let warningShown = false;
 	/** The process-exit restore is registered at most once. */
 	let exitRestoreRegistered = false;
+	/** Session the watches belong to; tool events from another one are ignored. */
+	let sessionId: string | undefined;
+
+	/** The stall-deadline timers use their own injectable pair, independent of the enforce scheduler. */
+	const stallSchedule =
+		deps.stallSetTimeout ??
+		((callback: () => void, delayMs: number) => schedule(callback, delayMs));
+	const stallCancel =
+		deps.stallClearTimeout ??
+		((handle: unknown) => cancelTimer(handle as TimerHandle));
+
+	/** Stall watches for the current agent run; the map is empty while idle. */
+	const stallMonitor = new StallMonitor({
+		thresholdMs: () =>
+			config.statusIndicator.stallDetection.thresholdSeconds * 1_000,
+		now: deps.now,
+		setTimeout: stallSchedule,
+		clearTimeout: stallCancel,
+		onStalledChange: () => renderTitle(),
+	});
+
+	/**
+	 * Status derived from the run state, so no transition can leave a stale
+	 * marker behind: a cleared monitor or an ended run falls back to idle (or
+	 * plain running) on the next render by itself.
+	 */
+	function currentStatus(): TitleStatus {
+		if (!agentRunning) return "idle";
+		return stallMonitor.stalled ? "stalled" : "running";
+	}
 
 	const display = new TitleDisplay((title) => {
 		ctxRef?.ui.setTitle(title);
@@ -170,8 +208,9 @@ export function registerAutoTitle(
 			formatTitle({
 				statusEnabled: config.statusIndicator.enabled && agentStarted,
 				running: config.statusIndicator.running,
+				stalled: config.statusIndicator.stalled,
 				idle: config.statusIndicator.idle,
-				status,
+				status: currentStatus(),
 				title: manager?.title ?? directoryTitle ?? FALLBACK_DIRECTORY_NAME,
 			}),
 			force,
@@ -297,6 +336,7 @@ export function registerAutoTitle(
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		disposed = false;
 		ctxRef = ctx;
+		sessionId = ctx.sessionManager.getSessionId();
 		const loaded = load();
 		config = loaded.config;
 		if (loaded.warning !== undefined && !warningShown) {
@@ -304,9 +344,10 @@ export function registerAutoTitle(
 			ctx.ui.notify(loaded.warning, "warning");
 		}
 		directoryTitle ??= workspaceNameFromPath(ctx.cwd);
-		status = "idle";
+		agentRunning = false;
 		agentStarted = false;
 		clearEnforceTimers();
+		stallMonitor.clear();
 		cancelGeneration();
 		generationAttempted = false;
 		const entries: readonly SessionEntryLike[] = ctx.sessionManager.getBranch();
@@ -349,7 +390,9 @@ export function registerAutoTitle(
 	pi.on("agent_start", (_event, ctx: ExtensionContext) => {
 		ctxRef = ctx;
 		agentStarted = true;
-		status = "running";
+		agentRunning = true;
+		// Watches from a previous run (an aborted one, say) must not bleed in.
+		stallMonitor.clear();
 		renderTitle();
 	});
 
@@ -358,8 +401,38 @@ export function registerAutoTitle(
 	// covers aborts and errors, which cannot leave a running marker behind.
 	pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
 		ctxRef = ctx;
-		status = "idle";
+		agentRunning = false;
+		stallMonitor.clear();
 		renderTitle();
+	});
+
+	// Every tool execution is watched the same way, whatever kind of tool it
+	// is; the monitor's map ignores events for ids it does not know. Events are
+	// accepted only while this session's agent run is active: tool events are
+	// emitted from the agent loop (agent-session.js `_emitExtensionEvent`), but
+	// late arrivals around a settle or session switch must not open watches.
+	function acceptsToolEvents(ctx: ExtensionContext): boolean {
+		if (disposed || !agentRunning) return false;
+		if (!config.statusIndicator.stallDetection.enabled) return false;
+		return ctx.sessionManager.getSessionId() === sessionId;
+	}
+
+	pi.on("tool_execution_start", (event, ctx: ExtensionContext) => {
+		ctxRef = ctx;
+		if (!acceptsToolEvents(ctx)) return;
+		stallMonitor.start(event.toolCallId, event.toolName);
+	});
+
+	pi.on("tool_execution_update", (event, ctx: ExtensionContext) => {
+		ctxRef = ctx;
+		if (!acceptsToolEvents(ctx)) return;
+		stallMonitor.update(event.toolCallId);
+	});
+
+	pi.on("tool_execution_end", (event, ctx: ExtensionContext) => {
+		ctxRef = ctx;
+		if (!acceptsToolEvents(ctx)) return;
+		stallMonitor.end(event.toolCallId);
 	});
 
 	// Tree navigation changes the branch, so the stored title and any in-flight
@@ -369,6 +442,7 @@ export function registerAutoTitle(
 		const current = manager;
 		if (current === undefined) return;
 		cancelGeneration();
+		stallMonitor.clear();
 		manager = new SessionTitleManager(
 			current.sessionId,
 			directoryTitle ?? FALLBACK_DIRECTORY_NAME,
@@ -381,6 +455,7 @@ export function registerAutoTitle(
 	pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
 		disposed = true;
 		clearEnforceTimers();
+		stallMonitor.clear();
 		cancelGeneration();
 		manager?.invalidate();
 		manager = undefined;
@@ -425,6 +500,9 @@ export function registerAutoTitle(
 		}
 		config = defaultConfig();
 		ctxRef = ctx;
+		// The new defaults may change the threshold; re-evaluate the watches so
+		// no timer armed for the old one survives.
+		stallMonitor.refresh();
 		renderTitle();
 		ctx.ui.notify(
 			`pi-auto-title: ${path} を${existed ? "デフォルト設定にリセット" : "作成"}しました`,

@@ -3,13 +3,14 @@
 English | [日本語](./README_ja.md)
 
 A Pi Coding Agent extension that manages the terminal tab title: an
-AI-generated session title plus a running/idle status indicator.
+AI-generated session title plus a running/idle/stalled status indicator.
 
 Repository: [yuru7/my-pi-extensions](https://github.com/yuru7/my-pi-extensions)
 
 ```text
 Pi - web-app                  (startup, before the agent runs)
 ⏳ Pi - Lambdaフォーム公開API     (agent running)
+⏸️ Pi - Lambdaフォーム公開API     (a watched tool has been silent too long)
 ✅ Pi - Lambdaフォーム公開API     (idle, waiting for input)
 ```
 
@@ -29,9 +30,11 @@ pi install npm:@yuru7/pi-auto-title
 At startup the title is `Pi - <title>`. Once the agent has run at least once,
 the status marker leads it: `<status> Pi - <title>`.
 
-- `<status>` is `⏳` while the agent runs and `✅` while it is idle. It can be
-  customized or turned off (see [Configuration](#configuration)), and it only
-  appears after the agent's first run.
+- `<status>` is `⏳` while the agent runs, `⏸️` while a watched tool has been
+  silent too long (see [Stall detection](#stall-detection)), and `✅` while it
+  is idle. The markers can be customized or turned off (see
+  [Configuration](#configuration)), and they only appear after the agent's
+  first run.
 - `<title>` is the AI-generated title once one exists, otherwise the trailing
   name of the directory Pi was started in (`/home/user/projects/web-app`
   becomes `web-app`). When a path has no trailing name (a filesystem root),
@@ -85,7 +88,12 @@ is never repaired or overwritten. Use `/reload` after editing it.
   "statusIndicator": {
     "enabled": true,
     "running": "⏳",
-    "idle": "✅"
+    "idle": "✅",
+    "stalled": "⏸️",
+    "stallDetection": {
+      "enabled": true,
+      "thresholdSeconds": 30
+    }
   }
 }
 ```
@@ -114,12 +122,37 @@ thinking level.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `enabled` | boolean | `true` | Show the running/idle marker |
+| `enabled` | boolean | `true` | Show the status marker |
 | `running` | string | `"⏳"` | Marker while the agent runs |
 | `idle` | string | `"✅"` | Marker while the agent is idle |
+| `stalled` | string | `"⏸️"` | Marker while a watched tool is stalled |
+| `stallDetection.enabled` | boolean | `true` | Watch running tools for inactivity |
+| `stallDetection.thresholdSeconds` | number | `30` | Seconds of tool silence before the stalled marker shows (finite, at least 1) |
 
-`running` and `idle` are used verbatim; an empty string shows no marker for that
-state. With `enabled: false` the marker is omitted entirely.
+`running`, `idle`, and `stalled` are used verbatim; an empty string shows no
+marker for that state. With `enabled: false` the marker is omitted entirely.
+`thresholdSeconds` must be a finite number of at least 1; anything else falls
+back to the default with one warning.
+
+## Stall detection
+
+While the agent runs, every tool execution is watched by its `toolCallId`, no
+matter what kind of tool it is. When a tool has produced no event for
+`stallDetection.thresholdSeconds`, the status marker switches to `stalled`;
+any progress event resets that tool's clock and returns the marker to
+`running`. Parallel tools are judged independently: a single stalled tool is
+enough for the stalled marker, and it clears as soon as none of the remaining
+tools is stalled. Model reasoning without a running tool is never judged as
+stalled.
+
+The stalled state is an estimate from the silence duration, not a verdict: long
+builds, network waits, or a tool waiting for user input all look the same.
+Nothing is cancelled or retried automatically.
+
+When the agent settles (a run ends, is aborted, or errors), the watches are
+dropped and the marker returns to `idle` — a stalled marker never survives
+into the next run or session. `stallDetection.enabled: false` restores the
+two-state running/idle indicator.
 
 ## Commands
 

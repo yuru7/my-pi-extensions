@@ -53,7 +53,13 @@ describe("parseConfig", () => {
 				thinkingLevel: "CURRENT",
 				fallbackToCurrentModel: true,
 			},
-			statusIndicator: { enabled: true, running: ">", idle: "✅" },
+			statusIndicator: {
+				enabled: true,
+				running: ">",
+				idle: "✅",
+				stalled: "⏸️",
+				stallDetection: { enabled: true, thresholdSeconds: 30 },
+			},
 		});
 	});
 
@@ -162,6 +168,93 @@ describe("loadConfig", () => {
 		writeFileSync(path, text);
 		const result = loadConfig(path);
 		assert.equal(result.config.statusIndicator.running, ">");
+		assert.equal(result.warning, undefined);
+		assert.equal(readFileSync(path, "utf8"), text);
+	});
+});
+
+describe("stall detection settings", () => {
+	test("the defaults include the stalled marker and detection values", () => {
+		assert.deepEqual(DEFAULT_CONFIG.statusIndicator.stallDetection, {
+			enabled: true,
+			thresholdSeconds: 30,
+		});
+		assert.equal(DEFAULT_CONFIG.statusIndicator.stalled, "⏸️");
+		// A copy is deep: mutating one copy must not touch the defaults.
+		const copy = defaultConfig();
+		copy.statusIndicator.stallDetection.thresholdSeconds = 5;
+		assert.equal(
+			DEFAULT_CONFIG.statusIndicator.stallDetection.thresholdSeconds,
+			30,
+		);
+	});
+
+	test("missing new fields fall back to the defaults (older config files)", () => {
+		const config = parseConfig({
+			statusIndicator: { running: ">", idle: "[ok]" },
+		});
+		assert.equal(config.statusIndicator.running, ">");
+		assert.equal(config.statusIndicator.idle, "[ok]");
+		assert.deepEqual(
+			config.statusIndicator.stallDetection,
+			DEFAULT_CONFIG.statusIndicator.stallDetection,
+		);
+		assert.equal(config.statusIndicator.stalled, "⏸️");
+	});
+
+	test("the threshold and stalled marker can be changed", () => {
+		const config = parseConfig({
+			statusIndicator: {
+				stalled: "[wait]",
+				stallDetection: { enabled: false, thresholdSeconds: 90 },
+			},
+		});
+		assert.equal(config.statusIndicator.stalled, "[wait]");
+		assert.deepEqual(config.statusIndicator.stallDetection, {
+			enabled: false,
+			thresholdSeconds: 90,
+		});
+	});
+
+	test("an invalid threshold is rejected with the field named", () => {
+		for (const thresholdSeconds of [0, -5, "30", null, true]) {
+			assert.throws(
+				() =>
+					parseConfig({
+						statusIndicator: {
+							stallDetection: { thresholdSeconds },
+						},
+					}),
+				/statusIndicator\.stallDetection\.thresholdSeconds/,
+			);
+		}
+	});
+
+	test("an invalid stalled marker type is rejected with the field named", () => {
+		assert.throws(
+			() => parseConfig({ statusIndicator: { stalled: 7 } }),
+			/statusIndicator\.stalled/,
+		);
+	});
+
+	test("an invalid stallDetection section is rejected with the field named", () => {
+		assert.throws(
+			() => parseConfig({ statusIndicator: { stallDetection: "off" } }),
+			/statusIndicator\.stallDetection/,
+		);
+	});
+
+	test("a partially valid file keeps its values and gains the new defaults", () => {
+		const path = tempConfigPath();
+		mkdirSync(join(path, ".."), { recursive: true });
+		const text = JSON.stringify({ statusIndicator: { running: ">" } });
+		writeFileSync(path, text);
+		const result = loadConfig(path);
+		assert.equal(result.config.statusIndicator.running, ">");
+		assert.deepEqual(
+			result.config.statusIndicator.stallDetection,
+			DEFAULT_CONFIG.statusIndicator.stallDetection,
+		);
 		assert.equal(result.warning, undefined);
 		assert.equal(readFileSync(path, "utf8"), text);
 	});

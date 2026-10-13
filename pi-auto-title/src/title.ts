@@ -8,7 +8,7 @@
  */
 
 /** Agent activity state shown by the status indicator. */
-export type TitleStatus = "running" | "idle";
+export type TitleStatus = "running" | "stalled" | "idle";
 
 /** Maximum length of the AI-generated title part, in Unicode code points. */
 export const MAX_AI_TITLE_LENGTH = 30;
@@ -21,6 +21,8 @@ export interface TitleFormatOptions {
 	statusEnabled: boolean;
 	/** Marker for {@link TitleStatus} "running"; may be empty. */
 	running: string;
+	/** Marker for {@link TitleStatus} "stalled"; may be empty. */
+	stalled: string;
 	/** Marker for {@link TitleStatus} "idle"; may be empty. */
 	idle: string;
 	/** Current agent activity. */
@@ -39,7 +41,9 @@ export function formatTitle(options: TitleFormatOptions): string {
 	const marker = options.statusEnabled
 		? options.status === "running"
 			? options.running
-			: options.idle
+			: options.status === "stalled"
+				? options.stalled
+				: options.idle
 		: "";
 	const prefix = marker === "" ? "" : `${marker} `;
 	return `${prefix}Pi - ${options.title}`;

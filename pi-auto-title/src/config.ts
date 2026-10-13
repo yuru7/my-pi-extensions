@@ -41,6 +41,17 @@ export interface StatusIndicatorSettings {
 	running: string;
 	/** Marker shown while the agent is idle; an empty string shows none. */
 	idle: string;
+	/** Marker shown while a watched tool is stalled; an empty string shows none. */
+	stalled: string;
+	/** Inactivity-based stall detection for running tools. */
+	stallDetection: StallDetectionSettings;
+}
+
+export interface StallDetectionSettings {
+	/** Whether running tools are watched for inactivity at all. */
+	enabled: boolean;
+	/** Seconds of tool silence before the stalled marker shows; finite and >= 1. */
+	thresholdSeconds: number;
 }
 
 export interface AutoTitleConfig {
@@ -59,6 +70,11 @@ export const DEFAULT_CONFIG: AutoTitleConfig = {
 		enabled: true,
 		running: "⏳",
 		idle: "✅",
+		stalled: "⏸️",
+		stallDetection: {
+			enabled: true,
+			thresholdSeconds: 30,
+		},
 	},
 };
 
@@ -77,7 +93,10 @@ export function configPath(): string {
 export function defaultConfig(): AutoTitleConfig {
 	return {
 		autoTitle: { ...DEFAULT_CONFIG.autoTitle },
-		statusIndicator: { ...DEFAULT_CONFIG.statusIndicator },
+		statusIndicator: {
+			...DEFAULT_CONFIG.statusIndicator,
+			stallDetection: { ...DEFAULT_CONFIG.statusIndicator.stallDetection },
+		},
 	};
 }
 
@@ -123,6 +142,21 @@ function readString(
 	return value;
 }
 
+function readNumber(
+	source: Record<string, unknown>,
+	section: string,
+	key: string,
+	fallback: number,
+	minimum: number,
+): number {
+	const value = source[key];
+	if (value === undefined) return fallback;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
+		throw new Error(`${section}.${key} must be a finite number >= ${minimum}`);
+	}
+	return value;
+}
+
 /**
  * Validate a parsed configuration value and fill missing fields with defaults.
  *
@@ -133,6 +167,10 @@ export function parseConfig(value: unknown): AutoTitleConfig {
 	const root = asObject(value, "configuration");
 	const autoTitle = asObject(root.autoTitle, "autoTitle");
 	const statusIndicator = asObject(root.statusIndicator, "statusIndicator");
+	const stallDetection = asObject(
+		statusIndicator.stallDetection,
+		"statusIndicator.stallDetection",
+	);
 	return {
 		autoTitle: {
 			enabled: readBoolean(
@@ -183,6 +221,28 @@ export function parseConfig(value: unknown): AutoTitleConfig {
 				DEFAULT_CONFIG.statusIndicator.idle,
 				true,
 			),
+			stalled: readString(
+				statusIndicator,
+				"statusIndicator",
+				"stalled",
+				DEFAULT_CONFIG.statusIndicator.stalled,
+				true,
+			),
+			stallDetection: {
+				enabled: readBoolean(
+					stallDetection,
+					"statusIndicator.stallDetection",
+					"enabled",
+					DEFAULT_CONFIG.statusIndicator.stallDetection.enabled,
+				),
+				thresholdSeconds: readNumber(
+					stallDetection,
+					"statusIndicator.stallDetection",
+					"thresholdSeconds",
+					DEFAULT_CONFIG.statusIndicator.stallDetection.thresholdSeconds,
+					1,
+				),
+			},
 		},
 	};
 }
