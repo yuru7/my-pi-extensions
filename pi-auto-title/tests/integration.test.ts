@@ -12,6 +12,7 @@ import { registerAutoTitle } from "../extensions/index.ts";
 import {
 	DEFAULT_CONFIG,
 	defaultConfig,
+	parseConfig,
 	type AutoTitleConfig,
 	type LoadConfigResult,
 } from "../src/config.ts";
@@ -34,6 +35,7 @@ type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 interface CommandOptions {
 	handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+	getArgumentCompletions?: (argumentPrefix: string) => unknown;
 }
 
 function createFakePi() {
@@ -79,11 +81,15 @@ function createCtx(options: CtxOptions) {
 	const titles: string[] = [];
 	const notifications: { message: string; type?: string }[] = [];
 	const confirmations: string[] = [];
+	const selections: { title: string; options: string[] }[] = [];
 	const state = {
 		titles,
 		notifications,
 		confirmations,
 		confirmResult: true,
+		selections,
+		/** What ui.select answers; undefined simulates Esc. */
+		selectResult: "Yes" as string | undefined,
 		/** What the terminal currently displays, including writes from Pi itself. */
 		terminalTitle: "",
 		entries: options.entries ?? ([] as SessionEntryLike[]),
@@ -106,6 +112,10 @@ function createCtx(options: CtxOptions) {
 			confirm: async (_title: string, message: string) => {
 				confirmations.push(message);
 				return state.confirmResult;
+			},
+			select: async (title: string, options: string[]) => {
+				selections.push({ title, options });
+				return state.selectResult;
 			},
 		},
 		sessionManager: {
@@ -177,7 +187,18 @@ function setup(options: SetupOptions = {}) {
 	const exitHooks: (() => void)[] = [];
 	const stallClock = createStallClock();
 	registerAutoTitle(pi as unknown as ExtensionAPI, {
-		loadConfig: () => loaded,
+		// テストの init が書き込んだファイルを実効設定として読み直せるよう、
+		// 実在するファイルを優先して読む (本物の loadConfig と同じ挙動)。
+		loadConfig: () => {
+			if (!existsSync(configPath)) return loaded;
+			try {
+				return {
+					config: parseConfig(JSON.parse(readFileSync(configPath, "utf8"))),
+				};
+			} catch {
+				return loaded;
+			}
+		},
 		configPath: () => configPath,
 		createClient: () => client.client,
 		timeoutMs: options.timeoutMs ?? 5_000,
@@ -1132,7 +1153,7 @@ describe("stall detection", () => {
 		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
 	});
 
-	test("/auto-title init re-arms watches for the restored threshold", async () => {
+	test("/pi-auto-title init re-arms watches for the restored threshold", async () => {
 		const { pi, ctx, state, stallClock, configPath } = setup({
 			config: withConfig((config) => {
 				config.statusIndicator.stallDetection.thresholdSeconds = 5;
@@ -1141,7 +1162,7 @@ describe("stall detection", () => {
 		startSession(pi, ctx);
 		pi.emit("agent_start", { type: "agent_start" }, ctx);
 		toolEvent(pi, ctx, "tool_execution_start", "t1");
-		await pi.commands.get("auto-title")?.handler("init", ctx);
+		await pi.commands.get("pi-auto-title")?.handler("init", ctx);
 		// The 5s timer was dropped; the new 30s deadline applies.
 		stallClock.advance(5_000);
 		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
@@ -1150,7 +1171,7 @@ describe("stall detection", () => {
 		assert.match(readFileSync(configPath, "utf8"), /"thresholdSeconds": 30/);
 	});
 
-	test("/auto-title init recovers a tool stalled under the smaller threshold", async () => {
+	test("/pi-auto-title init recovers a tool stalled under the smaller threshold", async () => {
 		const { pi, ctx, state, stallClock } = setup({
 			config: withConfig((config) => {
 				config.statusIndicator.stallDetection.thresholdSeconds = 5;
@@ -1161,7 +1182,7 @@ describe("stall detection", () => {
 		toolEvent(pi, ctx, "tool_execution_start", "t1");
 		stallClock.advance(5_000);
 		assert.equal(state.titles.at(-1), "⏸️ Pi - web-app");
-		await pi.commands.get("auto-title")?.handler("init", ctx);
+		await pi.commands.get("pi-auto-title")?.handler("init", ctx);
 		// The same silence is well under the restored 30s threshold.
 		assert.equal(state.titles.at(-1), "⏳ Pi - web-app");
 		stallClock.advance(25_000);
@@ -1169,47 +1190,83 @@ describe("stall detection", () => {
 	});
 });
 
-describe("/auto-title init", () => {
+describe("/pi-auto-title init", () => {
 	test("creates the default configuration file", async () => {
 		const { pi, ctx, state, configPath } = setup();
 		startSession(pi, ctx);
-		const command = pi.commands.get("auto-title");
+		const command = pi.commands.get("pi-auto-title");
 		assert.ok(command);
 		await command.handler("init", ctx);
 		assert.ok(existsSync(configPath));
 		const text = readFileSync(configPath, "utf8");
 		assert.deepEqual(JSON.parse(text), DEFAULT_CONFIG);
 		assert.ok(text.endsWith("}\n"));
-		assert.match(state.notifications.at(-1)?.message ?? "", /作成/);
+		assert.match(state.notifications.at(-1)?.message ?? "", / created$/);
 	});
 
-	test("asks before resetting an existing file and honours a cancel", async () => {
+	test("asks before resetting an existing file and honours the answer", async () => {
 		const { pi, ctx, state, configPath } = setup();
 		startSession(pi, ctx);
-		const command = pi.commands.get("auto-title");
+		const command = pi.commands.get("pi-auto-title");
 		assert.ok(command);
 		writeFileSync(configPath, '{"statusIndicator":{"idle":"[ok]"}}\n');
 
-		state.confirmResult = false;
+		// "No" is offered first, so a plain Enter does not overwrite.
+		state.selectResult = "No";
 		await command.handler("init", ctx);
-		assert.equal(state.confirmations.length, 1);
-		assert.match(
-			state.confirmations[0],
-			/既存のpi-auto-title\.jsonをデフォルト設定で上書きしますか/,
-		);
+		assert.equal(state.selections.length, 1);
+		assert.match(state.selections[0].title, /already exists\. Overwrite/);
+		assert.deepEqual(state.selections[0].options, ["No", "Yes"]);
+		assert.match(state.notifications.at(-1)?.message ?? "", /left unchanged/);
 		assert.equal(
 			readFileSync(configPath, "utf8"),
 			'{"statusIndicator":{"idle":"[ok]"}}\n',
 		);
 
-		state.confirmResult = true;
+		// Esc cancels as well.
+		state.selectResult = undefined;
 		await command.handler("init", ctx);
-		assert.equal(state.confirmations.length, 2);
+		assert.equal(state.selections.length, 2);
+		assert.match(state.notifications.at(-1)?.message ?? "", /cancelled/);
+		assert.notEqual(
+			readFileSync(configPath, "utf8"),
+			`${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`,
+		);
+
+		state.selectResult = "Yes";
+		await command.handler("init", ctx);
+		assert.equal(state.selections.length, 3);
 		assert.deepEqual(
 			JSON.parse(readFileSync(configPath, "utf8")),
 			DEFAULT_CONFIG,
 		);
-		assert.match(state.notifications.at(-1)?.message ?? "", /リセット/);
+		assert.match(
+			state.notifications.at(-1)?.message ?? "",
+			/reset to the defaults/,
+		);
+	});
+
+	test("init is suggested as the argument", async () => {
+		const { pi } = setup();
+		const command = pi.commands.get("pi-auto-title");
+		assert.ok(command);
+		assert.ok(command.getArgumentCompletions);
+		const items = command.getArgumentCompletions("");
+		assert.ok(Array.isArray(items));
+		assert.deepEqual(
+			(items as { value: string }[]).map((item) => item.value),
+			["init"],
+		);
+		const partial = command.getArgumentCompletions("in");
+		assert.deepEqual(
+			(partial as { value: string }[]).map((item) => item.value),
+			["init"],
+		);
+		assert.equal(
+			(command.getArgumentCompletions("reset") as unknown[] | null)?.length ??
+				0,
+			0,
+		);
 	});
 
 	test("applies the new defaults to the running session", async () => {
@@ -1233,7 +1290,7 @@ describe("/auto-title init", () => {
 			ctx,
 		);
 		assert.equal(state.titles.at(-1), "Pi - フォーム公開API改善");
-		const command = pi.commands.get("auto-title");
+		const command = pi.commands.get("pi-auto-title");
 		assert.ok(command);
 		await command.handler("init", ctx);
 		assert.equal(state.titles.at(-1), "✅ Pi - フォーム公開API改善");
@@ -1242,14 +1299,14 @@ describe("/auto-title init", () => {
 	test("unknown arguments show the available commands", async () => {
 		const { pi, ctx, state, configPath } = setup();
 		startSession(pi, ctx);
-		const command = pi.commands.get("auto-title");
+		const command = pi.commands.get("pi-auto-title");
 		assert.ok(command);
 		await command.handler("", ctx);
 		await command.handler("reset", ctx);
 		assert.equal(existsSync(configPath), false);
 		assert.match(
 			state.notifications.at(-1)?.message ?? "",
-			/\/auto-title init/,
+			/\/pi-auto-title init/,
 		);
 	});
 });

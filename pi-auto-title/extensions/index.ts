@@ -529,47 +529,74 @@ export function registerAutoTitle(
 		}),
 	);
 
+	/** The overwrite confirmation lists No first, so a plain Enter cannot overwrite. */
+	const OVERWRITE_CHOICES = ["No", "Yes"] as const;
+
 	async function runInit(ctx: ExtensionContext): Promise<void> {
 		const path = configPath();
 		let existed = false;
 		try {
 			existed = existsSync(path);
 			if (existed) {
-				const confirmed = await ctx.ui.confirm(
-					"pi-auto-title",
-					"既存のpi-auto-title.jsonをデフォルト設定で上書きしますか？",
+				const choice = await ctx.ui.select(
+					`${path} already exists. Overwrite it with the default settings?`,
+					[...OVERWRITE_CHOICES],
 				);
-				if (!confirmed) return;
+				if (choice === undefined) {
+					ctx.ui.notify("pi-auto-title: cancelled", "info");
+					return;
+				}
+				if (choice !== "Yes") {
+					ctx.ui.notify(
+						"pi-auto-title: cancelled. The existing file was left unchanged",
+						"info",
+					);
+					return;
+				}
 			}
 			writeDefaultConfig(path);
 		} catch (error) {
 			ctx.ui.notify(
-				`pi-auto-title: 設定ファイルを書き込めませんでした: ${errorMessage(error)}`,
+				`pi-auto-title: could not write the configuration file: ${errorMessage(error)}`,
 				"error",
 			);
 			return;
 		}
-		config = defaultConfig();
+		// Reload what was written as the effective settings instead of assigning
+		// the defaults directly.
+		config = load().config;
 		ctxRef = ctx;
 		// The new defaults may change the threshold; re-evaluate the watches so
 		// no timer armed for the old one survives.
 		stallMonitor.refresh();
 		renderTitle();
 		ctx.ui.notify(
-			`pi-auto-title: ${path} を${existed ? "デフォルト設定にリセット" : "作成"}しました`,
+			`pi-auto-title: ${path} ${existed ? "reset to the defaults" : "created"}`,
 			"info",
 		);
 	}
 
-	pi.registerCommand("auto-title", {
-		description: "Manage pi-auto-title settings (/auto-title init)",
+	pi.registerCommand("pi-auto-title", {
+		description: "Manage pi-auto-title settings (/pi-auto-title init)",
+		getArgumentCompletions: (argumentPrefix) => {
+			const prefix = argumentPrefix.trim().toLowerCase();
+			if (!"init".startsWith(prefix)) return [];
+			return [
+				{
+					value: "init",
+					label: "init",
+					description:
+						"Write the default configuration file (asks before overwriting)",
+				},
+			];
+		},
 		handler: async (args, ctx) => {
 			// Unreachable in the deactivated modes (commands need an input line),
 			// but a deactivated extension must not act if one ever arrives.
 			if (deactivated) return;
 			if (args.trim() !== "init") {
 				ctx.ui.notify(
-					"pi-auto-title: 利用可能なコマンド:\n  /auto-title init デフォルト設定ファイルを生成します（既存ファイルは確認のうえリセット）",
+					"pi-auto-title: available command:\n  /pi-auto-title init — write the default configuration file (asks before overwriting)",
 					"info",
 				);
 				return;

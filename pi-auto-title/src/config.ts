@@ -11,8 +11,8 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const CONFIG_FILE_NAME = "pi-auto-title.json";
 const UTF8_ENCODING = "utf8";
@@ -84,9 +84,9 @@ export interface LoadConfigResult {
 	warning?: string;
 }
 
-/** Path of the fixed configuration file: `~/.pi/agent/pi-auto-title.json`. */
+/** Path of the configuration file: `<agent dir>/pi-auto-title.json` (e.g. `~/.pi/agent/`). */
 export function configPath(): string {
-	return join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
+	return join(getAgentDir(), CONFIG_FILE_NAME);
 }
 
 /** A fresh copy of the default configuration, so callers cannot mutate {@link DEFAULT_CONFIG}. */

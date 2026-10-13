@@ -70,8 +70,10 @@ to turn generation off entirely.
 
 ## Configuration
 
-The configuration file is optional and fixed at
-`~/.pi/agent/pi-auto-title.json`. Without the file the defaults below are used;
+The configuration file is optional and fixed at `<agent dir>/pi-auto-title.json`
+(`~/.pi/agent/pi-auto-title.json` by default; the directory is Pi's
+`getAgentDir()`, so `PI_CODING_AGENT_DIR` is respected). Without the file the
+defaults below are used;
 the file is never created on its own. Missing fields fall back to the defaults,
 explicit `false` values are kept, and unknown fields are ignored. Invalid JSON
 or a wrong field type falls back to the defaults with one warning, and the file
@@ -157,16 +159,19 @@ two-state running/idle indicator.
 ## Commands
 
 ```text
-/auto-title init
+/pi-auto-title init
 ```
 
-Writes the default configuration to `~/.pi/agent/pi-auto-title.json`, creating
-parent directories as needed. When the file already exists, a confirmation
-dialog asks before resetting it to the defaults; cancelling changes nothing.
-The new settings apply immediately, without restarting Pi, and a title that was
+`init` is offered as the argument completion right after `/pi-auto-title `.
+
+Writes the default configuration to `<agent dir>/pi-auto-title.json`, creating
+parent directories as needed. When the file already exists, a selector asks
+whether to overwrite it, with `No` as the first choice so a plain Enter cannot
+clobber the file; choosing `No` or pressing Esc changes nothing. The new
+settings apply immediately, without restarting Pi, and a title that was
 already generated is kept.
 
-Running `/auto-title` without `init`, or with any other argument, shows the
+Running `/pi-auto-title` without `init`, or with any other argument, shows the
 available commands.
 
 ## Model fallback

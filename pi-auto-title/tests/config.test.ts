@@ -7,9 +7,9 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	configPath,
 	DEFAULT_CONFIG,
@@ -28,11 +28,20 @@ function tempConfigPath(): string {
 }
 
 describe("configPath", () => {
-	test("is fixed at ~/.pi/agent/pi-auto-title.json", () => {
-		assert.equal(
-			configPath(),
-			join(homedir(), ".pi", "agent", "pi-auto-title.json"),
-		);
+	test("is <agent dir>/pi-auto-title.json (e.g. ~/.pi/agent/)", () => {
+		assert.equal(configPath(), join(getAgentDir(), "pi-auto-title.json"));
+	});
+
+	test("follows PI_CODING_AGENT_DIR for the agent directory", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-agent-dir-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = dir;
+		try {
+			assert.equal(configPath(), join(dir, "pi-auto-title.json"));
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+		}
 	});
 });
 
