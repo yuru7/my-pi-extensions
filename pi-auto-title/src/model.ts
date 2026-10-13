@@ -30,11 +30,11 @@ export type FailureKind =
 
 /** User-facing labels for {@link FailureKind}; they never carry provider error text. */
 export const FAILURE_LABELS: Record<FailureKind, string> = {
-	"not-found": "モデル未登録",
-	"no-credentials": "認証情報なし",
-	"no-model": "利用可能なモデルなし",
-	timeout: "タイムアウト",
-	"call-failure": "呼び出し失敗",
+	"not-found": "model not registered",
+	"no-credentials": "no credentials",
+	"no-model": "no usable model",
+	timeout: "timed out",
+	"call-failure": "call failed",
 };
 
 /** Everything resolution needs to know about the running Pi session. */

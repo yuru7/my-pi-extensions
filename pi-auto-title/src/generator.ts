@@ -96,6 +96,11 @@ export interface GenerateTitleOptions {
 	signal?: AbortSignal;
 	/** Called once, when a fallback attempt is about to run. */
 	onFallback?: (warning: string) => void;
+	/**
+	 * Called once per user-visible issue: a thinking-level adjustment, or the
+	 * run giving up. Text is redacted and safe for the screen.
+	 */
+	onIssue?: (message: string) => void;
 	/** Deadline for the whole run; defaults to {@link TITLE_GENERATION_TIMEOUT_MS}. */
 	timeoutMs?: number;
 	/** Log sink for fallback and failure details. */
@@ -242,9 +247,9 @@ function fallbackWarning(
 	target: Model<Api>,
 	kind: FailureKind,
 ): string {
-	return `pi-auto-title: 指定モデル ${attempt.fallbackFrom} を利用できないため、現在のモデル ${describeModel(
+	return `pi-auto-title: the configured model ${attempt.fallbackFrom} is unavailable; fell back to the current model ${describeModel(
 		target,
-	)} にフォールバックしました（理由: ${FAILURE_LABELS[kind]}）`;
+	)} (reason: ${FAILURE_LABELS[kind]})`;
 }
 
 /**
@@ -270,6 +275,7 @@ export async function generateTitle(
 	if (plan.attempts.length === 0) {
 		const reason = plan.failure ?? "no model available for title generation";
 		log(`pi-auto-title: ${reason}`);
+		options.onIssue?.(`pi-auto-title: title generation failed: ${reason}`);
 		return { reason };
 	}
 
@@ -294,7 +300,10 @@ export async function generateTitle(
 			if (attempt.fallbackFrom !== undefined) {
 				options.onFallback?.(fallbackWarning(attempt, attempt.model, kind));
 			}
-			if (attempt.log !== undefined) log(attempt.log);
+			if (attempt.log !== undefined) {
+				log(attempt.log);
+				options.onIssue?.(attempt.log);
+			}
 			const outcome = await runAttempt(
 				attempt,
 				context,
@@ -312,7 +321,9 @@ export async function generateTitle(
 				`pi-auto-title: title request on ${describeModel(attempt.model)} failed: ${failure}`,
 			);
 		}
-		return { reason: failure ?? "title generation failed" };
+		const reason = failure ?? "title generation failed";
+		options.onIssue?.(`pi-auto-title: title generation failed: ${reason}`);
+		return { reason };
 	} finally {
 		clearTimeout(timer);
 		external?.removeEventListener("abort", onExternalAbort);

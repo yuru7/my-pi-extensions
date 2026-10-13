@@ -143,7 +143,7 @@ describe("generateTitle", () => {
 		assert.equal(warnings.length, 1);
 		assert.match(warnings[0], /anthropic\/claude-sonnet-4-5/);
 		assert.match(warnings[0], /openai\/gpt-5.4/);
-		assert.match(warnings[0], /呼び出し失敗/);
+		assert.match(warnings[0], /call failed/);
 	});
 
 	test("the fallback warning carries no provider error text", async () => {
@@ -184,7 +184,7 @@ describe("generateTitle", () => {
 		assert.equal(result.title, "フォーム公開API改善");
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].model, current);
-		assert.match(warnings[0], /モデル未登録/);
+		assert.match(warnings[0], /model not registered/);
 	});
 
 	test("a model without credentials warns with the credentials category", async () => {
@@ -203,7 +203,7 @@ describe("generateTitle", () => {
 			onFallback: (warning) => warnings.push(warning),
 		});
 		assert.equal(calls.length, 1);
-		assert.match(warnings[0], /認証情報なし/);
+		assert.match(warnings[0], /no credentials/);
 	});
 
 	test("a timeout failure warns with the timeout category", async () => {
@@ -225,7 +225,7 @@ describe("generateTitle", () => {
 			onFallback: (warning) => warnings.push(warning),
 		});
 		assert.equal(result.title, "フォーム公開API改善");
-		assert.match(warnings[0], /タイムアウト/);
+		assert.match(warnings[0], /timed out/);
 		assert.ok(!warnings[0].includes("ETIMEDOUT"));
 	});
 

@@ -33,6 +33,7 @@ const pi = {
 	},
 	appendEntry() {},
 	registerCommand() {},
+	registerEntryRenderer() {},
 } as unknown as ExtensionAPI;
 
 const ctx = {

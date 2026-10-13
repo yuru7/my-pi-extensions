@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type {
+	EntryRenderer,
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -19,6 +20,8 @@ import {
 import {
 	GenerationTracker,
 	TITLE_ENTRY_TYPE,
+	warningEntryMessage,
+	WARNING_ENTRY_TYPE,
 	type SessionEntryLike,
 } from "../src/session.ts";
 import {
@@ -42,6 +45,7 @@ function createFakePi() {
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, CommandOptions>();
 	const appended: { customType: string; data: unknown }[] = [];
+	const entryRenderers = new Map<string, EntryRenderer>();
 	return {
 		on(event: string, handler: Handler) {
 			const list = handlers.get(event) ?? [];
@@ -55,11 +59,15 @@ function createFakePi() {
 		appendEntry(customType: string, data: unknown) {
 			appended.push({ customType, data });
 		},
+		registerEntryRenderer(customType: string, renderer: EntryRenderer) {
+			entryRenderers.set(customType, renderer);
+		},
 		registerCommand(name: string, options: CommandOptions) {
 			commands.set(name, options);
 		},
 		appended,
 		commands,
+		entryRenderers,
 	};
 }
 
@@ -536,7 +544,7 @@ describe("AI title generation", () => {
 		assert.equal(state.titles.at(-1), "Pi - web-app");
 	});
 
-	test("a failed generation keeps the directory name", async () => {
+	test("a failed generation warns in the history and keeps the directory name", async () => {
 		const { pi, ctx, state, client } = setup({
 			currentModel: fakeModel("openai", "gpt-5.4"),
 			responders: [() => Promise.reject(new Error("provider down"))],
@@ -545,11 +553,18 @@ describe("AI title generation", () => {
 		firstUserPrompt(pi, ctx, "フォーム公開APIを改善して");
 		await flush();
 		assert.equal(client.calls.length, 1);
-		assert.deepEqual(pi.appended, []);
+		const warning = pi.appended.find(
+			(entry) => entry.customType === WARNING_ENTRY_TYPE,
+		);
+		assert.ok(warning);
+		assert.match(
+			warningEntryMessage(warning.data) ?? "",
+			/title generation failed/,
+		);
 		assert.equal(state.titles.at(-1), "Pi - web-app");
 	});
 
-	test("a fallback warns with a safe reason and still titles the tab", async () => {
+	test("a fallback warns in the conversation history and still titles the tab", async () => {
 		const current = fakeModel("openai", "gpt-5.4");
 		const requested = fakeModel("anthropic", "claude-sonnet-4-5");
 		const { pi, ctx, state, client } = setup({
@@ -570,14 +585,80 @@ describe("AI title generation", () => {
 		assert.equal(client.calls[0].model, requested);
 		assert.equal(client.calls[1].model, current);
 		assert.equal(state.titles.at(-1), "Pi - フォーム公開API改善");
-		const warning = state.notifications.find(
-			(entry) => entry.type === "warning",
+		// The warning is a custom entry in the history, not a toast, and never
+		// reaches the agent (custom entries are outside the LLM context).
+		const warning = pi.appended.find(
+			(entry) => entry.customType === WARNING_ENTRY_TYPE,
 		);
-		assert.match(warning?.message ?? "", /anthropic\/claude-sonnet-4-5/);
-		assert.match(warning?.message ?? "", /openai\/gpt-5.4/);
-		assert.match(warning?.message ?? "", /呼び出し失敗/);
-		assert.ok(!warning?.message.includes("rate limited"));
+		assert.ok(warning);
+		const message = warningEntryMessage(warning.data);
+		assert.ok(message);
+		assert.match(message, /anthropic\/claude-sonnet-4-5/);
+		assert.match(message, /openai\/gpt-5.4/);
+		assert.match(message, /call failed/);
+		assert.ok(!message.includes("rate limited"));
+		assert.equal(
+			state.notifications.filter((entry) => entry.type === "warning").length,
+			0,
+		);
 		assert.equal(ctx.model, current);
+	});
+
+	test("a thinking-level adjustment shows up in the history", async () => {
+		const { pi, ctx, state } = setup({
+			currentModel: fakeModel("openai", "gpt-5.4"),
+			config: withConfig((config) => {
+				config.autoTitle.thinkingLevel = "max";
+			}),
+			responders: [() => assistant("フォーム公開API改善")],
+		});
+		startSession(pi, ctx);
+		firstUserPrompt(pi, ctx, "フォーム公開APIを改善して");
+		await flush();
+		// The model has no reasoning support, so "max" clamps to "off" and the
+		// adjustment is announced in the history.
+		const warning = pi.appended.find(
+			(entry) => entry.customType === WARNING_ENTRY_TYPE,
+		);
+		assert.ok(warning);
+		assert.match(
+			warningEntryMessage(warning.data) ?? "",
+			/thinking level "max".*using "off"/,
+		);
+		assert.equal(state.titles.at(-1), "Pi - フォーム公開API改善");
+	});
+
+	test("the warning entry renders in the history and skips broken data", () => {
+		const { pi } = setup();
+		const renderer = pi.entryRenderers.get(WARNING_ENTRY_TYPE);
+		assert.ok(renderer);
+		const theme = {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		};
+		const component = renderer(
+			{
+				type: "custom",
+				customType: WARNING_ENTRY_TYPE,
+				data: { message: "boom" },
+			} as Parameters<typeof renderer>[0],
+			{ expanded: false },
+			theme as unknown as Parameters<typeof renderer>[2],
+		);
+		assert.ok(component);
+		assert.equal(
+			renderer(
+				{
+					type: "custom",
+					customType: WARNING_ENTRY_TYPE,
+					data: {},
+				} as Parameters<typeof renderer>[0],
+				{ expanded: false },
+				theme as unknown as Parameters<typeof renderer>[2],
+			),
+			undefined,
+		);
 	});
 
 	test("the running marker is kept while an arriving title lands", async () => {

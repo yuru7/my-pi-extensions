@@ -18,9 +18,11 @@
 
 import { existsSync, writeSync } from "node:fs";
 import type {
+	EntryRenderer,
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import {
 	configPath as defaultConfigPath,
 	defaultConfig,
@@ -42,6 +44,9 @@ import {
 	SessionTitleManager,
 	TITLE_ENTRY_TYPE,
 	titleEntryData,
+	warningEntryData,
+	warningEntryMessage,
+	WARNING_ENTRY_TYPE,
 	type SessionEntryLike,
 } from "../src/session.ts";
 import { StallMonitor } from "../src/stall-monitor.ts";
@@ -87,7 +92,7 @@ export interface AutoTitleDeps {
 	stallSetTimeout?: (callback: () => void, delayMs: number) => unknown;
 	/** Cancels a handle from {@link AutoTitleDeps.stallSetTimeout}; defaults to `clearTimeout`. */
 	stallClearTimeout?: (handle: unknown) => void;
-	/** Log sink; defaults to `console.error`. */
+	/** Diagnostic sink; silent by default — stderr lines surface in the TUI chat area. */
 	log?: (message: string) => void;
 }
 
@@ -136,7 +141,10 @@ export function registerAutoTitle(
 ): void {
 	const configPath = deps.configPath ?? defaultConfigPath;
 	const load = deps.loadConfig ?? (() => loadConfig(configPath()));
-	const log = deps.log ?? ((message: string) => console.error(message));
+	// Diagnostics (thinking-level adjustments, request failures) are silent by
+	// default: anything written to stderr lands in the TUI chat area. User-facing
+	// problems surface as history entries (fallback) or notifications instead.
+	const log = deps.log ?? (() => {});
 	const timeoutMs = deps.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
 	const createClient = deps.createClient ?? registryClient;
 	const schedule = deps.setTimeout ?? setTimeout;
@@ -314,6 +322,16 @@ export function registerAutoTitle(
 		const controller = new AbortController();
 		generationController = controller;
 		const ticket = current.startGeneration();
+		/**
+		 * Warnings and issues go into the conversation history as custom entries:
+		 * they stay visible without scrolling away like a toast, and custom
+		 * entries never enter the LLM context, so the agent cannot see them.
+		 */
+		const showRunWarning = (message: string) => {
+			if (!disposed && manager === current) {
+				pi.appendEntry(WARNING_ENTRY_TYPE, warningEntryData(message));
+			}
+		};
 		try {
 			const result = await generateTitle({
 				settings: config.autoTitle,
@@ -323,11 +341,8 @@ export function registerAutoTitle(
 				timeoutMs,
 				log,
 				signal: controller.signal,
-				onFallback: (warning) => {
-					if (!disposed && manager === current) {
-						ctx.ui.notify(warning, "warning");
-					}
-				},
+				onFallback: showRunWarning,
+				onIssue: showRunWarning,
 			});
 			if (disposed || manager !== current) return;
 			const title = result.title;
@@ -337,7 +352,9 @@ export function registerAutoTitle(
 				renderTitle();
 			}
 		} catch (error) {
-			log(`pi-auto-title: title generation failed: ${errorMessage(error)}`);
+			showRunWarning(
+				`pi-auto-title: title generation failed: ${errorMessage(error)}`,
+			);
 		} finally {
 			tracker.finish(runToken);
 			if (generationController === controller) generationController = undefined;
@@ -575,6 +592,20 @@ export function registerAutoTitle(
 			"info",
 		);
 	}
+
+	/**
+	 * Warnings (model fallback and friends) render inline in the conversation
+	 * history. Custom entries never enter the LLM context, so the agent cannot
+	 * see them; the box styling follows pi-undo's custom-entry pattern.
+	 */
+	const renderWarningEntry: EntryRenderer = (entry, _options, theme) => {
+		const message = warningEntryMessage(entry.data);
+		if (message === undefined) return undefined;
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(theme.fg("warning", `⚠ ${message}`), 0, 0));
+		return box;
+	};
+	pi.registerEntryRenderer(WARNING_ENTRY_TYPE, renderWarningEntry);
 
 	pi.registerCommand("pi-auto-title", {
 		description: "Manage pi-auto-title settings (/pi-auto-title init)",

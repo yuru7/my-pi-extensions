@@ -17,6 +17,32 @@ import { normalizeTitle } from "./title.ts";
 /** Custom entry type that persists the AI title inside the session. */
 export const TITLE_ENTRY_TYPE = "pi-auto-title";
 
+/** Custom entry type for warnings shown in the conversation history. */
+export const WARNING_ENTRY_TYPE = "pi-auto-title/warning";
+
+/** Data stored in a {@link WARNING_ENTRY_TYPE} entry. */
+export interface WarningEntryData {
+	message: string;
+}
+
+/** Entry payload for {@link WARNING_ENTRY_TYPE}. */
+export function warningEntryData(message: string): WarningEntryData {
+	return { message };
+}
+
+/** Extract the message from a {@link WARNING_ENTRY_TYPE} entry's data. */
+export function warningEntryMessage(data: unknown): string | undefined {
+	if (
+		typeof data === "object" &&
+		data !== null &&
+		"message" in data &&
+		typeof (data as { message: unknown }).message === "string"
+	) {
+		return (data as { message: string }).message;
+	}
+	return undefined;
+}
+
 /** Data stored in a {@link TITLE_ENTRY_TYPE} entry. */
 export interface TitleEntryData {
 	title: string;

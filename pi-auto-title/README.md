@@ -117,7 +117,7 @@ Only models Pi knows and can authenticate are usable.
 time) or a Pi thinking level such as `off`, `minimal`, `low`, `medium`, `high`,
 `xhigh`, or `max`. When the model does not support the requested level it is
 adjusted to the nearest supported one using Pi's own clamping rules, and the
-adjustment is logged. Title generation never changes the session's model or
+adjustment happens silently. Title generation never changes the session's model or
 thinking level.
 
 ### statusIndicator
@@ -180,9 +180,11 @@ With `fallbackToCurrentModel: true`, a title request falls back to the current
 session model when the configured model is unknown, has no credentials, or its
 request fails. The fallback is announced as soon as it starts, naming both
 models and a fixed reason category (model not registered, no credentials,
-timeout, or request failed), and it happens at most once. Provider error text
-never reaches the screen: detailed failures are logged to stderr with
-credential-looking material redacted.
+timeout, or request failed), and it happens at most once. The announcement is
+written into the conversation history as a custom entry, so it stays visible
+but never reaches the agent — custom entries are outside the LLM context.
+Thinking-level adjustments and give-ups are announced the same way, with the
+provider error text redacted; nothing is written to stderr.
 
 When fallback is off, or when the fallback cannot help either, generation is
 given up for that session: the directory name stays in the title and the agent
@@ -210,8 +212,9 @@ keeps working normally.
 - `/reload` reloads the configuration. A session switch, fork, tree navigation,
   or reload cancels an in-flight title request, and results that come back
   afterwards are dropped.
-- A title generation failure never fails the agent run. It is logged to stderr
-  with a `pi-auto-title:` prefix.
+- A title generation failure never fails the agent run. The title part keeps
+  showing the previous value (usually the directory name), and the reason is
+  announced in the history like the fallback announcement.
 
 ## Development
 
