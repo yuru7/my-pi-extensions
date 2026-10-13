@@ -47,11 +47,11 @@ describe("configPath", () => {
 
 describe("parseConfig", () => {
 	test("an empty object yields the defaults", () => {
-		assert.deepEqual(parseConfig({}), DEFAULT_CONFIG);
+		assert.deepEqual(parseConfig({}), { config: DEFAULT_CONFIG, errors: [] });
 	});
 
 	test("missing fields fall back to defaults and explicit false is kept", () => {
-		const config = parseConfig({
+		const { config } = parseConfig({
 			autoTitle: { enabled: false },
 			statusIndicator: { running: ">" },
 		});
@@ -73,59 +73,86 @@ describe("parseConfig", () => {
 	});
 
 	test("empty status marker strings are allowed", () => {
-		const config = parseConfig({ statusIndicator: { running: "", idle: "" } });
+		const { config } = parseConfig({
+			statusIndicator: { running: "", idle: "" },
+		});
 		assert.equal(config.statusIndicator.running, "");
 		assert.equal(config.statusIndicator.idle, "");
 	});
 
 	test("unknown fields are ignored", () => {
-		const config = parseConfig({ autoTitle: { color: "red" }, extra: 1 });
+		const { config } = parseConfig({ autoTitle: { color: "red" }, extra: 1 });
 		assert.deepEqual(config, DEFAULT_CONFIG);
 	});
 
-	test("a non-object configuration is a validation error", () => {
-		assert.throws(() => parseConfig([]), /configuration must be a JSON object/);
+	test("a non-object configuration yields the defaults with the error named", () => {
+		const { config, errors } = parseConfig([]);
+		assert.deepEqual(config, DEFAULT_CONFIG);
+		assert.deepEqual(errors, ["configuration must be a JSON object"]);
 	});
 
-	test("a wrong field type names the offending field", () => {
-		assert.throws(
-			() => parseConfig({ autoTitle: { enabled: "yes" } }),
-			/autoTitle\.enabled/,
+	test("a wrong field type falls back per field and names the offending field", () => {
+		const { config, errors } = parseConfig({
+			autoTitle: { enabled: "yes", model: "anthropic/claude-sonnet-4-5" },
+		});
+		assert.equal(config.autoTitle.enabled, DEFAULT_CONFIG.autoTitle.enabled);
+		// A valid field keeps its value even when a sibling is invalid.
+		assert.equal(config.autoTitle.model, "anthropic/claude-sonnet-4-5");
+		assert.deepEqual(errors, ["autoTitle.enabled must be a boolean"]);
+
+		const second = parseConfig({ autoTitle: { model: 42 } });
+		assert.equal(second.config.autoTitle.model, DEFAULT_CONFIG.autoTitle.model);
+		assert.deepEqual(second.errors, [
+			"autoTitle.model must be a non-empty string",
+		]);
+
+		const third = parseConfig({
+			autoTitle: { fallbackToCurrentModel: null },
+		});
+		assert.equal(
+			third.config.autoTitle.fallbackToCurrentModel,
+			DEFAULT_CONFIG.autoTitle.fallbackToCurrentModel,
 		);
-		assert.throws(
-			() => parseConfig({ autoTitle: { model: 42 } }),
-			/autoTitle\.model/,
-		);
-		assert.throws(
-			() => parseConfig({ autoTitle: { fallbackToCurrentModel: null } }),
-			/autoTitle\.fallbackToCurrentModel/,
-		);
-		assert.throws(
-			() => parseConfig({ statusIndicator: { enabled: 1 } }),
-			/statusIndicator\.enabled/,
-		);
+		assert.deepEqual(third.errors, [
+			"autoTitle.fallbackToCurrentModel must be a boolean",
+		]);
 	});
 
-	test("an empty model or thinkingLevel is a validation error", () => {
-		assert.throws(
-			() => parseConfig({ autoTitle: { model: "" } }),
-			/autoTitle\.model/,
+	test("an empty model or thinkingLevel falls back and is named", () => {
+		const { config, errors } = parseConfig({
+			autoTitle: { model: "", thinkingLevel: "" },
+		});
+		assert.equal(config.autoTitle.model, DEFAULT_CONFIG.autoTitle.model);
+		assert.equal(
+			config.autoTitle.thinkingLevel,
+			DEFAULT_CONFIG.autoTitle.thinkingLevel,
 		);
-		assert.throws(
-			() => parseConfig({ autoTitle: { thinkingLevel: "" } }),
-			/autoTitle\.thinkingLevel/,
-		);
+		assert.deepEqual(errors, [
+			"autoTitle.model must be a non-empty string",
+			"autoTitle.thinkingLevel must be a non-empty string",
+		]);
 	});
 
-	test("a non-object section is a validation error", () => {
-		assert.throws(
-			() => parseConfig({ autoTitle: "on" }),
-			/autoTitle must be a JSON object/,
-		);
-		assert.throws(
-			() => parseConfig({ statusIndicator: [] }),
-			/statusIndicator must be a JSON object/,
-		);
+	test("a non-object section falls back as a whole with the section named", () => {
+		const first = parseConfig({ autoTitle: "on" });
+		assert.deepEqual(first.config, DEFAULT_CONFIG);
+		assert.deepEqual(first.errors, ["autoTitle must be a JSON object"]);
+
+		const second = parseConfig({ statusIndicator: [] });
+		assert.deepEqual(second.config, DEFAULT_CONFIG);
+		assert.deepEqual(second.errors, ["statusIndicator must be a JSON object"]);
+	});
+
+	test("an invalid enabled value cannot silently turn generation back on", () => {
+		// Fail-safe: a user-chosen false survives any other field error, and an
+		// invalid enabled value itself falls back to the default with a warning
+		// the caller must surface.
+		const { config, errors } = parseConfig({
+			autoTitle: { enabled: false, model: "anthropic/claude-sonnet-4-5" },
+			statusIndicator: { enabled: 1 },
+		});
+		assert.equal(config.autoTitle.enabled, false);
+		assert.deepEqual(errors, ["statusIndicator.enabled must be a boolean"]);
 	});
 });
 
@@ -161,13 +188,29 @@ describe("loadConfig", () => {
 		assert.match(result.warning ?? "", /invalid configuration at/);
 	});
 
-	test("an invalid field type falls back to the defaults and names the field", () => {
+	test("an invalid field type falls back to the default and names the field", () => {
 		const path = tempConfigPath();
 		mkdirSync(join(path, ".."), { recursive: true });
 		writeFileSync(path, JSON.stringify({ autoTitle: { enabled: "yes" } }));
 		const result = loadConfig(path);
 		assert.deepEqual(result.config, DEFAULT_CONFIG);
+		assert.match(result.warning ?? "", /invalid configuration fields at/);
 		assert.match(result.warning ?? "", /autoTitle\.enabled/);
+	});
+
+	test("a deliberately disabled generation survives an unrelated field error", () => {
+		const path = tempConfigPath();
+		mkdirSync(join(path, ".."), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				autoTitle: { enabled: false },
+				statusIndicator: { running: 3 },
+			}),
+		);
+		const result = loadConfig(path);
+		assert.equal(result.config.autoTitle.enabled, false);
+		assert.match(result.warning ?? "", /statusIndicator\.running/);
 	});
 
 	test("a partially valid file keeps its values and is not rewritten", () => {
@@ -199,7 +242,7 @@ describe("stall detection settings", () => {
 	});
 
 	test("missing new fields fall back to the defaults (older config files)", () => {
-		const config = parseConfig({
+		const { config } = parseConfig({
 			statusIndicator: { running: ">", idle: "[ok]" },
 		});
 		assert.equal(config.statusIndicator.running, ">");
@@ -212,7 +255,7 @@ describe("stall detection settings", () => {
 	});
 
 	test("the threshold and stalled marker can be changed", () => {
-		const config = parseConfig({
+		const { config } = parseConfig({
 			statusIndicator: {
 				stalled: "[wait]",
 				stallDetection: { enabled: false, thresholdSeconds: 90 },
@@ -225,32 +268,43 @@ describe("stall detection settings", () => {
 		});
 	});
 
-	test("an invalid threshold is rejected with the field named", () => {
+	test("an invalid threshold falls back with the field named", () => {
 		for (const thresholdSeconds of [0, -5, "30", null, true]) {
-			assert.throws(
-				() =>
-					parseConfig({
-						statusIndicator: {
-							stallDetection: { thresholdSeconds },
-						},
-					}),
-				/statusIndicator\.stallDetection\.thresholdSeconds/,
+			const { config, errors } = parseConfig({
+				statusIndicator: {
+					stallDetection: { thresholdSeconds },
+				},
+			});
+			assert.equal(
+				config.statusIndicator.stallDetection.thresholdSeconds,
+				DEFAULT_CONFIG.statusIndicator.stallDetection.thresholdSeconds,
 			);
+			assert.deepEqual(errors, [
+				"statusIndicator.stallDetection.thresholdSeconds must be a finite number >= 1",
+			]);
 		}
 	});
 
-	test("an invalid stalled marker type is rejected with the field named", () => {
-		assert.throws(
-			() => parseConfig({ statusIndicator: { stalled: 7 } }),
-			/statusIndicator\.stalled/,
+	test("an invalid stalled marker type falls back with the field named", () => {
+		const { config, errors } = parseConfig({ statusIndicator: { stalled: 7 } });
+		assert.equal(
+			config.statusIndicator.stalled,
+			DEFAULT_CONFIG.statusIndicator.stalled,
 		);
+		assert.deepEqual(errors, ["statusIndicator.stalled must be a string"]);
 	});
 
-	test("an invalid stallDetection section is rejected with the field named", () => {
-		assert.throws(
-			() => parseConfig({ statusIndicator: { stallDetection: "off" } }),
-			/statusIndicator\.stallDetection/,
+	test("an invalid stallDetection section falls back with the section named", () => {
+		const { config, errors } = parseConfig({
+			statusIndicator: { stallDetection: "off" },
+		});
+		assert.deepEqual(
+			config.statusIndicator.stallDetection,
+			DEFAULT_CONFIG.statusIndicator.stallDetection,
 		);
+		assert.deepEqual(errors, [
+			"statusIndicator.stallDetection must be a JSON object",
+		]);
 	});
 
 	test("a partially valid file keeps its values and gains the new defaults", () => {

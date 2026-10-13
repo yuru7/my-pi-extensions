@@ -98,7 +98,8 @@ export interface GenerateTitleOptions {
 	onFallback?: (warning: string) => void;
 	/**
 	 * Called once per user-visible issue: a thinking-level adjustment, or the
-	 * run giving up. Text is redacted and safe for the screen.
+	 * run giving up. Text carries model references and fixed reason categories
+	 * only; provider error text and details stay in the log.
 	 */
 	onIssue?: (message: string) => void;
 	/** Deadline for the whole run; defaults to {@link TITLE_GENERATION_TIMEOUT_MS}. */
@@ -237,6 +238,15 @@ async function runAttempt(
 }
 
 /**
+ * Screen-safe summary of a failed attempt: the fixed reason category only.
+ * Provider error text and other details stay in the log, so nothing that a
+ * provider might echo back (credentials, request bodies) can reach the screen.
+ */
+function failureSummary(kind: FailureKind | undefined): string {
+	return kind === undefined ? "call failed" : FAILURE_LABELS[kind];
+}
+
+/**
  * Warning shown when the configured model is replaced by the current one.
  *
  * Only the model references and a fixed reason category appear here; provider
@@ -322,7 +332,9 @@ export async function generateTitle(
 			);
 		}
 		const reason = failure ?? "title generation failed";
-		options.onIssue?.(`pi-auto-title: title generation failed: ${reason}`);
+		options.onIssue?.(
+			`pi-auto-title: title generation failed: ${failureSummary(failureKind)}`,
+		);
 		return { reason };
 	} finally {
 		clearTimeout(timer);

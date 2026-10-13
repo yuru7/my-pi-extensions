@@ -76,8 +76,10 @@ The configuration file is optional and fixed at `<agent dir>/pi-auto-title.json`
 defaults below are used;
 the file is never created on its own. Missing fields fall back to the defaults,
 explicit `false` values are kept, and unknown fields are ignored. Invalid JSON
-or a wrong field type falls back to the defaults with one warning, and the file
-is never repaired or overwritten. Use `/reload` after editing it.
+falls back to the defaults entirely; a wrong field type falls back per field, so
+a deliberate setting such as `autoTitle.enabled: false` survives an error in an
+unrelated field. A single warning names every invalid field, and the file is
+never repaired or overwritten. Use `/reload` after editing it.
 
 ```json
 {
@@ -183,8 +185,9 @@ models and a fixed reason category (model not registered, no credentials,
 timeout, or request failed), and it happens at most once. The announcement is
 written into the conversation history as a custom entry, so it stays visible
 but never reaches the agent — custom entries are outside the LLM context.
-Thinking-level adjustments and give-ups are announced the same way, with the
-provider error text redacted; nothing is written to stderr.
+Thinking-level adjustments are announced with the model and the requested
+level; a give-up is announced with a fixed reason category only. Provider error
+text is never displayed or persisted, and nothing is written to stderr.
 
 When fallback is off, or when the fallback cannot help either, generation is
 given up for that session: the directory name stays in the title and the agent

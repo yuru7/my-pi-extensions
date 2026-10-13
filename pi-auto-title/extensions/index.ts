@@ -352,9 +352,11 @@ export function registerAutoTitle(
 				renderTitle();
 			}
 		} catch (error) {
-			showRunWarning(
-				`pi-auto-title: title generation failed: ${errorMessage(error)}`,
-			);
+			// Unexpected internal errors, not provider responses. The history gets
+			// fixed wording only; the detail stays in the log, since an arbitrary
+			// error message cannot be trusted to be free of secrets or personal data.
+			log(`pi-auto-title: title generation failed: ${errorMessage(error)}`);
+			showRunWarning("pi-auto-title: title generation failed: internal error");
 		} finally {
 			tracker.finish(runToken);
 			if (generationController === controller) generationController = undefined;

@@ -253,21 +253,42 @@ describe("generateTitle", () => {
 
 	test("gives up when the fallback fails too, keeping its warning", async () => {
 		const { client, calls } = recordingClient([
-			() => Promise.reject(new Error("rate limited")),
-			() => assistant("", "error"),
+			() =>
+				Promise.reject(new Error("rate limited AIzaSyFAKE0123456789abcdef")),
+			() =>
+				({
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					// Not credential-shaped, so redactSecrets would not catch it.
+					errorMessage: "upstream exploded, contact admin@example.com",
+				}) as unknown as AssistantMessage,
 		]);
 		const warnings: string[] = [];
+		const issues: string[] = [];
 		const result = await generateTitle({
 			settings: { ...settings, model: "anthropic/claude-sonnet-4-5" },
 			info: fakeInfo(current, { findModel: () => requested }),
 			client,
 			firstUserText: "hello",
 			onFallback: (warning) => warnings.push(warning),
+			onIssue: (issue) => issues.push(issue),
 		});
 		assert.equal(result.title, undefined);
 		assert.equal(calls.length, 2);
-		assert.match(result.reason ?? "", /boom/);
+		// The detailed reason (log-only) keeps the text; the screen issue does not.
+		assert.match(result.reason ?? "", /admin@example\.com/);
 		assert.equal(warnings.length, 1);
+		// The give-up issue names the fixed category only; neither the thrown
+		// error text nor the assistant errorMessage reaches the screen.
+		assert.equal(issues.length, 1);
+		assert.equal(
+			issues[0],
+			"pi-auto-title: title generation failed: call failed",
+		);
+		assert.ok(!issues[0].includes("rate limited"));
+		assert.ok(!issues[0].includes("AIzaSyFAKE"));
+		assert.ok(!issues[0].includes("admin@example.com"));
 	});
 
 	test("empty model output counts as a failed request", async () => {

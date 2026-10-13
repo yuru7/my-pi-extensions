@@ -201,7 +201,8 @@ function setup(options: SetupOptions = {}) {
 			if (!existsSync(configPath)) return loaded;
 			try {
 				return {
-					config: parseConfig(JSON.parse(readFileSync(configPath, "utf8"))),
+					config: parseConfig(JSON.parse(readFileSync(configPath, "utf8")))
+						.config,
 				};
 			} catch {
 				return loaded;
@@ -544,6 +545,22 @@ describe("AI title generation", () => {
 		assert.equal(state.titles.at(-1), "Pi - web-app");
 	});
 
+	test("an unrelated config error cannot turn a disabled generator back on", async () => {
+		// enabled: false and an invalid sibling in the same file: the per-field
+		// fallback must keep generation off (fail-safe, not fail-open).
+		const { pi, ctx, client, configPath } = setup({
+			currentModel: fakeModel("openai", "gpt-5.4"),
+		});
+		writeFileSync(
+			configPath,
+			JSON.stringify({ autoTitle: { enabled: false, model: 42 } }),
+		);
+		startSession(pi, ctx);
+		firstUserPrompt(pi, ctx, "フォーム公開APIを改善して");
+		await flush();
+		assert.equal(client.calls.length, 0);
+	});
+
 	test("a failed generation warns in the history and keeps the directory name", async () => {
 		const { pi, ctx, state, client } = setup({
 			currentModel: fakeModel("openai", "gpt-5.4"),
@@ -557,10 +574,10 @@ describe("AI title generation", () => {
 			(entry) => entry.customType === WARNING_ENTRY_TYPE,
 		);
 		assert.ok(warning);
-		assert.match(
-			warningEntryMessage(warning.data) ?? "",
-			/title generation failed/,
-		);
+		const message = warningEntryMessage(warning.data) ?? "";
+		assert.match(message, /title generation failed/);
+		// The provider error text never reaches the screen; fixed categories only.
+		assert.ok(!message.includes("provider down"));
 		assert.equal(state.titles.at(-1), "Pi - web-app");
 	});
 
