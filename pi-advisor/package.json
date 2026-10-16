@@ -1,0 +1,58 @@
+{
+	"name": "@yuru7/pi-advisor",
+	"version": "0.1.0",
+	"description": "A Pi extension that lets the executor consult a stronger model through a zero-argument advisor tool, and keeps that guidance out of the system prompt until advisor is enabled.",
+	"keywords": [
+		"pi-package",
+		"pi-coding-agent",
+		"pi-extension",
+		"advisor"
+	],
+	"license": "MIT",
+	"author": "yuru7",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/yuru7/my-pi-extensions.git",
+		"directory": "pi-advisor"
+	},
+	"files": [
+		"extensions",
+		"src",
+		"docs",
+		"README.md",
+		"README_ja.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"test": "node --test tests/*.test.ts",
+		"typecheck": "tsc -p tsconfig.json",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"check": "pnpm run typecheck && pnpm run lint && pnpm run test",
+		"package:check": "npm pack --dry-run"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+    "typebox": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.14",
+		"@earendil-works/pi-ai": "^0.85.0",
+		"@earendil-works/pi-coding-agent": "^0.85.0",
+		"@earendil-works/pi-tui": "^0.85.0",
+		"@types/node": "^24.5.2",
+		"gpt-tokenizer": "^3.4.0",
+		"typescript": "^7.0.2"
+	}
+}

@@ -11,8 +11,9 @@
 | [`pi-native-notify/`](../pi-native-notify) | `@yuru7/pi-native-notify` | `pi install npm:@yuru7/pi-native-notify` |
 | [`pi-undo/`](../pi-undo) | `@yuru7/pi-undo` | `pi install npm:@yuru7/pi-undo` |
 | [`pi-print-stream/`](../pi-print-stream) | `@yuru7/pi-print-stream` | `pi install npm:@yuru7/pi-print-stream` |
+| [`pi-advisor/`](../pi-advisor) | `@yuru7/pi-advisor` | `pi install npm:@yuru7/pi-advisor` |
 
-どちらもスコープ付きです。スコープ付きパッケージは初回公開時の既定が **restricted**（非公開）なので、少なくとも初回は `--access public` が必要です。
+スコープ付きパッケージは初回公開時の既定が **restricted**（非公開）なので、少なくとも初回は `--access public` が必要です。
 
 ## 初回だけやること
 
