@@ -1,6 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach } from "node:test";
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
@@ -15,9 +16,19 @@ import { setDisabledForModels } from "../src/policy.ts";
 import { __resetAdvisorAnnounced } from "../src/restore.ts";
 import { setAdvisorEffort, setAdvisorModel } from "../src/state.ts";
 
+const createdTempDirs: string[] = [];
+
 export function tempDir(): string {
-	return mkdtempSync(join(tmpdir(), "pi-advisor-"));
+	const dir = mkdtempSync(join(tmpdir(), "pi-advisor-"));
+	createdTempDirs.push(dir);
+	return dir;
 }
+
+afterEach(() => {
+	while (createdTempDirs.length > 0) {
+		rmSync(createdTempDirs.pop() ?? "", { recursive: true, force: true });
+	}
+});
 
 export function useConfigDir(): string {
 	const dir = tempDir();
