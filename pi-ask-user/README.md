@@ -63,6 +63,8 @@ Cancel (`Esc`) stays distinct: `cancelled: true` and no `timedOut` field.
 
 ## Configuration
 
+Run `/pi-ask-user init` to write the default configuration file to `<agent dir>/pi-ask-user.json`. The command asks before overwriting an existing file. `timeoutSeconds` and `collapseKey` are re-read when a question starts; changes to `guidance` take effect after a restart.
+
 Optional file: `<agent dir>/pi-ask-user.json`. The directory is Pi's `getAgentDir()`, which defaults to `~/.pi/agent` and follows `PI_CODING_AGENT_DIR`. The file is never created automatically. A missing file uses the defaults. Malformed JSON is ignored with a warning.
 
 ```json

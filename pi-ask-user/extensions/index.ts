@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAskUserQuestionTool } from "../src/ask-user-question.ts";
+import { createAskUserCommand } from "../src/init-command.ts";
 import { registerAskUserQuestionReconciler } from "../src/reconcile.ts";
 
 export {
@@ -20,4 +21,5 @@ export {
 export default function (pi: ExtensionAPI) {
 	registerAskUserQuestionTool(pi);
 	registerAskUserQuestionReconciler(pi);
+	pi.registerCommand("pi-ask-user", createAskUserCommand());
 }
