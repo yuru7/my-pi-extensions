@@ -16,13 +16,13 @@ Restart Pi.
 
 ## Quick start
 
-Run `/advisor`. The picker lists models Pi already has credentials for. Type to filter by model name, provider, or `provider/modelId`. Choose a model. If it supports reasoning, a second picker asks for the effort. `high` is marked recommended.
+Run `/pi-advisor`. The picker lists models Pi already has credentials for. Type to filter by model name, provider, or `provider/modelId`. Choose a model. If it supports reasoning, a second picker asks for the effort. `high` is marked recommended.
 
 Pi confirms with `Advisor: <provider/modelId>, <effort>`, and the `advisor` tool becomes active for this session and later ones.
 
 Choose **No advisor** to turn it off. Press Esc on the model picker to leave the current selection unchanged. Press Esc on the effort picker to keep the model and send no reasoning effort.
 
-`/advisor` needs an interactive terminal. `pi --print` and RPC report `/advisor requires interactive mode`.
+`/pi-advisor` needs an interactive terminal. `pi --print` and RPC report `/pi-advisor requires interactive mode`.
 
 ## What the executor is told
 
@@ -38,7 +38,7 @@ Selecting a model from another provider sends the conversation, including tool r
 
 ## Configuration
 
-Settings are stored at `~/.pi/agent/pi-advisor.json` (Pi's agent directory). The file is created on the first successful `/advisor` save, with mode `0600` when the system allows it. A missing file means advisor is off. Invalid JSON is ignored and the extension uses defaults. `/advisor` rewrites only `model` and `effort`, so hand-edited keys stay.
+Settings are stored at `~/.pi/agent/pi-advisor.json` (Pi's agent directory). The file is created on the first successful `/pi-advisor` save, with mode `0600` when the system allows it. A missing file means advisor is off. Invalid JSON is ignored and the extension uses defaults. `/pi-advisor` rewrites only `model` and `effort`, so hand-edited keys stay.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -87,9 +87,9 @@ When advisor is off, that text is not added.
 
 | Symptom | What to do |
 | --- | --- |
-| The picker lists only **No advisor** | Authenticate a provider with Pi's `/login`, then run `/advisor` again |
+| The picker lists only **No advisor** | Authenticate a provider with Pi's `/login`, then run `/pi-advisor` again |
 | `Advisor (<model>) has no API key available.` | Re-authenticate that provider. OAuth models use Pi's runtime credentials when the host exposes them |
-| `Previously configured advisor model <key> is no longer available` | The saved model left the registry. Pick another with `/advisor` |
+| `Previously configured advisor model <key> is no longer available` | The saved model left the registry. Pick another with `/pi-advisor` |
 | `Failed to save advisor selection` | The config file could not be written. The previous selection is unchanged |
 | Advisor never appears for the current model | That executor model is in `disabledForModels` for the current effort |
 

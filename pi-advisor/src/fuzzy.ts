@@ -1,5 +1,5 @@
 /**
- * Fuzzy subsequence match for the /advisor pickers.
+ * Fuzzy subsequence match for the /pi-advisor pickers.
  *
  * An empty query scores 0. Contiguous runs and matches at a start, space,
  * ":", or "-" score higher than a scattered hit.

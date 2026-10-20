@@ -16,13 +16,13 @@ pi install npm:@yuru7/pi-advisor
 
 ## 使い方
 
-`/advisor` を実行します。Pi に認証済みのモデルが一覧されます。モデル名、プロバイダ名、`provider/modelId` の一部を打つと絞り込めます。モデルを選ぶと、思考に対応している場合は思考量の選択に進みます。`high` に recommended と出ます。
+`/pi-advisor` を実行します。Pi に認証済みのモデルが一覧されます。モデル名、プロバイダ名、`provider/modelId` の一部を打つと絞り込めます。モデルを選ぶと、思考に対応している場合は思考量の選択に進みます。`high` に recommended と出ます。
 
 `Advisor: <provider/modelId>, <effort>` と出れば、このセッション以降も `advisor` ツールが有効です。
 
 **No advisor** で無効にします。モデル一覧で Esc を押すと、今の選択は変わりません。思考量の一覧で Esc を押すと、モデルはそのまま保存し、思考量は送りません。
 
-`/advisor` は対話端末が必要です。`pi --print` や RPC では `/advisor requires interactive mode` と出ます。
+`/pi-advisor` は対話端末が必要です。`pi --print` や RPC では `/pi-advisor requires interactive mode` と出ます。
 
 ## 実行モデルへの指示
 
@@ -38,7 +38,7 @@ Advisor 自身への指示（計画・修正・停止のいずれかで答え、
 
 ## 設定
 
-設定ファイルは `~/.pi/agent/pi-advisor.json`（Pi のエージェントディレクトリ）です。`/advisor` での保存が初めて成功したときに作られ、可能なときは権限 `0600` になります。ファイルが無いときは Advisor はオフです。JSON が壊れているときは警告して既定値で動きます。`/advisor` が書き換えるのは `model` と `effort` だけなので、手で書いた項目は残ります。
+設定ファイルは `~/.pi/agent/pi-advisor.json`（Pi のエージェントディレクトリ）です。`/pi-advisor` での保存が初めて成功したときに作られ、可能なときは権限 `0600` になります。ファイルが無いときは Advisor はオフです。JSON が壊れているときは警告して既定値で動きます。`/pi-advisor` が書き換えるのは `model` と `effort` だけなので、手で書いた項目は残ります。
 
 | キー | 型 | 既定 | 意味 |
 | --- | --- | --- | --- |
@@ -87,9 +87,9 @@ Advisor がオフのときは、この文面は追加されません。
 
 | 症状 | 対処 |
 | --- | --- |
-| 一覧が **No advisor** だけ | Pi の `/login` でプロバイダを認証してから、もう一度 `/advisor` |
+| 一覧が **No advisor** だけ | Pi の `/login` でプロバイダを認証してから、もう一度 `/pi-advisor` |
 | `Advisor (<model>) has no API key available.` | そのプロバイダを認証し直す。OAuth モデルは、ホストが実行時 API を出しているときはその認証を使う |
-| `Previously configured advisor model <key> is no longer available` | 保存していたモデルがレジストリから消えている。`/advisor` で選び直す |
+| `Previously configured advisor model <key> is no longer available` | 保存していたモデルがレジストリから消えている。`/pi-advisor` で選び直す |
 | `Failed to save advisor selection` | 設定ファイルを書けなかった。以前の選択はそのまま |
 | 今のモデルで Advisor が出ない | その実行モデルが、今の思考量で `disabledForModels` に入っている |
 

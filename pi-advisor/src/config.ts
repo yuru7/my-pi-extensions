@@ -1,7 +1,7 @@
 /**
  * Settings at `~/.pi/agent/pi-advisor.json` (Pi's agent directory).
  *
- * A missing file uses defaults and is not created until `/advisor` saves.
+ * A missing file uses defaults and is not created until `/pi-advisor` saves.
  * Invalid JSON warns and falls back to defaults. A save merges into the
  * existing object so unknown keys, `guidance`, and `disabledForModels` survive.
  * The write uses a temp file and rename. Memory is updated only after it succeeds.

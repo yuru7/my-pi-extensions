@@ -21,12 +21,12 @@ export const RECOMMENDED_EFFORT_SUFFIX = "  (recommended)";
 export const CHECKMARK = " ✓";
 
 export const MSG_ADVISOR_DISABLED = "Advisor disabled";
-export const MSG_REQUIRES_INTERACTIVE = "/advisor requires interactive mode";
+export const MSG_REQUIRES_INTERACTIVE = "/pi-advisor requires interactive mode";
 export const MSG_ADVISOR_NUDGE = "Please advise on the executor's situation above.";
 export const MSG_EFFORT_NOT_SET = "Effort not set — advisor uses the model default";
 export const MSG_PERSIST_FAILED = "Failed to save advisor selection — selection not persisted";
 
-export const ERR_NO_MODEL = "No advisor model is configured. The user can enable one with the /advisor command.";
+export const ERR_NO_MODEL = "No advisor model is configured. The user can enable one with the /pi-advisor command.";
 export const ERR_CALL_ABORTED = "Advisor call was cancelled before it completed.";
 export const ERR_EMPTY_RESPONSE = "Advisor returned no text content.";
 export const ERR_NO_MODEL_SELECTED = "no advisor model selected";

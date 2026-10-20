@@ -1,5 +1,5 @@
 /**
- * pi-advisor — zero-argument `advisor` tool and `/advisor` picker.
+ * pi-advisor — zero-argument `advisor` tool and `/pi-advisor` picker.
  *
  * The tool stays out of the active set until a model is selected, so its
  * description and guidelines are absent from the executor system prompt while

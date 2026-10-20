@@ -8,10 +8,10 @@ That directory is whatever Pi uses for agent state. The default is `~/.pi/agent`
 
 ## File behavior
 
-- A missing file is normal. The extension uses defaults and does not create the file until `/advisor` saves.
+- A missing file is normal. The extension uses defaults and does not create the file until `/pi-advisor` saves.
 - Invalid JSON, or a JSON value that is not an object, produces a warning and the defaults. Pi still starts.
 - A field with the wrong type is ignored. Other fields are kept.
-- `/advisor` writes `model` and `effort` only. Unknown keys, `guidance`, `disabledForModels`, `promptMode`, and `toolInventory` stay on disk.
+- `/pi-advisor` writes `model` and `effort` only. Unknown keys, `guidance`, `disabledForModels`, `promptMode`, and `toolInventory` stay on disk.
 - The save is a temp file in the same directory, then a rename. If the write fails, in-memory state and the active tool list are left as they were, and Pi shows `Failed to save advisor selection — selection not persisted`.
 - After a successful rename the file mode is set to `0600` when the platform allows it. A failed mode change does not undo the save.
 
@@ -19,8 +19,8 @@ That directory is whatever Pi uses for agent state. The default is `~/.pi/agent`
 
 | Key | Type | Default | Written by |
 | --- | --- | --- | --- |
-| `model` | string `provider/modelId` | absent (advisor off) | `/advisor` |
-| `effort` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | absent (no `reasoning` sent) | `/advisor` |
+| `model` | string `provider/modelId` | absent (advisor off) | `/pi-advisor` |
+| `effort` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | absent (no `reasoning` sent) | `/pi-advisor` |
 | `promptMode` | string | `standard` | hand-edited |
 | `disabledForModels` | `(string \| { model, minEffort? })[]` | `[]` | hand-edited |
 | `toolInventory` | `full`, `active`, or `names` | `full` | hand-edited |
@@ -29,7 +29,7 @@ That directory is whatever Pi uses for agent state. The default is `~/.pi/agent`
 
 ### `model`
 
-The stored form is `provider/modelId`, split on the first `/`. A legacy `provider:modelId` value is accepted on read and compared in slash form. The next `/advisor` save rewrites it to slash form.
+The stored form is `provider/modelId`, split on the first `/`. A legacy `provider:modelId` value is accepted on read and compared in slash form. The next `/pi-advisor` save rewrites it to slash form.
 
 The tool result's `details.advisorModel` uses the colon form `provider:modelId`. That label is not the config key.
 
@@ -85,7 +85,7 @@ The description of the tool itself is not overridable.
 
 | Message | When |
 | --- | --- |
-| `Advisor: <label>[, <effort>]` | a model was selected with `/advisor` |
+| `Advisor: <label>[, <effort>]` | a model was selected with `/pi-advisor` |
 | `Advisor: <label>[, <effort>] (inactive for current executor)` | selected, but `disabledForModels` blocks the current executor |
 | `Advisor restored: <label>[, <effort>]` | applied at session start, or unblocked mid-session |
 | `Advisor restored: <label>[, <effort>] (inactive for current executor)` | restored while blocked |
@@ -95,6 +95,6 @@ The description of the tool itself is not overridable.
 | `Advisor selection not found: <choice>` | the picked model was no longer available |
 | `Previously configured advisor model <key> is no longer available` | the saved model is not in the registry |
 | `Failed to save advisor selection — selection not persisted` | the config write failed |
-| `/advisor requires interactive mode` | `/advisor` ran without interactive UI |
+| `/pi-advisor requires interactive mode` | `/pi-advisor` ran without interactive UI |
 
 `Advisor restored: …` is shown at most once per process, so later session starts in the same process do not repeat it.

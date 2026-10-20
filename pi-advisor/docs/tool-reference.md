@@ -44,7 +44,7 @@ A normal stop with no text is retried once with the same messages. Abort, a prov
 
 | `content` text | `details.errorMessage` |
 | --- | --- |
-| `No advisor model is configured. The user can enable one with the /advisor command.` | `no advisor model selected` |
+| `No advisor model is configured. The user can enable one with the /pi-advisor command.` | `no advisor model selected` |
 | `Advisor (<label>) is misconfigured: <err>` | the registry auth error |
 | `Advisor (<label>) has no API key available.` | `no API key for <provider>` |
 | `Advisor call was cancelled before it completed.` | the provider message, or `aborted` |

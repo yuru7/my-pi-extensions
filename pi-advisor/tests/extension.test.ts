@@ -19,7 +19,7 @@ describe("extension wiring", { concurrency: false }, () => {
 		harness.active = ["read", "bash", "other-extension"];
 		extension(harness.pi);
 		assert.equal(harness.tools.length, 1);
-		assert.equal(harness.commands.has("advisor"), true);
+		assert.equal(harness.commands.has("pi-advisor"), true);
 		const tool = harness.tools[0] as { promptSnippet?: string; promptGuidelines?: string[] };
 		assert.equal(tool.promptSnippet, STANDARD_SNIPPET);
 		assert.deepEqual(tool.promptGuidelines, [...STANDARD_GUIDELINES]);

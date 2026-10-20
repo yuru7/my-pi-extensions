@@ -14,7 +14,7 @@ import { ADVISOR_TOOL_NAME, MSG_EFFORT_NOT_SET, MSG_REQUIRES_INTERACTIVE, NO_ADV
 import { getAdvisorEffort, getAdvisorModel } from "../src/state.ts";
 import { createCtx, createHarness, fakeModel, resetRuntime, useConfigDir } from "./helpers.ts";
 
-describe("/advisor command", { concurrency: false }, () => {
+describe("/pi-advisor command", { concurrency: false }, () => {
 	afterEach(() => {
 		resetRuntime();
 	});
@@ -43,7 +43,7 @@ describe("/advisor command", { concurrency: false }, () => {
 		const harness = createHarness();
 		registerAdvisorCommand(harness.pi);
 		const ctx = createCtx({ hasUI: false });
-		await harness.commands.get("advisor")?.handler("", ctx as never);
+		await harness.commands.get("pi-advisor")?.handler("", ctx as never);
 		assert.equal(ctx.notifications[0]?.message, MSG_REQUIRES_INTERACTIVE);
 	});
 
@@ -69,7 +69,7 @@ describe("/advisor command", { concurrency: false }, () => {
 			modelRegistry: { getAvailable: () => [model] },
 			customResults: ["anthropic/claude-opus", null],
 		});
-		await harness.commands.get("advisor")?.handler("", ctx as never);
+		await harness.commands.get("pi-advisor")?.handler("", ctx as never);
 		assert.equal(getAdvisorModel()?.id, "claude-opus");
 		assert.equal(getAdvisorEffort(), undefined);
 		assert.equal(ctx.notifications[0]?.message, MSG_EFFORT_NOT_SET);

@@ -85,7 +85,7 @@ export function applyEnable(
 }
 
 export function registerAdvisorCommand(pi: ExtensionAPI): void {
-	pi.registerCommand("advisor", {
+	pi.registerCommand("pi-advisor", {
 		description: "Configure the advisor model for the advisor-strategy pattern",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) {
