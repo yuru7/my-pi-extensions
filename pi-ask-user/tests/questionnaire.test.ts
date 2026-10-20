@@ -29,13 +29,41 @@ const params: QuestionParams = {
 	],
 };
 
+const SCENARIOS = [/preferences/i, /ambiguous requirements/i, /implementation decisions/i, /alternative approaches/i];
+
 test("prompt text is shorter than rpiv-ask-user-question 2.13.8 and guidelines stay empty", () => {
 	const size = DEFAULT_TOOL_DESCRIPTION.length + DEFAULT_PROMPT_SNIPPET.length + DEFAULT_PROMPT_GUIDELINES.join("").length;
 	assert.ok(size < REFERENCE_PROMPT_CHARS, `${size} is not below ${REFERENCE_PROMPT_CHARS}`);
 	assert.deepEqual(DEFAULT_PROMPT_GUIDELINES, []);
-	assert.match(DEFAULT_PROMPT_SNIPPET, /cannot be reasonably inferred/);
-	assert.match(DEFAULT_TOOL_DESCRIPTION, /Batch related questions/);
+});
+
+test("guidance covers the four question scenarios in both snippet and description", () => {
+	for (const scenario of SCENARIOS) {
+		assert.match(DEFAULT_PROMPT_SNIPPET, scenario);
+		assert.match(DEFAULT_TOOL_DESCRIPTION, scenario);
+	}
+});
+
+test("guidance keys on material impact, not blocked progress", () => {
+	assert.match(DEFAULT_PROMPT_SNIPPET, /materially affect the result/);
+	assert.match(DEFAULT_TOOL_DESCRIPTION, /materially affect the result/);
+	assert.match(DEFAULT_PROMPT_SNIPPET, /Not limited to blocked work/);
+	assert.match(DEFAULT_TOOL_DESCRIPTION, /even if you could proceed/);
+});
+
+test("guidance suppresses trivial questions and batches related ones", () => {
+	assert.match(DEFAULT_PROMPT_SNIPPET, /Skip trivial questions/);
+	assert.match(DEFAULT_PROMPT_SNIPPET, /Batch related questions/);
+	assert.match(DEFAULT_TOOL_DESCRIPTION, /Avoid trivial questions/);
+	assert.match(DEFAULT_TOOL_DESCRIPTION, /batch related ones/);
+});
+
+test("description keeps the usage points the schema cannot carry", () => {
 	assert.match(DEFAULT_TOOL_DESCRIPTION, /end its label with "\(Recommended\)"/);
+	for (const reserved of ["Other", "Type something.", "Next"]) {
+		assert.ok(DEFAULT_TOOL_DESCRIPTION.includes(`"${reserved}"`), `missing reserved label ${reserved}`);
+	}
+	assert.match(DEFAULT_TOOL_DESCRIPTION, /never pair a preview with multiSelect/);
 });
 
 test("answers, cancel, and timeout are distinct and timeout keeps partial answers", () => {
