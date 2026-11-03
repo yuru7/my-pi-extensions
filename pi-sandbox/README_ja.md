@@ -202,7 +202,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 | `runnerFailureSignatures` | `null` | カスタムランナーの致命的な診断シグネチャ文字列（空でない単一行文字列） |
 | `probeTimeoutMs` | `5000` | ランナーの機能確認プローブのタイムアウトミリ秒（正の整数） |
 | `includeGitRoot` | `true` | 作業ディレクトリが git 管理サブディレクトリのとき、`workspace-write` をリポジトリルートまで広げる。`false` はこの拡大だけを止める（ワークスペース・`/tmp`・明示的な許可はそのまま） |
-| `extraWritableRoots` | `[]` | Linux と macOS の `workspace-write` で追加する書き込み可能なディレクトリ。絶対パス、`~`、または `~/` で始まるパスを指定します。プロジェクト設定は信頼済みプロジェクトでのみ適用されます |
+| `extraWritableRoots` | `[]` | Linux と macOS の `workspace-write` で追加する書き込み可能なディレクトリ。絶対パス、`~`、`~/` で始まるパス、または環境変数を含むパスを指定します。プロジェクト設定は信頼済みプロジェクトでのみ適用されます |
 | `approvalMode` | `auto-review` | 承認方式（`human` / `auto-review` / `allow-all`）。不正な値の場合はエスカレーションを拒否します |
 | `autoReview.model` | `CURRENT` | 自動レビューに使用するモデル（`CURRENT` または `provider/model-id`） |
 | `autoReview.thinkingLevel` | `CURRENT` | 自動レビューの思考レベル（`CURRENT` または Pi の思考レベル） |
@@ -221,6 +221,8 @@ Linux または macOS でワークスペース外にある pnpm ストアへの�
 ```
 
 実際のストアのパスは pnpm の設定や環境によって異なります。`pnpm store path` で確認し、必要に応じて設定を変更してください。この例では、バージョン別のストアディレクトリを含むことがあるディレクトリツリー全体を許可します。設定を編集した後は Pi を再起動してください。
+
+パスには `$XDG_RUNTIME_DIR/my-app` のように `$NAME` または `${NAME}` 形式の環境変数を指定できます。環境変数は設定の読み込み時に一度だけ展開され、未設定または空の場合はエラーになります。展開後のパスは絶対パスである必要があります。変数の値は再帰的に展開されず、シェルの置換構文には対応していません。
 
 設定するパスはディレクトリである必要があります。存在しないパスは警告を表示して無視し、次のツール呼び出し時に再確認します。必要に応じてサンドボックス外で先に作成してください。不正なパス、ファイル、その他のアクセスエラーがある場合は `workspace-write` の呼び出しを拒否します。優先順位の高い設定は配列全体を置き換え、追加はしません。Windows では空でない `extraWritableRoots` はサポートされず、`workspace-write` の呼び出しは失敗します。カスタムの `runnerCommand` と空でない `extraWritableRoots` も併用できません。この設定は `read-only` モードでは適用されず、既存の一時的な `sandbox_grant_write` の動作も変更しません。
 

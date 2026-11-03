@@ -86,6 +86,37 @@ describe("extraWritableRoots", () => {
 		expect(selectExtraWritableRoots(config, false)).toEqual([homedir(), `${homedir()}/notes`, absolute]);
 	});
 
+	it("expands environment variables once when loading paths", () => {
+		vi.stubEnv("PI_TEST_ROOT", join(dir, "path with spaces"));
+		vi.stubEnv("PI_TEST_CHILD", "child");
+		writeGlobal({ extraWritableRoots: ["$PI_TEST_ROOT/${PI_TEST_CHILD}", "${PI_TEST_ROOT}", "~/$PI_TEST_CHILD"] });
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, false)).toEqual([join(dir, "path with spaces", "child"), join(dir, "path with spaces"), `${homedir()}/child`]);
+		vi.stubEnv("PI_TEST_ROOT", join(dir, "changed"));
+		expect(selectExtraWritableRoots(config, false)[0]).toBe(join(dir, "path with spaces", "child"));
+		vi.stubEnv("PI_TEST_ROOT", `${dir}/$PI_TEST_CHILD`);
+		expect(selectExtraWritableRoots(loadSandboxConfig(projectDir), false)[1]).toBe(`${dir}/$PI_TEST_CHILD`);
+	});
+
+	it("rejects unset, empty, and relative environment values", () => {
+		for (const value of [undefined, "", "relative", "~"]) {
+			vi.stubEnv("PI_TEST_ROOT", value);
+			expect(() => validateSandboxConfig({ extraWritableRoots: ["$PI_TEST_ROOT/child"] }, "test"), String(value)).toThrow(/extraWritableRoots/);
+		}
+		vi.stubEnv("PI_TEST_ROOT", "");
+		expect(() => validateSandboxConfig({ extraWritableRoots: ["/safe/${PI_TEST_ROOT}/child"] }, "test")).toThrow(/PI_TEST_ROOT.*unset or empty/);
+	});
+
+	it("keeps invalid project environment variables isolated from global roots", () => {
+		vi.stubEnv("PI_TEST_ROOT", undefined);
+		writeGlobal({ extraWritableRoots: [dir] });
+		writeProject({ extraWritableRoots: ["$PI_TEST_ROOT/child"] });
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, false)).toEqual([dir]);
+		expect(selectExtraWritableRoots(config, null)).toEqual([dir]);
+		expect(() => selectExtraWritableRoots(config, true)).toThrow(/PI_TEST_ROOT.*unset or empty/);
+	});
+
 	it("rejects invalid arrays, relative paths, unsupported home syntax and NUL", () => {
 		for (const value of [null, "~/notes", {}, [1], [""], ["relative"], ["./relative"], ["~other/notes"], ["~\\notes"], [join(projectDir, "bad\0path")]]) {
 			// On Windows ~\\notes is supported as the native home-relative form.

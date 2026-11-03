@@ -204,7 +204,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 | `runnerFailureSignatures` | `null` | Fatal diagnostic signatures for custom runner (non-empty single-line strings) |
 | `probeTimeoutMs` | `5000` | Capability probe timeout in milliseconds (positive integer) |
 | `includeGitRoot` | `true` | Widen `workspace-write` to the git repository root when the working directory is a git-managed subdirectory; `false` skips only that widening (workspace, `/tmp`, and explicit grants still apply) |
-| `extraWritableRoots` | `[]` | Additional writable directories for `workspace-write` on Linux and macOS; specify absolute paths, `~`, or paths starting with `~/`. Project configuration applies only in trusted projects |
+| `extraWritableRoots` | `[]` | Additional writable directories for `workspace-write` on Linux and macOS; specify absolute paths, `~`, paths starting with `~/`, or paths containing environment variables. Project configuration applies only in trusted projects |
 | `approvalMode` | `auto-review` | Approval mode (`human`, `auto-review`, or `allow-all`); invalid values deny escalation |
 | `autoReview.model` | `CURRENT` | Reviewer model (`CURRENT` or `provider/model-id`) |
 | `autoReview.thinkingLevel` | `CURRENT` | Reviewer thinking level (`CURRENT` or supported Pi thinking level) |
@@ -223,6 +223,8 @@ On Linux or macOS, to allow writes to a pnpm store outside the workspace, a trus
 ```
 
 The actual store path depends on the pnpm configuration and environment. Check it with `pnpm store path` and adjust the entry if needed. The example grants the entire directory tree, which may include version-specific store directories. Restart Pi after editing the configuration.
+
+Paths can contain `$NAME` or `${NAME}` environment variables, for example `$XDG_RUNTIME_DIR/my-app`. Variables are expanded once when the configuration is loaded; unset or empty variables are errors, and the resulting path must be absolute. Variable values are not recursively expanded and shell substitutions are not supported.
 
 Each configured path must be a directory. A missing path is ignored with a warning and is checked again on the next tool call; create it outside the sandbox first if necessary. Invalid paths, files, and other access errors prevent confined `workspace-write` calls. A higher-priority configuration replaces the entire array rather than appending to it. On Windows, non-empty `extraWritableRoots` is not supported and causes `workspace-write` calls to fail. Non-empty `extraWritableRoots` is also not supported with a custom `runnerCommand`. The setting does not apply in `read-only` mode and does not change the existing temporary `sandbox_grant_write` behavior.
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SANDBOX_CONFIG } from "../src/config";
+import { DEFAULT_SANDBOX_CONFIG, validateSandboxConfig } from "../src/config";
 import { configuredWritableRoots } from "../src/configured-roots";
 import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs, windowsAclRunnerArgv } from "../src/runners";
 
@@ -22,6 +22,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -30,6 +31,11 @@ function config() {
 }
 
 describe("configured writable roots", () => {
+	it("resolves environment-expanded paths as configured writable roots", () => {
+		vi.stubEnv("PI_TEST_ROOT", dir);
+		const selected = validateSandboxConfig({ extraWritableRoots: ["${PI_TEST_ROOT}/project"] }, "test");
+		expect(configuredWritableRoots(selected, "workspace-write", true, "linux")).toEqual([projectRoot]);
+	});
 	it("selects the project only when trusted, per call", () => {
 		expect(configuredWritableRoots(config(), "workspace-write", true, "linux")).toEqual([projectRoot]);
 		for (const trust of [false, null]) {

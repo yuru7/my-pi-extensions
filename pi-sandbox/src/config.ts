@@ -240,16 +240,21 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
-/** Expand the current user's home only; never resolve relative paths against the process cwd. */
+/** Expand home and environment variables; never resolve relative paths against the process cwd. */
 function validateExtraWritableRoots(value: unknown, source: string): string[] {
 	if (!isStringArray(value)) {
 		throw new Error(`sandbox: ${source}: extraWritableRoots must be a string array`);
 	}
 	return value.map((path) => {
-		let expanded = path;
+		let expanded = path.replace(/\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/gu, (_match, bare: string | undefined, braced: string | undefined) => {
+			const name = (bare ?? braced) as string;
+			const value = process.env[name];
+			if (!value) throw new Error(`sandbox: ${source}: extraWritableRoots environment variable ${name} is unset or empty`);
+			return value;
+		});
 		if (path === "~") expanded = homedir();
 		else if (path.startsWith("~/") || (sep === "\\" && path.startsWith("~\\"))) {
-			expanded = homedir() + path.slice(1);
+			expanded = homedir() + expanded.slice(1);
 		}
 		// Windows considers drive-relative root paths such as "\\foo" absolute,
 		// but their drive still depends on the process. Require a drive or UNC share.
