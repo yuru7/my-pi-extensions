@@ -19,7 +19,7 @@ import {
 	type ToolDefinition,
 	type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
-import { type TSchema, Type } from "typebox";
+import { lit, nul, nullable, obj, str, union } from "@earendil-works/pi-schema";
 import {
 	formatAutoReviewNotice,
 	type ReviewerModelRef,
@@ -88,7 +88,7 @@ import { getWritableGrants } from "./writable-grants";
  * This repo's pinned devDependency (0.80.2) does not have that export, so this file neither references its type nor statically name-imports it;
  * `ToolDefinition` itself exists on 0.80.2 and is safe to use as the return surface.
  */
-type HostPowerShellToolDefinition = ToolDefinition<TSchema, unknown, unknown>;
+type HostPowerShellToolDefinition = ToolDefinition<ToolDefinition["parameters"], unknown, unknown>;
 type HostCreatePowerShellToolDefinition = (
 	cwd: string,
 	options?: { operations?: BashOperations },
@@ -173,7 +173,7 @@ function configForCall(
 }
 
 /** Escalation argument pair (shared by the three tools).
- *  `Type.Null()` is deliberate: a strict provider (pi's `constrainedSampling: {type:"json_schema"}` + `compat.supportsStrictMode`)
+ *  Explicit null is deliberate: a strict provider (pi's `constrainedSampling: {type:"json_schema"}` + `compat.supportsStrictMode`)
  *  stuffs every property into `required`, and wraps a field that "does not allow null" in `anyOf[X,{type:"null"}]`—so the model must supply a value.
  *  After null is declared explicitly, "do not escalate" has a value the schema accepts and the copy accepts, instead of the model guessing the string `"null"`;
  *  pi's strict transform also stops adding a wrapper (`schemaAllowsNull` recognizes it recursively), and JSON null is not stripped by
@@ -182,14 +182,8 @@ function configForCall(
  *  —measured: the string `"null"` is hard-rejected on 0.80.2 too), so unit tests can only pin the declared schema—
  *  the reproducible host-path recipe and the measured record are in docs/superpowers/specs/2026-10-02-denial-first-escalation-design.md §4.3. */
 export const ESCALATION_PROPS = {
-	sandbox_permissions: Type.Optional(
-		Type.Union([
-			Type.Literal("workspace-write"),
-			Type.Literal("danger-full-access"),
-			Type.Null(),
-		]),
-	),
-	justification: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	sandbox_permissions: union([lit("workspace-write"), lit("danger-full-access"), nul()]),
+	justification: nullable(str()),
 };
 
 interface EscalationParams {
@@ -539,12 +533,12 @@ export async function resolveCallMode(
 }
 
 /** Ruling 15: object spread keeps the base schema's own options (such as additionalProperties:false on editSchema). */
-function extendParams(base: TSchema): TSchema {
+function extendParams(base: ToolDefinition["parameters"]): ToolDefinition["parameters"] {
 	const b = base as unknown as { properties: Record<string, unknown> };
 	return {
 		...base,
 		properties: { ...b.properties, ...ESCALATION_PROPS },
-	} as TSchema;
+	} as ToolDefinition["parameters"];
 }
 
 /**
@@ -1171,16 +1165,16 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 			"Grant write access to one directory until this request ends",
 		promptGuidelines: sandboxGuidelines(undefined),
 		executionMode: "sequential" as const,
-		parameters: Type.Object({
-			path: Type.String({
+		parameters: obj({
+			path: str({
 				description:
 					"Directory to make writable. Not /, the home directory, or an ancestor of home.",
 			}),
-			justification: Type.String({
+			justification: str({
 				description:
 					"One sentence: why this directory must be writable to carry out the user's request.",
 			}),
-		}),
+		}, { open: true }),
 		async execute(
 			_toolCallId: string,
 			params: { path?: string; justification?: string },

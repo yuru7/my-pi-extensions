@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { obj } from "@earendil-works/pi-schema";
 import { encode } from "gpt-tokenizer/encoding/o200k_base";
-import { Type } from "typebox";
 import { stableStringify } from "../src/inventory.ts";
 import {
 	BASELINE_DESCRIPTION,
@@ -36,7 +36,7 @@ function toolDefinition(description: string): string {
 	return stableStringify({
 		name: "advisor",
 		description,
-		parameters: Type.Object({}),
+		parameters: obj({}, { open: true }),
 	});
 }
 

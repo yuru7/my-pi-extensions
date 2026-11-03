@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAskUserQuestionTool } from "../src/ask-user-question.ts";
 import { DEFAULT_PROMPT_GUIDELINES, DEFAULT_PROMPT_SNIPPET, DEFAULT_TOOL_DESCRIPTION } from "../src/guidance.ts";
@@ -53,6 +54,29 @@ test("tool registers with the default guidance and the shared schema", () => {
 		assert.deepEqual(tool.promptGuidelines, DEFAULT_PROMPT_GUIDELINES);
 		assert.equal(tool.parameters, QuestionParamsSchema);
 	});
+});
+
+test("the host validates question arguments and keeps optional and extra fields", () => {
+	const tool = { name: "ask_user", description: "", parameters: QuestionParamsSchema };
+	const question = {
+		question: "Choose?",
+		header: "Choice",
+		options: [
+			{ label: "A", description: "First" },
+			{ label: "B", description: "Second", preview: "Details" },
+		],
+		extra: "allowed",
+	};
+	const validate = (args: unknown) =>
+		validateToolArguments(tool, { type: "toolCall", id: "test", name: tool.name, arguments: args as Record<string, unknown> });
+	assert.deepEqual(validate({ questions: [question] }), { questions: [question] });
+	assert.deepEqual(validate({ questions: [{ ...question, multiSelect: true }] }), {
+		questions: [{ ...question, multiSelect: true }],
+	});
+	assert.throws(() => validate({ questions: [] }), /Validation failed/);
+	assert.throws(() => validate({ questions: [{ ...question, options: [question.options[0]] }] }), /Validation failed/);
+	assert.throws(() => validate({ questions: [{ ...question, header: "x".repeat(17) }] }), /Validation failed/);
+	assert.throws(() => validate({ questions: [{ ...question, question: undefined }] }), /Validation failed/);
 });
 
 test("guidance.* config overrides replace the default guidance fields", () => {

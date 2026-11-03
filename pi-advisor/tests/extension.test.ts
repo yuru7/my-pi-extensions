@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { afterEach, describe, test } from "node:test";
+import { type Tool, validateToolArguments } from "@earendil-works/pi-ai";
 import extension from "../extensions/index.ts";
 import { advisorConfigPath } from "../src/config.ts";
 import { ADVISOR_TOOL_NAME } from "../src/messages.ts";
@@ -29,6 +30,18 @@ describe("extension wiring", { concurrency: false }, () => {
 		await start({} as never, createCtx());
 		assert.deepEqual(harness.active, ["read", "bash", "other-extension"]);
 		assert.equal(harness.active.includes(ADVISOR_TOOL_NAME), false);
+	});
+
+	test("the host accepts the advisor's empty argument schema", () => {
+		useConfigDir();
+		const harness = createHarness();
+		extension(harness.pi);
+		const tool = harness.tools[0] as Tool;
+		const validate = (args: Record<string, unknown>) =>
+			validateToolArguments(tool, { type: "toolCall", id: "test", name: tool.name, arguments: args });
+		assert.deepEqual(validate({}), {});
+		assert.deepEqual(validate({ extra: true }), { extra: true });
+		assert.throws(() => validate(null as never), /Validation failed/);
 	});
 
 	test("restores a configured model without dropping another extension's tool", async () => {

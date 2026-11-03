@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@earendil-works/pi-schema':
+        specifier: ^1.5.0
+        version: 1.5.0
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.14
@@ -26,9 +30,6 @@ importers:
       '@types/node':
         specifier: ^24.5.2
         version: 24.19.2
-      typebox:
-        specifier: 1.3.7
-        version: 1.3.7
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -222,6 +223,10 @@ packages:
 
   '@earendil-works/pi-protocol@0.85.1':
     resolution: {integrity: sha512-w+pPvmw54Z8oFmJiSbPT4OwV4Hl97PA3vaLTp7KUwVLbPx3ucaAIldGrlNVt5F3k4C/reT4I39FKmuJIyrmKdg==}
+    engines: {node: '>=22.19.0'}
+
+  '@earendil-works/pi-schema@1.5.0':
+    resolution: {integrity: sha512-RW0MbT2tR65OY6xMsgB/yVBb7m/RTNwA+9hurSN1vVXfHZRVmVnXbruBPrx/PzbrQnW5yLVlMRWxErGDQtF1Hg==}
     engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-server@0.85.1':
@@ -1273,6 +1278,8 @@ snapshots:
     dependencies:
       '@earendil-works/chord': 0.85.1
       typebox: 1.3.7
+
+  '@earendil-works/pi-schema@1.5.0': {}
 
   '@earendil-works/pi-server@0.85.1(ws@8.22.0)':
     dependencies:

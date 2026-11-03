@@ -1,4 +1,4 @@
-import { type Static, Type } from "typebox";
+import { arr, bool, obj, opt, type Static, str } from "@earendil-works/pi-schema";
 import { LABELS_BY_KIND, ROW_INTENT_META } from "../state/row-intent.ts";
 
 export const MAX_QUESTIONS = 4;
@@ -37,51 +37,51 @@ export type SentinelLabel = (typeof SENTINEL_LABELS)[SentinelKind];
 export const RESERVED_LABELS = ["Other", ROW_INTENT_META.other.label, ROW_INTENT_META.next.label] as const;
 export type ReservedLabel = (typeof RESERVED_LABELS)[number];
 
-export const OptionSchema = Type.Object({
-	label: Type.String({
+export const OptionSchema = obj({
+	label: str({
 		maxLength: MAX_LABEL_LENGTH,
 		description: "Short option label, 1-5 words.",
 	}),
-	description: Type.String({
+	description: str({
 		description: "What this choice means or costs.",
 	}),
-	preview: Type.Optional(
-		Type.String({
+	preview: opt(
+		str({
 			description: "Markdown compared beside this option. Single-select only.",
 		}),
 	),
-});
+}, { open: true });
 
-export const QuestionSchema = Type.Object({
-	question: Type.String({
+export const QuestionSchema = obj({
+	question: str({
 		description: "The question, ending with a question mark.",
 	}),
-	header: Type.String({
+	header: str({
 		maxLength: MAX_HEADER_LENGTH,
 		description: "Short chip shown beside the question.",
 	}),
-	options: Type.Array(OptionSchema, {
+	options: arr(OptionSchema, {
 		minItems: MIN_OPTIONS,
 		maxItems: MAX_OPTIONS,
 		description: "Distinct choices. Do not include reserved labels.",
 	}),
-	multiSelect: Type.Optional(
-		Type.Boolean({
+	multiSelect: opt(
+		bool({
 			default: false,
 			description: "Allow more than one choice.",
 		}),
 	),
-});
+}, { open: true });
 
-export const QuestionsSchema = Type.Array(QuestionSchema, {
+export const QuestionsSchema = arr(QuestionSchema, {
 	minItems: 1,
 	maxItems: MAX_QUESTIONS,
 	description: "1-4 related questions, asked together.",
 });
 
-export const QuestionParamsSchema = Type.Object({
+export const QuestionParamsSchema = obj({
 	questions: QuestionsSchema,
-});
+}, { open: true });
 
 export type OptionData = Static<typeof OptionSchema>;
 export type QuestionData = Static<typeof QuestionSchema>;

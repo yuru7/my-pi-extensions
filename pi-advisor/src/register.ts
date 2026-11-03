@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { obj } from "@earendil-works/pi-schema";
 import { loadAdvisorSettings } from "./config.ts";
 import { executeAdvisor } from "./execute.ts";
 import { ADVISOR_TOOL_NAME, TOOL_LABEL } from "./messages.ts";
 import { resolveGuidance, STANDARD_DESCRIPTION } from "./prompt.ts";
 
-const AdvisorParams = Type.Object({});
+const AdvisorParams = obj({}, { open: true });
 
 export function registerAdvisorTool(pi: ExtensionAPI): void {
 	const settings = loadAdvisorSettings();

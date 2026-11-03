@@ -184,8 +184,8 @@ describe("createSandboxTools schemas", () => {
 				.properties;
 			expect(JSON.parse(JSON.stringify(props.sandbox_permissions))).toEqual({
 				anyOf: [
-					{ type: "string", const: "workspace-write" },
-					{ type: "string", const: "danger-full-access" },
+					{ const: "workspace-write" },
+					{ const: "danger-full-access" },
 					{ type: "null" },
 				],
 			});
@@ -204,6 +204,35 @@ describe("createSandboxTools schemas", () => {
 			(bash.parameters as { required?: string[] }).required ?? [];
 		expect(required).not.toContain("sandbox_permissions");
 		expect(required).not.toContain("justification");
+	});
+	it("validates extended schemas through the installed host", async () => {
+		// Resolve the validator from the same installation as the host, not an unrelated pi-ai version.
+		const hostEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+		const { validateToolArguments } = await import(new URL("../../pi-ai/dist/index.js", hostEntry).href);
+		const { deps } = makeDeps();
+		const { bash, write, edit, grantWrite } = createSandboxTools(deps);
+		for (const [tool, base] of [
+			[bash, { command: "pwd" }],
+			[write, { path: "file", content: "text" }],
+			[edit, { path: "file", edits: [{ oldText: "a", newText: "b" }] }],
+		] as const) {
+			const validate = (args: Record<string, unknown>) =>
+				validateToolArguments(tool, { name: tool.name, arguments: args });
+			for (const params of [
+				{},
+				{ sandbox_permissions: "workspace-write", justification: "reason" },
+				{ sandbox_permissions: "danger-full-access" },
+				{ sandbox_permissions: null, justification: null },
+			]) {
+				expect(validate({ ...base, ...params })).toEqual({ ...base, ...params });
+			}
+			expect(() => validate({ ...base, sandbox_permissions: "invalid" })).toThrow();
+		}
+		const grantArgs = { path: "/tmp/dir", justification: "reason" };
+		const validateGrant = (args: Record<string, unknown>) =>
+			validateToolArguments(grantWrite, { name: grantWrite.name, arguments: args });
+		expect(validateGrant(grantArgs)).toEqual(grantArgs);
+		expect(() => validateGrant({ path: grantArgs.path })).toThrow();
 	});
 	it("description teaches the escalation contract within the per-tool budget (β′)", () => {
 		const { deps } = makeDeps();
