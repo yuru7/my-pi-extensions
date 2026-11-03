@@ -3,6 +3,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { approvalStatusLine, getSandboxConfig } from "./src/config";
+import { configuredWritableRoots } from "./src/configured-roots";
 import { getDenialLedger } from "./src/denial-ledger";
 import { getEscalationBroker } from "./src/escalation-broker";
 import { createPiSandboxCommand } from "./src/init-command";
@@ -189,6 +190,17 @@ export default function (pi: ExtensionAPI) {
 					`runner: ${runnerText}`,
 					`workspace: ${canonicalPath(effectiveCwd)}`,
 				];
+				if (effective !== "workspace-write") {
+					lines.push(`configured writable roots: inactive (${effective})`);
+				} else {
+					try {
+						const roots = configuredWritableRoots(cfg, effective, projectTrusted);
+						const scope = projectTrusted === true ? "trusted project" : "global only; project trust not confirmed";
+						lines.push(`configured writable roots (${scope}): ${roots.length ? roots.join(", ") : "none"}`);
+					} catch (error) {
+						lines.push(`configured writable roots: unavailable (fail-closed: ${error instanceof Error ? error.message : String(error)})`);
+					}
+				}
 				const shellLine = win32ShellStatusLine(pi);
 				if (shellLine !== null) lines.push(shellLine);
 				return lines.join("\n");

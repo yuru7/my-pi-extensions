@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, resolve as resolvePath, sep } from "node:path";
 import { CONFIG_DIR_NAME, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSandboxMode, type SandboxMode } from "./policy";
 
@@ -39,6 +40,9 @@ export interface ApprovalSettings {
 	approvalInvalid: boolean;
 }
 
+/** Invalid roots are retained until the applicable trust scope is selected. */
+export type ExtraWritableRootsConfig = string[] | { error: string };
+
 /** sandbox.json / pi-sandbox.json の統合スキーマ。 */
 export interface SandboxConfig {
 	mode: SandboxMode;
@@ -49,6 +53,10 @@ export interface SandboxConfig {
 	probeTimeoutMs: number;
 	/** Widen workspace-write to the git repository root when the workspace is a git-managed subdirectory (git commit writes into .git). */
 	includeGitRoot: boolean;
+	/** Project-over-global roots; use selectExtraWritableRoots before use. */
+	extraWritableRoots: ExtraWritableRootsConfig;
+	/** Roots from global configuration only. */
+	globalExtraWritableRoots: ExtraWritableRootsConfig;
 	approvalMode: ApprovalMode;
 	autoReview: AutoReviewConfig;
 	/** Reviewer 1 試行の上限（ミリ秒）。 */
@@ -76,6 +84,8 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
 	runnerFailureSignatures: null,
 	probeTimeoutMs: 5000,
 	includeGitRoot: true,
+	extraWritableRoots: [],
+	globalExtraWritableRoots: [],
 	approvalMode: DEFAULT_APPROVAL.approvalMode,
 	autoReview: DEFAULT_APPROVAL.autoReview,
 	autoReviewTimeoutMs: DEFAULT_APPROVAL.autoReviewTimeoutMs,
@@ -93,6 +103,7 @@ export function buildDefaultConfigFile(): Record<string, unknown> {
 		runnerFailureSignatures: DEFAULT_SANDBOX_CONFIG.runnerFailureSignatures,
 		probeTimeoutMs: DEFAULT_SANDBOX_CONFIG.probeTimeoutMs,
 		includeGitRoot: DEFAULT_SANDBOX_CONFIG.includeGitRoot,
+		extraWritableRoots: [],
 		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
 		autoReview: {
 			model: DEFAULT_SANDBOX_CONFIG.autoReview.model,
@@ -173,6 +184,13 @@ export function selectApprovalSettings(config: SandboxConfig, projectTrusted: bo
 	return config.globalApproval;
 }
 
+/** Select the trusted scope and reject its invalid value without affecting other settings. */
+export function selectExtraWritableRoots(config: SandboxConfig, projectTrusted: boolean | null): string[] {
+	const roots = projectTrusted === true ? config.extraWritableRoots : config.globalExtraWritableRoots;
+	if (!Array.isArray(roots)) throw new Error(roots.error);
+	return roots;
+}
+
 export function describeApproval(settings: ApprovalSettings): string {
 	if (settings.approvalInvalid) return "approval: deny (invalid approval config)";
 	if (settings.approvalMode === "auto-review") {
@@ -220,6 +238,37 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+/** Expand the current user's home only; never resolve relative paths against the process cwd. */
+function validateExtraWritableRoots(value: unknown, source: string): string[] {
+	if (!isStringArray(value)) {
+		throw new Error(`sandbox: ${source}: extraWritableRoots must be a string array`);
+	}
+	return value.map((path) => {
+		let expanded = path;
+		if (path === "~") expanded = homedir();
+		else if (path.startsWith("~/") || (sep === "\\" && path.startsWith("~\\"))) {
+			expanded = homedir() + path.slice(1);
+		}
+		// Windows considers drive-relative root paths such as "\\foo" absolute,
+		// but their drive still depends on the process. Require a drive or UNC share.
+		const fullyQualified = isAbsolute(expanded)
+			&& (sep !== "\\" || /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/u.test(expanded));
+		if (expanded.includes("\0") || !fullyQualified) {
+			throw new Error(`sandbox: ${source}: extraWritableRoots entries must be absolute paths or start with ~/ and contain no NUL`);
+		}
+		return expanded;
+	});
+}
+
+function parseExtraWritableRoots(value: unknown, source: string): ExtraWritableRootsConfig {
+	try {
+		return validateExtraWritableRoots(value, source);
+	} catch (error) {
+		if (!(error instanceof Error)) throw error;
+		return { error: error.message };
+	}
 }
 
 interface ApprovalState {
@@ -340,12 +389,18 @@ export function validateSandboxConfig(raw: Record<string, unknown>, source: stri
 		throw new Error(`sandbox: ${source}: includeGitRoot must be a boolean`);
 	}
 
+	const extraWritableRoots = "extraWritableRoots" in raw
+		? validateExtraWritableRoots(raw.extraWritableRoots, source)
+		: [];
+
 	return {
 		mode,
 		runnerCommand: runnerCommand as string[] | null,
 		runnerFailureSignatures: runnerFailureSignatures as string[] | null,
 		probeTimeoutMs,
 		includeGitRoot,
+		extraWritableRoots,
+		globalExtraWritableRoots: extraWritableRoots,
 		approvalMode: DEFAULT_SANDBOX_CONFIG.approvalMode,
 		autoReview: DEFAULT_SANDBOX_CONFIG.autoReview,
 		autoReviewTimeoutMs: DEFAULT_SANDBOX_CONFIG.autoReviewTimeoutMs,
@@ -370,6 +425,8 @@ export function loadSandboxConfig(hostCwd: string, agentDir = getAgentDir()): Sa
 	const mergedSandbox: Record<string, unknown> = {};
 	const approval = defaultApprovalState();
 	const globalApproval = defaultApprovalState();
+	let extraWritableRoots: ExtraWritableRootsConfig = [];
+	let globalExtraWritableRoots: ExtraWritableRootsConfig = [];
 
 	for (const file of files) {
 		const raw = readJsonFile(file.path);
@@ -382,12 +439,18 @@ export function loadSandboxConfig(hostCwd: string, agentDir = getAgentDir()): Sa
 		}
 		applyApproval(approval, raw);
 		if (file.scope === "global") applyApproval(globalApproval, raw);
+		if ("extraWritableRoots" in raw) {
+			extraWritableRoots = parseExtraWritableRoots(raw.extraWritableRoots, file.path);
+			if (file.scope === "global") globalExtraWritableRoots = extraWritableRoots;
+		}
 	}
 
 	const sandbox = validateSandboxConfig(mergedSandbox, NEW_CONFIG_NAME);
 	const mergedApproval = toApprovalSettings(approval);
 	return {
 		...sandbox,
+		extraWritableRoots,
+		globalExtraWritableRoots,
 		approvalMode: mergedApproval.approvalMode,
 		autoReview: mergedApproval.autoReview,
 		autoReviewTimeoutMs: mergedApproval.autoReviewTimeoutMs,

@@ -3,7 +3,7 @@
 English | [日本語](./README_ja.md)
 
 Process-level sandbox extension for the Pi coding agent.
-Leverages OS-native sandbox mechanisms (bwrap / landlock / seatbelt / windows-acl) to enforce **"workspace and temporary directories writable, everything else read-only, fail-closed by default"**. Since it does not use containers, host paths work as-is (path transparent). Features denial-first privilege escalation with built-in AI auto-review.
+Leverages OS-native sandbox mechanisms (bwrap / landlock / seatbelt / windows-acl) to enforce **"workspace and temporary directories writable by default, other writes restricted, fail-closed by default"**. The writable area can also include git roots and explicitly granted or configured directories. Since it does not use containers, host paths work as-is (path transparent). Features denial-first privilege escalation with built-in AI auto-review.
 
 ## Install
 
@@ -21,7 +21,7 @@ pi install .
 
 | Mode | File effects |
 |---|---|
-| `workspace-write` (default) | Working directory (workspace) + `/tmp` + `os.tmpdir()` writable (plus the git repository root when the workspace is a git-managed subdirectory, unless `includeGitRoot` is disabled); everything else read-only |
+| `workspace-write` (default) | Working directory (workspace) + `/tmp` + `os.tmpdir()` writable (plus the git repository root when the workspace is a git-managed subdirectory, unless `includeGitRoot` is disabled, and any configured extra writable roots); everything else read-only |
 | `read-only` | No write access (only `/dev/null` or Windows `NUL` writable); everything else read-only |
 | `danger-full-access` | Bypasses the sandbox completely (explicit escape hatch) |
 
@@ -174,7 +174,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 5. `<project>/.pi/pi-sandbox.json`
 6. Runtime overrides via `/permission` (always takes precedence)
 
-> **Project Trust Protection**: In untrusted projects, or environments where `isProjectTrusted()` cannot be resolved, project configurations cannot override `approvalMode`, `autoReview`, or `autoReviewTimeoutMs` (global configuration values remain enforced). This prevents malicious repositories from enabling `allow-all`.
+> **Project Trust Protection**: In untrusted projects, or environments where `isProjectTrusted()` cannot be resolved, project configurations cannot override `approvalMode`, `autoReview`, `autoReviewTimeoutMs`, or `extraWritableRoots`. This prevents malicious repositories from enabling `allow-all` or adding writable roots through project configuration.
 
 ### Example Configuration (`pi-sandbox.json`)
 
@@ -185,6 +185,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
   "runnerFailureSignatures": null,
   "probeTimeoutMs": 5000,
   "includeGitRoot": true,
+  "extraWritableRoots": [],
   "approvalMode": "auto-review",
   "autoReview": {
     "model": "CURRENT",
@@ -203,6 +204,7 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 | `runnerFailureSignatures` | `null` | Fatal diagnostic signatures for custom runner (non-empty single-line strings) |
 | `probeTimeoutMs` | `5000` | Capability probe timeout in milliseconds (positive integer) |
 | `includeGitRoot` | `true` | Widen `workspace-write` to the git repository root when the working directory is a git-managed subdirectory; `false` skips only that widening (workspace, `/tmp`, and explicit grants still apply) |
+| `extraWritableRoots` | `[]` | Additional writable directories for `workspace-write` on Linux and macOS; specify absolute paths, `~`, or paths starting with `~/`. Project configuration applies only in trusted projects |
 | `approvalMode` | `auto-review` | Approval mode (`human`, `auto-review`, or `allow-all`); invalid values deny escalation |
 | `autoReview.model` | `CURRENT` | Reviewer model (`CURRENT` or `provider/model-id`) |
 | `autoReview.thinkingLevel` | `CURRENT` | Reviewer thinking level (`CURRENT` or supported Pi thinking level) |
@@ -210,9 +212,24 @@ Configuration files are not created automatically at startup; run `/pi-sandbox i
 
 `/permission` prints the approval mode that will actually be used (global value when the project is untrusted).
 
+### Example: pnpm store
+
+On Linux or macOS, to allow writes to a pnpm store outside the workspace, a trusted project can add the following to `<project>/.pi/pi-sandbox.json`:
+
+```json
+{
+  "extraWritableRoots": ["~/.local/share/pnpm/store"]
+}
+```
+
+The actual store path depends on the pnpm configuration and environment. Check it with `pnpm store path` and adjust the entry if needed. The example grants the entire directory tree, which may include version-specific store directories. Restart Pi after editing the configuration.
+
+Each configured path must already exist and be a directory; create it outside the sandbox first if necessary. Invalid or unavailable paths prevent confined `workspace-write` calls rather than silently weakening the sandbox. A higher-priority configuration replaces the entire array rather than appending to it. On Windows, non-empty `extraWritableRoots` is not supported and causes `workspace-write` calls to fail. Non-empty `extraWritableRoots` is also not supported with a custom `runnerCommand`. The setting does not apply in `read-only` mode and does not change the existing temporary `sandbox_grant_write` behavior.
+
 ## Security Notes
 
 - **Unrestricted Reads**: Confined processes can **read everything you can read on the host** (including `~/.ssh` and similar sensitive files) by design. Root-only files remain protected by standard OS permissions.
+- **Extra Writable Roots**: Configured directories widen the sandbox beyond the workspace in `workspace-write` on Linux and macOS. Agent commands, including package install scripts, can modify or delete their contents without a separate approval for each write. A shared pnpm store may affect other projects. Use only the narrowest necessary directories, and enable project settings only for projects you trust.
 - **Shared Host Temporary Directories**:
   - Under Linux (bwrap / landlock / write fence) and macOS, `/tmp` is shared with host `/tmp` (rw bind).
   - On Windows, the sandbox temporary root is the host `%TEMP%`.

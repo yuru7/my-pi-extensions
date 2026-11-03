@@ -35,6 +35,7 @@ import {
 	type SandboxConfig,
 	selectApprovalSettings,
 } from "./config";
+import { configuredWritableRoots } from "./configured-roots";
 import {
 	type DenialRecord,
 	getDenialLedger,
@@ -806,26 +807,32 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 		deps.cwd,
 	);
 
-	/** Extra writable roots of one call: git metadata roots (workspace-write only, and only while `includeGitRoot` is on — read-only opens nothing) plus the session's approved grants. */
+	/** Configured and git roots apply only to workspace-write; turn grants also apply to read-only. */
 	const extraRootsFor = (
 		sessionId: string | null,
 		mode: SandboxMode,
 		sessionCwd: string,
-	): readonly string[] => [
-		...(mode === "workspace-write" &&
-		configForCall(deps, sessionCwd).includeGitRoot
-			? gitWritableRoots(sessionCwd)
-			: []),
-		...(sessionId === null ? [] : getWritableGrants().list(sessionId)),
-	];
+		projectTrusted: boolean | null,
+	): readonly string[] => {
+		const config = configForCall(deps, sessionCwd);
+		const gitRoots = mode === "workspace-write" && config.includeGitRoot
+			? gitWritableRoots(sessionCwd) : [];
+		const grants = sessionId === null ? [] : getWritableGrants().list(sessionId);
+		return [
+			...gitRoots,
+			...configuredWritableRoots(config, mode, projectTrusted, platform),
+			...grants,
+		];
+	};
 	const recordDenial = (
 		entry: Omit<DenialRecord, "recordedAt" | "writablePaths">,
+		extraRoots: readonly string[],
 	): void => {
 		const paths = writableRoots(
 			entry.sandboxMode,
 			entry.workspace,
 			deps._tmpRoots ?? defaultTmpRoots(),
-			extraRootsFor(entry.sessionId, entry.sandboxMode, entry.cwd),
+			extraRoots,
 		);
 		getDenialLedger().record({
 			...entry,
@@ -880,7 +887,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"bash",
 			);
-			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd, readProjectTrusted(ctx));
 			// M3: when a custom runnerCommand is configured, skip chain probing (confine uses runnerCommand directly).
 			const selected =
 				mode === "danger-full-access" || (config.runnerCommand?.length ?? 0) > 0
@@ -914,7 +921,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 										exitCode: details.exitCode,
 										stdout: details.stdout,
 										stderr: details.stderr,
-									}),
+									}, extraRoots),
 				}),
 			});
 			const result = await tool.execute(
@@ -955,7 +962,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"write",
 			);
-			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd, readProjectTrusted(ctx));
 			// Do not catch a fence denial: FenceDenialError is thrown from ops and rethrown as-is through pi's execute
 			// (withFileMutationQueue does not swallow errors)—pi's agent loop turns it into an error result.
 			const config = configForCall(deps, sessionCwd);
@@ -981,7 +988,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 									backend: backendName(mode, config),
 									target: details.path,
 									error: details.message,
-								}),
+								}, extraRoots),
 					() => {
 						const raw = typeof params.path === "string" ? params.path : "";
 						if (raw.trim().length === 0) return null;
@@ -1027,7 +1034,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				signal,
 				"edit",
 			);
-			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
+			const extraRoots = extraRootsFor(sessionId, mode, sessionCwd, readProjectTrusted(ctx));
 			const config = configForCall(deps, sessionCwd);
 			const tool = createEditToolDefinition(sessionCwd, {
 				operations: createFencedEditOps(
@@ -1051,7 +1058,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 									backend: backendName(mode, config),
 									target: details.path,
 									error: details.message,
-								}),
+								}, extraRoots),
 				),
 			});
 			const result = await tool.execute(
@@ -1101,7 +1108,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 							signal,
 							"powershell",
 						);
-						const extraRoots = extraRootsFor(sessionId, mode, sessionCwd);
+						const extraRoots = extraRootsFor(sessionId, mode, sessionCwd, readProjectTrusted(ctx));
 						const selected =
 							mode === "danger-full-access" ||
 							(config.runnerCommand?.length ?? 0) > 0
@@ -1136,7 +1143,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 													exitCode: details.exitCode,
 													stdout: details.stdout,
 													stderr: details.stderr,
-												}),
+												}, extraRoots),
 							}),
 						});
 						const result = await tool.execute(
@@ -1230,7 +1237,7 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				effective,
 				workspaceRoot,
 				deps._tmpRoots ?? defaultTmpRoots(),
-				extraRootsFor(sessionId, effective, sessionCwd),
+				extraRootsFor(sessionId, effective, sessionCwd, readProjectTrusted(ctx)),
 			);
 			if (isWithinRoots(requested, roots)) {
 				return textResult(

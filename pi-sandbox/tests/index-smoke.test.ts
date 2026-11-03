@@ -52,7 +52,7 @@ async function importIndexWithDangerFullAccessOverride() {
 
 type CommandHandler = (
 	args: string,
-	ctx: { ui: { notify: ReturnType<typeof vi.fn> }; cwd?: string },
+	ctx: { ui: { notify: ReturnType<typeof vi.fn> }; cwd?: string; isProjectTrusted?: () => boolean },
 ) => Promise<void>;
 type HookHandler = (event: unknown, ctx: unknown) => void;
 
@@ -794,5 +794,39 @@ describe("T15: platform gate and the pwsh-not-activated notice (Ruling 8/9)", ()
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe("configured root status", () => {
+	it.skipIf(process.platform === "win32")("reports the selected scope, inactive modes, and errors without throwing", async () => {
+		const project = join(dir, "project-status");
+		const globalRoot = join(dir, "global-root");
+		const projectRoot = join(dir, "project-root");
+		for (const path of [join(project, ".pi"), globalRoot, projectRoot]) mkdirSync(path, { recursive: true });
+		writeFileSync(join(dir, "agent", "pi-sandbox.json"), JSON.stringify({ extraWritableRoots: [globalRoot] }));
+		writeFileSync(join(project, ".pi", "pi-sandbox.json"), JSON.stringify({ extraWritableRoots: [projectRoot], includeGitRoot: false }));
+		const { fakePi, commandHandlers } = makeFakePi();
+		(await import("../index")).default(fakePi as never);
+		const status = async (trusted: boolean | undefined) => {
+			const notify = vi.fn();
+			await commandHandlers.permission.handler("", { cwd: project, ui: { notify }, ...(trusted === undefined ? {} : { isProjectTrusted: () => trusted }) });
+			return String(notify.mock.calls[0][0]);
+		};
+		expect(await status(true)).toContain(projectRoot);
+		const unknown = await status(undefined);
+		expect(unknown).toContain(globalRoot);
+		expect(unknown).not.toContain(projectRoot);
+		const original = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { value: "win32" });
+		try {
+			expect(await status(true)).toContain("extraWritableRoots is not supported on Windows");
+		} finally {
+			if (original) Object.defineProperty(process, "platform", original);
+		}
+		processPermissionState.override = "read-only";
+		expect(await status(true)).toContain("configured writable roots: inactive (read-only)");
+		processPermissionState.override = null;
+		rmSync(projectRoot, { recursive: true });
+		expect(await status(true)).toContain("configured writable roots: unavailable (fail-closed:");
 	});
 });

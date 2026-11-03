@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -1584,6 +1585,66 @@ describe("windows tool wiring", () => {
 		);
 	});
 
+	it("rejects selected Windows roots before bash, PowerShell, write or edit executes and retains existing grants", async () => {
+		const builder = fakePowerShellBuilder();
+		const bashExec = vi.fn(async () => ({ exitCode: 0 }));
+		const buildBash = vi.fn(() => ({ exec: bashExec }));
+		const { deps, spawnFn } = makeDeps({
+			platform: "win32",
+			getConfig: () => ({ ...humanSandboxConfig(), extraWritableRoots: [outsideDir], globalExtraWritableRoots: [outsideDir] }),
+			_hostCreatePowerShellToolDefinition: builder,
+			_buildBashOps: buildBash as never,
+		});
+		getWritableGrants().grant(TEST_SESSION, outsideDir);
+		const { bash, powershell, write, edit } = createSandboxTools(deps);
+		const target = join(ws, "unchanged.txt");
+		writeFileSync(target, "original");
+		const newFile = join(ws, "not-created.txt");
+		const error = /extraWritableRoots.*not supported on Windows/;
+		const ctx = toolCtx();
+		await expect(bash.execute("b", { command: "echo hi" }, undefined, undefined, ctx)).rejects.toThrow(error);
+		await expect(powershell!.execute("p", { command: "echo hi" }, undefined, undefined, ctx)).rejects.toThrow(error);
+		await expect(write.execute("w", { path: newFile, content: "new" }, undefined, undefined, ctx)).rejects.toThrow(error);
+		await expect(edit.execute("e", { path: target, edits: [{ oldText: "original", newText: "changed" }] }, undefined, undefined, ctx)).rejects.toThrow(error);
+		expect(buildBash).not.toHaveBeenCalled();
+		expect(bashExec).not.toHaveBeenCalled();
+		expect(spawnFn).not.toHaveBeenCalled();
+		expect(builder).toHaveBeenCalledTimes(1); // metadata only, no execution definition
+		expect(existsSync(newFile)).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe("original");
+		expect(getWritableGrants().list(TEST_SESSION)).toEqual([outsideDir]);
+	});
+
+	it("ignores untrusted Windows project roots and keeps grants usable with empty roots and read-only", async () => {
+		const builder = fakePowerShellBuilder();
+		const projectRoot = join(outsideDir, "project");
+		mkdirSync(projectRoot);
+		const { deps } = makeDeps({
+			platform: "win32",
+			getConfig: () => ({ ...humanSandboxConfig(), includeGitRoot: false, extraWritableRoots: [projectRoot], globalExtraWritableRoots: [] }),
+			_hostCreatePowerShellToolDefinition: builder,
+		});
+		const granted = join(outsideDir, "granted");
+		mkdirSync(granted);
+		getWritableGrants().grant(TEST_SESSION, granted);
+		const { write, edit, powershell } = createSandboxTools(deps);
+		const untrusted = { ...(toolCtx() as object), isProjectTrusted: () => false } as never;
+		const trusted = { ...(toolCtx() as object), isProjectTrusted: () => true } as never;
+		const target = join(granted, "file.txt");
+		const projectFile = join(projectRoot, "not-granted.txt");
+		await expect(write.execute("w0", { path: projectFile, content: "x" }, undefined, undefined, untrusted)).rejects.toThrow(/file access denied/);
+		expect(existsSync(projectFile)).toBe(false);
+		await write.execute("w1", { path: target, content: "before" }, undefined, undefined, untrusted);
+		await edit.execute("e1", { path: target, edits: [{ oldText: "before", newText: "after" }] }, undefined, undefined, untrusted);
+		await powershell!.execute("p1", { command: "echo hi" }, undefined, undefined, untrusted);
+		expect(readFileSync(target, "utf8")).toBe("after");
+		await expect(write.execute("w2", { path: join(ws, "blocked.txt"), content: "x" }, undefined, undefined, trusted)).rejects.toThrow(/extraWritableRoots.*not supported on Windows/);
+		deps.permission.override = "read-only";
+		await write.execute("w3", { path: target, content: "read-only grant" }, undefined, undefined, trusted);
+		expect(readFileSync(target, "utf8")).toBe("read-only grant");
+		expect(getWritableGrants().list(TEST_SESSION)).toEqual([granted]);
+	});
+
 	it("a throwing host pwsh builder degrades to no powershell tool without breaking bash/write/edit", () => {
 		// I2 fail-open regression gate: if a throw during construction escapes createSandboxTools, pi nulls out the whole extension,
 		// and bash/write/edit then run with no sandbox. It must degrade to "no pwsh override", and the three base tools still register as usual.
@@ -1863,5 +1924,66 @@ describe("sandbox_grant_write", () => {
 
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(join(outsideDir, "share"))).toBe(true);
+	});
+});
+
+describe("configured writable roots wiring", () => {
+	it("selects trust per call for bash, write, edit and denial metadata", async () => {
+		const projectPath = join(dir, "project-extra");
+		mkdirSync(projectPath);
+		const projectRoot = realpathSync.native(projectPath);
+		const config = {
+			...humanSandboxConfig(), includeGitRoot: false,
+			globalExtraWritableRoots: [outsideDir], extraWritableRoots: [projectRoot],
+		};
+		const { deps, child, spawnFn } = makeDeps({ getConfig: () => config });
+		const tools = createSandboxTools(deps);
+		const ctx = (trusted: boolean | undefined) => ({
+			...(toolCtx() as object),
+			...(trusted === undefined ? {} : { isProjectTrusted: () => trusted }),
+		}) as never;
+		const target = join(projectRoot, "file.txt");
+		await expect(tools.write.execute("w1", { path: target, content: "first" }, undefined, undefined, ctx(false))).rejects.toThrow(/file access denied/);
+		expect(getDenialLedger().list(TEST_SESSION).at(-1)?.writablePaths).toContain(outsideDir);
+		expect(getDenialLedger().list(TEST_SESSION).at(-1)?.writablePaths).not.toContain(projectRoot);
+		await tools.write.execute("w2", { path: target, content: "first" }, undefined, undefined, ctx(true));
+		await tools.edit.execute("e", { path: target, edits: [{ oldText: "first", newText: "second" }] }, undefined, undefined, ctx(true));
+		await expect((await import("node:fs/promises")).readFile(target, "utf8")).resolves.toBe("second");
+		const p = tools.bash.execute("b", { command: "true" }, undefined, undefined, ctx(undefined));
+		await vi.waitFor(() => expect(spawnFn).toHaveBeenCalled());
+		const argv = (spawnFn as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
+		expect(argv).toContain(outsideDir);
+		expect(argv).not.toContain(projectRoot);
+		child.emit("close", 0, undefined);
+		await p;
+	});
+
+	it("read-only ignores configured roots but preserves a turn grant", async () => {
+		const grantedPath = join(dir, "granted");
+		mkdirSync(grantedPath);
+		const granted = realpathSync.native(grantedPath);
+		const { deps } = makeDeps({ getConfig: () => ({ ...humanSandboxConfig(), extraWritableRoots: [outsideDir], globalExtraWritableRoots: [outsideDir] }) });
+		deps.permission.override = "read-only";
+		getWritableGrants().grant(TEST_SESSION, granted);
+		const { write } = createSandboxTools(deps);
+		await expect(write.execute("w1", { path: join(outsideDir, "x"), content: "x" }, undefined, undefined, toolCtx())).rejects.toThrow(/file access denied/);
+		await write.execute("w2", { path: join(granted, "x"), content: "x" }, undefined, undefined, toolCtx());
+		expect(existsSync(join(granted, "x"))).toBe(true);
+		const paths = getDenialLedger().list(TEST_SESSION).at(-1)?.writablePaths;
+		expect(paths).toContain(granted);
+		expect(paths).not.toContain(outsideDir);
+	});
+
+	it("refuses a custom runner and missing roots before write or spawn", async () => {
+		for (const config of [
+			{ ...humanSandboxConfig(), extraWritableRoots: [outsideDir], globalExtraWritableRoots: [outsideDir], runnerCommand: ["custom"] },
+			{ ...humanSandboxConfig(), extraWritableRoots: [join(dir, "missing")], globalExtraWritableRoots: [join(dir, "missing")] },
+		]) {
+			const { deps, spawnFn } = makeDeps({ getConfig: () => config });
+			const { bash, write } = createSandboxTools(deps);
+			await expect(write.execute("w", { path: join(ws, "x"), content: "x" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner|unavailable/);
+			await expect(bash.execute("b", { command: "true" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner|unavailable/);
+			expect(spawnFn).not.toHaveBeenCalled();
+		}
 	});
 });

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SANDBOX_CONFIG, buildDefaultConfigFile, getSandboxConfig, isAutoReviewTimeoutMs, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, validateSandboxConfig } from "../src/config";
+import { DEFAULT_SANDBOX_CONFIG, buildDefaultConfigFile, getSandboxConfig, isAutoReviewTimeoutMs, loadSandboxConfig, resetSandboxConfigCache, selectApprovalSettings, selectExtraWritableRoots, validateSandboxConfig } from "../src/config";
 
 let dir: string;
 let agentDir: string;
@@ -25,6 +25,7 @@ beforeEach(() => {
 	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 });
 afterEach(() => {
+	resetSandboxConfigCache();
 	vi.unstubAllEnvs();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -67,6 +68,83 @@ describe("loadSandboxConfig", () => {
 			writeFileSync(path, content);
 			expect(loadSandboxConfig(projectDir), content).toEqual(DEFAULT_SANDBOX_CONFIG); // does not throw
 		}
+	});
+});
+
+describe("extraWritableRoots", () => {
+	it("defaults to an empty array in both scopes and the generated config", () => {
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, true)).toEqual([]);
+		expect(selectExtraWritableRoots(config, false)).toEqual([]);
+		expect(buildDefaultConfigFile().extraWritableRoots).toEqual([]);
+	});
+
+	it("expands only the current user's home and preserves absolute paths", () => {
+		const absolute = join(projectDir, "path with spaces");
+		const config = validateSandboxConfig({ extraWritableRoots: ["~", "~/notes", absolute] }, "test");
+		expect(selectExtraWritableRoots(config, true)).toEqual([homedir(), `${homedir()}/notes`, absolute]);
+		expect(selectExtraWritableRoots(config, false)).toEqual([homedir(), `${homedir()}/notes`, absolute]);
+	});
+
+	it("rejects invalid arrays, relative paths, unsupported home syntax and NUL", () => {
+		for (const value of [null, "~/notes", {}, [1], [""], ["relative"], ["./relative"], ["~other/notes"], ["~\\notes"], [join(projectDir, "bad\0path")]]) {
+			// On Windows ~\\notes is supported as the native home-relative form.
+			if (process.platform === "win32" && Array.isArray(value) && value[0] === "~\\notes") continue;
+			expect(() => validateSandboxConfig({ extraWritableRoots: value }, "test"), JSON.stringify(value)).toThrow(/extraWritableRoots/);
+		}
+	});
+
+	it.runIf(process.platform === "win32")("rejects Windows paths without an explicit drive or UNC share", () => {
+		for (const path of ["\\relative-to-drive", "/relative-to-drive", "C:relative", "\\\\server"]) {
+			expect(() => validateSandboxConfig({ extraWritableRoots: [path] }, "test"), path).toThrow(/extraWritableRoots/);
+		}
+	});
+
+	it("replaces arrays by file priority and ignores project values unless trusted", () => {
+		const paths = ["global-legacy", "global-new", "project-legacy", "project-new"].map((name) => join(dir, name));
+		writeGlobal({ extraWritableRoots: [paths[0]] });
+		writeGlobal({ extraWritableRoots: [paths[1]] }, "pi-sandbox.json");
+		writeProject({ extraWritableRoots: [paths[2]] });
+		writeProject({ extraWritableRoots: [paths[3]] }, "pi-sandbox.json");
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, true)).toEqual([paths[3]]);
+		expect(selectExtraWritableRoots(config, false)).toEqual([paths[1]]);
+		expect(selectExtraWritableRoots(config, null)).toEqual([paths[1]]);
+		writeProject({ extraWritableRoots: [] }, "pi-sandbox.json");
+		expect(selectExtraWritableRoots(loadSandboxConfig(projectDir), true)).toEqual([]);
+	});
+
+	it("does not let an invalid project value reset global roots or unrelated config", () => {
+		const globalRoot = join(dir, "global");
+		writeGlobal({ extraWritableRoots: [globalRoot], approvalMode: "human", probeTimeoutMs: 1234 });
+		writeProject({ extraWritableRoots: ["relative"] }, "pi-sandbox.json");
+		const config = getSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, false)).toEqual([globalRoot]);
+		expect(selectExtraWritableRoots(config, null)).toEqual([globalRoot]);
+		expect(config.probeTimeoutMs).toBe(1234);
+		expect(selectApprovalSettings(config, false).approvalMode).toBe("human");
+		expect(() => selectExtraWritableRoots(config, true)).toThrow(/pi-sandbox\.json.*extraWritableRoots/);
+	});
+
+	it("validates the effective value independently for each scope", () => {
+		const projectRoot = join(dir, "project-root");
+		writeGlobal({ extraWritableRoots: null });
+		writeProject({ extraWritableRoots: [projectRoot] }, "pi-sandbox.json");
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, true)).toEqual([projectRoot]);
+		expect(() => selectExtraWritableRoots(config, false)).toThrow(/sandbox\.json.*extraWritableRoots/);
+		expect(() => selectExtraWritableRoots(config, null)).toThrow(/extraWritableRoots/);
+	});
+
+	it("allows higher-priority files to replace invalid values within a scope", () => {
+		const globalRoot = join(dir, "global-root");
+		writeGlobal({ extraWritableRoots: ["relative"] });
+		writeGlobal({ extraWritableRoots: [globalRoot] }, "pi-sandbox.json");
+		writeProject({ extraWritableRoots: null });
+		writeProject({ extraWritableRoots: [globalRoot] }, "pi-sandbox.json");
+		const config = loadSandboxConfig(projectDir);
+		expect(selectExtraWritableRoots(config, true)).toEqual([globalRoot]);
+		expect(selectExtraWritableRoots(config, false)).toEqual([globalRoot]);
 	});
 });
 

@@ -3,7 +3,7 @@
 # pi-sandbox
 
 Pi coding-agent 向けのプロセスレベル・サンドボックス拡張機能です。
-OS 固有のサンドボックス機構（bwrap / landlock / seatbelt / windows-acl）を活用し、**「ワークスペースと一時ディレクトリのみ書き込み可能」「その他は読み取り専用」「安全側に倒すフェイルクローズ（fail-closed）設計」** を実現します。コンテナを使用しないため、ホストのパスがそのまま動作します（パス透過）。拒否先行（denial-first）の権限昇格フローと、独立した AI モデルによる自動審査（auto-review）を標準搭載しています。
+OS 固有のサンドボックス機構（bwrap / landlock / seatbelt / windows-acl）を活用し、**「通常はワークスペースと一時ディレクトリが書き込み可能」「その他への書き込みは制限」「安全側に倒すフェイルクローズ（fail-closed）設計」** を実現します。書き込み可能な範囲には、git ルートや明示的に許可・設定したディレクトリも含まれる場合があります。コンテナを使用しないため、ホストのパスがそのまま動作します（パス透過）。拒否先行（denial-first）の権限昇格フローと、独立した AI モデルによる自動審査（auto-review）を標準搭載しています。
 
 ## インストール
 
@@ -21,7 +21,7 @@ pi install .
 
 | モード | ファイルへの影響 |
 |---|---|
-| `workspace-write`（デフォルト） | 作業ディレクトリ（ワークスペース） + `/tmp` + `os.tmpdir()` のみ書き込み可能（ワークスペースが git 管理サブディレクトリの場合はリポジトリルートも追加。`includeGitRoot` がオフなら加えない）。その他はすべて読み取り専用 |
+| `workspace-write`（デフォルト） | 作業ディレクトリ（ワークスペース） + `/tmp` + `os.tmpdir()` が書き込み可能（ワークスペースが git 管理サブディレクトリの場合はリポジトリルートも追加。`includeGitRoot` がオフなら加えない。設定した追加の書き込み可能ルートも追加）。その他はすべて読み取り専用 |
 | `read-only` | 書き込み不可（`/dev/null` や Windows の `NUL` デバイスのみ書き込み可能）。その他はすべて読み取り専用 |
 | `danger-full-access` | サンドボックスを完全にバイパスし、無制限のフルアクセスを許可（明示的なエスケープハッチ） |
 
@@ -69,9 +69,9 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 
 | プラットフォーム | ランナー | 仕組み |
 |---|---|---|
-| Linux | `bwrap`（推奨） | `--ro-bind / /` によりファイルシステム全体を読み取り専用化し、ワークスペースおよびホストの `/tmp` のみ読み書き（rw）バインド |
+| Linux | `bwrap`（推奨） | `--ro-bind / /` によりファイルシステム全体を読み取り専用化し、ワークスペースやホストの `/tmp` などを書き込み可能にバインド |
 | Linux | `landlock-run`（フォールバック） | 同梱の事前ビルドバイナリを使用。Landlock LSM の許可リストにより `/` を読み取り専用、ワークスペースと `/tmp` を書き込み可能に設定 |
-| macOS | `sandbox-exec`（組み込み） | macOS 組み込みの Seatbelt SBPL を使用。`deny file-write*` を基本とし、ワークスペースおよび一時ディレクトリのみ例外許可 |
+| macOS | `sandbox-exec`（組み込み） | macOS 組み込みの Seatbelt SBPL を使用。`deny file-write*` を基本とし、ワークスペースや一時ディレクトリなどを例外許可 |
 | Windows | `windows-acl`（組み込み、一部適用） | 制限付きトークン（`WRITE_RESTRICTED`）+ ワークスペースおよび `%TEMP%` への機能 SID（capability SID）ACL 付与 + Low mandatory 整合性ラベル。**`powershell` ツールのみ対応**（制限モードでは `bash` は拒否） |
 | その他 | なし | **フェイルクローズ（fail-closed）**: 制限されたコマンドは常に拒否され、保護なしで暗黙的に実行されることはありません |
 
@@ -172,7 +172,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 5. `<project>/.pi/pi-sandbox.json`
 6. `/permission` コマンドによる手動切り替え（ファイル設定より常に優先）
 
-> **プロジェクトの信頼性保護**: 信頼されていないプロジェクト、または `isProjectTrusted()` が判定できない環境では、プロジェクト設定から `approvalMode`・`autoReview`・`autoReviewTimeoutMs` を上書きすることはできません（グローバル設定の値が強制されます）。これにより、悪意あるリポジトリをチェックアウトした際に勝手に `allow-all` が有効化されるリスクを防止します。
+> **プロジェクトの信頼性保護**: 信頼されていないプロジェクト、または `isProjectTrusted()` が判定できない環境では、プロジェクト設定から `approvalMode`・`autoReview`・`autoReviewTimeoutMs`・`extraWritableRoots` を上書きすることはできません。これにより、悪意あるリポジトリの設定によって `allow-all` が有効化されたり、書き込み可能なルートが追加されたりすることを防ぎます。
 
 ### 設定例（pi-sandbox.json）
 
@@ -183,6 +183,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
   "runnerFailureSignatures": null,
   "probeTimeoutMs": 5000,
   "includeGitRoot": true,
+  "extraWritableRoots": [],
   "approvalMode": "auto-review",
   "autoReview": {
     "model": "CURRENT",
@@ -201,6 +202,7 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 | `runnerFailureSignatures` | `null` | カスタムランナーの致命的な診断シグネチャ文字列（空でない単一行文字列） |
 | `probeTimeoutMs` | `5000` | ランナーの機能確認プローブのタイムアウトミリ秒（正の整数） |
 | `includeGitRoot` | `true` | 作業ディレクトリが git 管理サブディレクトリのとき、`workspace-write` をリポジトリルートまで広げる。`false` はこの拡大だけを止める（ワークスペース・`/tmp`・明示的な許可はそのまま） |
+| `extraWritableRoots` | `[]` | Linux と macOS の `workspace-write` で追加する書き込み可能なディレクトリ。絶対パス、`~`、または `~/` で始まるパスを指定します。プロジェクト設定は信頼済みプロジェクトでのみ適用されます |
 | `approvalMode` | `auto-review` | 承認方式（`human` / `auto-review` / `allow-all`）。不正な値の場合はエスカレーションを拒否します |
 | `autoReview.model` | `CURRENT` | 自動レビューに使用するモデル（`CURRENT` または `provider/model-id`） |
 | `autoReview.thinkingLevel` | `CURRENT` | 自動レビューの思考レベル（`CURRENT` または Pi の思考レベル） |
@@ -208,9 +210,24 @@ pi-sandbox は、エージェントが実行する操作の種類に応じて適
 
 `/permission` は、実際に使用される承認モードを表示します（プロジェクトが信頼されていない場合はグローバル設定の値）。
 
+### 設定例: pnpm ストア
+
+Linux または macOS でワークスペース外にある pnpm ストアへの書き込みを許可するには、信頼済みプロジェクトの `<project>/.pi/pi-sandbox.json` に次のように設定します。
+
+```json
+{
+  "extraWritableRoots": ["~/.local/share/pnpm/store"]
+}
+```
+
+実際のストアのパスは pnpm の設定や環境によって異なります。`pnpm store path` で確認し、必要に応じて設定を変更してください。この例では、バージョン別のストアディレクトリを含むことがあるディレクトリツリー全体を許可します。設定を編集した後は Pi を再起動してください。
+
+設定するパスは、既存のディレクトリである必要があります。必要に応じてサンドボックス外で先に作成してください。不正なパスや利用できないパスがある場合、制限を黙って緩める代わりに `workspace-write` の呼び出しを拒否します。優先順位の高い設定は配列全体を置き換え、追加はしません。Windows では空でない `extraWritableRoots` はサポートされず、`workspace-write` の呼び出しは失敗します。カスタムの `runnerCommand` と空でない `extraWritableRoots` も併用できません。この設定は `read-only` モードでは適用されず、既存の一時的な `sandbox_grant_write` の動作も変更しません。
+
 ## セキュリティに関する注意事項
 
 - **読み取り権限の仕様**: 制限されたプロセスであっても、ホスト上でユーザー自身が**読み取り権限を持つすべてのファイル**（`~/.ssh` などを含む）を読み取ることができます。これは本サンドボックスの設計仕様です。root 専用ファイルなどは OS のアクセス権によって保護されます。
+- **追加の書き込み可能ルート**: Linux と macOS では、設定したディレクトリが `workspace-write` のサンドボックスをワークスペース外に広げます。パッケージのインストールスクリプトを含むエージェントのコマンドは、書き込みごとの承認なしにその中身を変更・削除できます。共有 pnpm ストアへの変更は他のプロジェクトにも影響する場合があります。必要最小限のディレクトリだけを指定し、プロジェクト設定は信頼できるプロジェクトでのみ有効にしてください。
 - **一時ディレクトリのホスト共有**:
   - Linux（bwrap / landlock / write fence）や macOS では、`/tmp` はホストの `/tmp` と共有（rw バインド）されます。
   - Windows では、サンドボックスの一時ルートはホストの `%TEMP%` です。
