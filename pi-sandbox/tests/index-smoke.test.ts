@@ -827,6 +827,12 @@ describe("configured root status", () => {
 		expect(await status(true)).toContain("configured writable roots: inactive (read-only)");
 		processPermissionState.override = null;
 		rmSync(projectRoot, { recursive: true });
-		expect(await status(true)).toContain("configured writable roots: unavailable (fail-closed:");
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			expect(await status(true)).toContain("configured writable roots (trusted project): none");
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining(projectRoot));
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

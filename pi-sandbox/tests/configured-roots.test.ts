@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SANDBOX_CONFIG } from "../src/config";
 import { configuredWritableRoots } from "../src/configured-roots";
 import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs, windowsAclRunnerArgv } from "../src/runners";
@@ -20,7 +20,10 @@ beforeEach(() => {
 	globalRoot = realpathSync.native(globalRoot);
 	projectRoot = realpathSync.native(projectRoot);
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+	vi.restoreAllMocks();
+	rmSync(dir, { recursive: true, force: true });
+});
 
 function config() {
 	return { ...DEFAULT_SANDBOX_CONFIG, globalExtraWritableRoots: [globalRoot], extraWritableRoots: [projectRoot] };
@@ -40,13 +43,32 @@ describe("configured writable roots", () => {
 		}
 		expect(() => configuredWritableRoots(bad, "workspace-write", true, "linux")).toThrow("invalid");
 	});
-	it("rejects missing roots, files and custom runners instead of silently dropping them", () => {
+	it("warns and ignores missing roots, rechecking them on the next call", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const missing = join(dir, "missing");
+		const selected = { ...config(), extraWritableRoots: [missing, projectRoot] };
+		expect(configuredWritableRoots(selected, "workspace-write", true, "linux")).toEqual([projectRoot]);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining(`extraWritableRoots directory does not exist and was ignored: ${missing}`));
+		expect(configuredWritableRoots({ ...selected, extraWritableRoots: [missing] }, "workspace-write", true, "linux")).toEqual([]);
+		mkdirSync(missing);
+		warn.mockClear();
+		expect(configuredWritableRoots(selected, "workspace-write", true, "linux")).toEqual([realpathSync.native(missing), projectRoot]);
+		expect(warn).not.toHaveBeenCalled();
+	});
+	it("rejects files, paths through files and custom runners", () => {
 		const file = join(dir, "file");
 		writeFileSync(file, "x");
-		for (const path of [join(dir, "missing"), file]) {
+		for (const path of [file, join(file, "child")]) {
 			expect(() => configuredWritableRoots({ ...config(), extraWritableRoots: [path] }, "workspace-write", true, "linux")).toThrow("unavailable");
 		}
 		expect(() => configuredWritableRoots({ ...config(), runnerCommand: ["custom"] }, "workspace-write", true, "linux")).toThrow("custom runner");
+	});
+	it("does not treat permission errors as missing roots", () => {
+		const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+		vi.spyOn(realpathSync, "native").mockImplementation(() => { throw error; });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		expect(() => configuredWritableRoots(config(), "workspace-write", true, "linux")).toThrow("unavailable");
+		expect(warn).not.toHaveBeenCalled();
 	});
 	it.skipIf(process.platform === "win32")("resolves symlinks and deduplicates canonical paths", () => {
 		const link = join(dir, "link");

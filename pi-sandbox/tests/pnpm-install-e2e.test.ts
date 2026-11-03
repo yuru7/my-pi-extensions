@@ -9,7 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadSandboxConfig } from "../src/config";
 import { isWithinRoots } from "../src/fence";
 import { createPermissionState } from "../src/permission";
@@ -194,7 +194,15 @@ describe.skipIf(skipReason !== undefined)(
 				),
 			).toBe(false);
 
-			const allowed = await run("workspace-write", [store], install);
+			const missing = join(fixture, "missing-store");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let allowed: Awaited<ReturnType<typeof run>>;
+			try {
+				allowed = await run("workspace-write", [store, missing], install);
+				expect(warn).toHaveBeenCalledWith(expect.stringContaining(missing));
+			} finally {
+				warn.mockRestore();
+			}
 			expect(allowed.isError, text(allowed)).not.toBe(true);
 			expect(
 				readFileSync(

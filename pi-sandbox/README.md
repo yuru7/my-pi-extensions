@@ -224,7 +224,7 @@ On Linux or macOS, to allow writes to a pnpm store outside the workspace, a trus
 
 The actual store path depends on the pnpm configuration and environment. Check it with `pnpm store path` and adjust the entry if needed. The example grants the entire directory tree, which may include version-specific store directories. Restart Pi after editing the configuration.
 
-Each configured path must already exist and be a directory; create it outside the sandbox first if necessary. Invalid or unavailable paths prevent confined `workspace-write` calls rather than silently weakening the sandbox. A higher-priority configuration replaces the entire array rather than appending to it. On Windows, non-empty `extraWritableRoots` is not supported and causes `workspace-write` calls to fail. Non-empty `extraWritableRoots` is also not supported with a custom `runnerCommand`. The setting does not apply in `read-only` mode and does not change the existing temporary `sandbox_grant_write` behavior.
+Each configured path must be a directory. A missing path is ignored with a warning and is checked again on the next tool call; create it outside the sandbox first if necessary. Invalid paths, files, and other access errors prevent confined `workspace-write` calls. A higher-priority configuration replaces the entire array rather than appending to it. On Windows, non-empty `extraWritableRoots` is not supported and causes `workspace-write` calls to fail. Non-empty `extraWritableRoots` is also not supported with a custom `runnerCommand`. The setting does not apply in `read-only` mode and does not change the existing temporary `sandbox_grant_write` behavior.
 
 ## Security Notes
 

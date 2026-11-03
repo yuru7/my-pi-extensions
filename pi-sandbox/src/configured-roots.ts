@@ -18,7 +18,7 @@ export function configuredWritableRoots(
 	if (raw.length > 0 && (config.runnerCommand?.length ?? 0) > 0) {
 		throw new Error("sandbox: extraWritableRoots is not supported with a custom runner");
 	}
-	const roots = [...new Set(raw.map((path: string) => {
+	const roots = [...new Set(raw.flatMap((path: string) => {
 		if (!isAbsolute(path) || path.includes("\0")) {
 			throw new Error(`sandbox: extraWritableRoots requires an absolute path: ${path}`);
 		}
@@ -26,8 +26,12 @@ export function configuredWritableRoots(
 		try {
 			const canonical = realpathSync.native(absolute);
 			if (!statSync(canonical).isDirectory()) throw new Error("not a directory");
-			return canonical;
+			return [canonical];
 		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				console.warn(`sandbox: extraWritableRoots directory does not exist and was ignored: ${absolute}`);
+				return [];
+			}
 			throw new Error(`sandbox: extraWritableRoots directory is unavailable: ${absolute}`, { cause: error });
 		}
 	}))];

@@ -1974,16 +1974,33 @@ describe("configured writable roots wiring", () => {
 		expect(paths).not.toContain(outsideDir);
 	});
 
-	it("refuses a custom runner and missing roots before write or spawn", async () => {
-		for (const config of [
-			{ ...humanSandboxConfig(), extraWritableRoots: [outsideDir], globalExtraWritableRoots: [outsideDir], runnerCommand: ["custom"] },
-			{ ...humanSandboxConfig(), extraWritableRoots: [join(dir, "missing")], globalExtraWritableRoots: [join(dir, "missing")] },
-		]) {
-			const { deps, spawnFn } = makeDeps({ getConfig: () => config });
-			const { bash, write } = createSandboxTools(deps);
-			await expect(write.execute("w", { path: join(ws, "x"), content: "x" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner|unavailable/);
-			await expect(bash.execute("b", { command: "true" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner|unavailable/);
-			expect(spawnFn).not.toHaveBeenCalled();
+	it("refuses a custom runner before write or spawn", async () => {
+		const config = { ...humanSandboxConfig(), extraWritableRoots: [outsideDir], globalExtraWritableRoots: [outsideDir], runnerCommand: ["custom"] };
+		const { deps, spawnFn } = makeDeps({ getConfig: () => config });
+		const { bash, write } = createSandboxTools(deps);
+		await expect(write.execute("w", { path: join(ws, "x"), content: "x" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner/);
+		await expect(bash.execute("b", { command: "true" }, undefined, undefined, toolCtx())).rejects.toThrow(/custom runner/);
+		expect(spawnFn).not.toHaveBeenCalled();
+	});
+
+	it("warns about missing roots without blocking calls or granting the missing path", async () => {
+		const missing = join(outsideDir, "missing");
+		const config = { ...humanSandboxConfig(), extraWritableRoots: [missing], globalExtraWritableRoots: [missing] };
+		const { deps, child, spawnFn } = makeDeps({ getConfig: () => config });
+		const { bash, write } = createSandboxTools(deps);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await write.execute("w", { path: join(ws, "x"), content: "x" }, undefined, undefined, toolCtx());
+			await expect(write.execute("denied", { path: join(missing, "x"), content: "x" }, undefined, undefined, toolCtx())).rejects.toThrow(/file access denied/);
+			const pending = bash.execute("b", { command: "true" }, undefined, undefined, toolCtx());
+			await vi.waitFor(() => expect(spawnFn).toHaveBeenCalled());
+			const argv = (spawnFn as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
+			expect(argv).not.toContain(missing);
+			child.emit("close", 0, undefined);
+			await pending;
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining(missing));
+		} finally {
+			warn.mockRestore();
 		}
 	});
 });
