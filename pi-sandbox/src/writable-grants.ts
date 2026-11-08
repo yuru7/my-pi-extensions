@@ -11,15 +11,28 @@ import { removeEmptyCreatedDirectories } from "./grant-path";
 
 const GRANTS_KEY = Symbol.for("@yuru7/pi-sandbox:writable-grants");
 
+/**
+ * New directories one user request may add. A no-op (already writable or already granted) and a
+ * failed/denied request do not consume it; `clear` on the request boundary resets it.
+ */
+export const GRANT_LIMIT_PER_TURN = 5;
+
 interface StoredGrant {
 	path: string;
 	created: readonly string[];
 }
 
+export type GrantResult = "added" | "exists" | "limit";
+
 export interface WritableGrants {
 	list(sessionId: string): readonly string[];
 	has(sessionId: string, path: string): boolean;
-	grant(sessionId: string, path: string, created?: readonly string[]): void;
+	count(sessionId: string): number;
+	grant(
+		sessionId: string,
+		path: string,
+		created?: readonly string[],
+	): GrantResult;
 	clear(sessionId: string): void;
 }
 
@@ -36,16 +49,22 @@ class InProcessWritableGrants implements WritableGrants {
 		);
 	}
 
+	count(sessionId: string): number {
+		return this.bySession.get(sessionId)?.length ?? 0;
+	}
+
 	grant(
 		sessionId: string,
 		path: string,
 		created: readonly string[] = [],
-	): void {
-		if (!sessionId || path.length === 0) return;
+	): GrantResult {
+		if (!sessionId || path.length === 0) return "exists";
 		const list = this.bySession.get(sessionId) ?? [];
-		if (list.some((grant) => grant.path === path)) return;
+		if (list.some((grant) => grant.path === path)) return "exists";
+		if (list.length >= GRANT_LIMIT_PER_TURN) return "limit";
 		list.push({ path, created: [...created] });
 		this.bySession.set(sessionId, list);
+		return "added";
 	}
 
 	clear(sessionId: string): void {

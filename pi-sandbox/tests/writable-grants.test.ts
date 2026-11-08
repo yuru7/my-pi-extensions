@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMissingGrantDirectories } from "../src/grant-path";
 import {
+	GRANT_LIMIT_PER_TURN,
 	getWritableGrants,
 	resetWritableGrantsForTests,
 } from "../src/writable-grants";
@@ -28,6 +29,33 @@ function scratch(): string {
 	mkdirSync(ancestor);
 	return ancestor;
 }
+
+describe("per-request grant limit", () => {
+	it("adds at most five new roots; duplicates do not consume and clear resets", () => {
+		const grants = getWritableGrants();
+		for (let i = 0; i < GRANT_LIMIT_PER_TURN; i++) {
+			expect(grants.grant("s", `/root/${i}`)).toBe("added");
+		}
+		expect(grants.count("s")).toBe(GRANT_LIMIT_PER_TURN);
+		expect(grants.grant("s", "/root/0")).toBe("exists");
+		expect(grants.count("s")).toBe(GRANT_LIMIT_PER_TURN);
+		expect(grants.grant("s", "/root/next")).toBe("limit");
+		expect(grants.count("s")).toBe(GRANT_LIMIT_PER_TURN);
+
+		grants.clear("s");
+
+		expect(grants.count("s")).toBe(0);
+		expect(grants.grant("s", "/root/next")).toBe("added");
+	});
+
+	it("keeps the limit per session", () => {
+		const grants = getWritableGrants();
+		for (let i = 0; i < GRANT_LIMIT_PER_TURN; i++)
+			grants.grant("a", `/root/a${i}`);
+		expect(grants.grant("a", "/root/next")).toBe("limit");
+		expect(grants.grant("b", "/root/next")).toBe("added");
+	});
+});
 
 describe("empty directories created for a grant", () => {
 	it("removes the empty leaf and empty parents this grant created", () => {

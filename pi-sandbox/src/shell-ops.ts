@@ -15,7 +15,7 @@ import {
 } from "./confine";
 import { denialFollowupHint, sandboxDenialMarker } from "./escalation";
 import { grantDirectoryForDenial } from "./fence";
-import { extractAbsolutePaths } from "./grant-path";
+import { denialPaths } from "./grant-path";
 import type { ConfinedSandboxMode, SandboxMode } from "./policy";
 
 export type SpawnFn = (
@@ -206,7 +206,9 @@ export function createSandboxShellOps(opts: ShellOpsOptions): BashOperations {
 								customRunner,
 								...(customRunner
 									? {}
-									: grantDirectoryForDenial(extractAbsolutePaths(stderrTail))),
+									: grantDirectoryForDenial(
+											denialPaths(stderrTail, stdoutTail),
+										)),
 							});
 							execOpts.onData(
 								Buffer.from(`\n${sandboxDenialMarker(opts.mode)}\n${hint}\n`),

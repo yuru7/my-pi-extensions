@@ -38,6 +38,7 @@ import {
 	resolveCallMode,
 } from "../src/tools";
 import {
+	GRANT_LIMIT_PER_TURN,
 	getWritableGrants,
 	resetWritableGrantsForTests,
 } from "../src/writable-grants";
@@ -131,6 +132,17 @@ function humanSandboxConfig(): SandboxConfig {
 		globalApproval: {
 			...DEFAULT_SANDBOX_CONFIG.globalApproval,
 			approvalMode: "human",
+		},
+	};
+}
+
+function allowAllConfig(): SandboxConfig {
+	return {
+		...DEFAULT_SANDBOX_CONFIG,
+		approvalMode: "allow-all",
+		globalApproval: {
+			...DEFAULT_SANDBOX_CONFIG.globalApproval,
+			approvalMode: "allow-all",
 		},
 	};
 }
@@ -1924,6 +1936,108 @@ describe("sandbox_grant_write", () => {
 
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(join(outsideDir, "share"))).toBe(true);
+	});
+
+	it("limits new grants to five per request; a no-op does not consume", async () => {
+		const { deps } = makeDeps({ getConfig: () => allowAllConfig() });
+		const { grantWrite } = createSandboxTools(deps);
+		for (let i = 0; i < GRANT_LIMIT_PER_TURN; i++) {
+			const grantDir = join(outsideDir, `limit-${i}`);
+			seedPathDenial(join(grantDir, "file.txt"));
+			await grantWrite.execute(
+				`limit-${i}`,
+				{ path: grantDir, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(),
+			);
+		}
+		expect(getWritableGrants().count(TEST_SESSION)).toBe(GRANT_LIMIT_PER_TURN);
+
+		const noop = (await grantWrite.execute(
+			"limit-noop",
+			{ path: join(outsideDir, "limit-0"), justification: "j" },
+			undefined,
+			undefined,
+			toolCtx(),
+		)) as { content: { text: string }[] };
+		expect(noop.content.map((part) => part.text).join("\n")).toContain(
+			"already writable",
+		);
+		expect(getWritableGrants().count(TEST_SESSION)).toBe(GRANT_LIMIT_PER_TURN);
+
+		const sixth = join(outsideDir, "limit-next");
+		seedPathDenial(join(sixth, "file.txt"));
+		await expect(
+			grantWrite.execute(
+				"limit-sixth",
+				{ path: sixth, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(),
+			),
+		).rejects.toThrow(/limit of 5 new directories/);
+		expect(getWritableGrants().count(TEST_SESSION)).toBe(GRANT_LIMIT_PER_TURN);
+	});
+
+	it("a denied grant does not consume the limit", async () => {
+		const { deps } = makeDeps();
+		const { grantWrite } = createSandboxTools(deps);
+		const grantDir = join(outsideDir, "denied-limit");
+		seedPathDenial(join(grantDir, "file.txt"));
+		await expect(
+			grantWrite.execute(
+				"denied-limit",
+				{ path: grantDir, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(true, "Deny"),
+			),
+		).rejects.toThrow(/rejected the directory grant/);
+		expect(getWritableGrants().count(TEST_SESSION)).toBe(0);
+	});
+
+	it("does not exceed the limit when two grants race", async () => {
+		const { deps } = makeDeps({ getConfig: () => allowAllConfig() });
+		const { grantWrite } = createSandboxTools(deps);
+		for (let i = 0; i < GRANT_LIMIT_PER_TURN - 1; i++) {
+			const grantDir = join(outsideDir, `race-${i}`);
+			seedPathDenial(join(grantDir, "file.txt"));
+			await grantWrite.execute(
+				`race-${i}`,
+				{ path: grantDir, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(),
+			);
+		}
+		const first = join(outsideDir, "race-a");
+		const second = join(outsideDir, "race-b");
+		seedPathDenial(join(first, "file.txt"));
+		seedPathDenial(join(second, "file.txt"));
+		const results = await Promise.allSettled([
+			grantWrite.execute(
+				"race-a",
+				{ path: first, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(),
+			),
+			grantWrite.execute(
+				"race-b",
+				{ path: second, justification: "j" },
+				undefined,
+				undefined,
+				toolCtx(),
+			),
+		]);
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+			1,
+		);
+		expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+			1,
+		);
+		expect(getWritableGrants().count(TEST_SESSION)).toBe(GRANT_LIMIT_PER_TURN);
 	});
 });
 

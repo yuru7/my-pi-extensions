@@ -222,6 +222,9 @@ describe("GRANT_REVIEWER_SYSTEM_PROMPT", () => {
 		expect(GRANT_REVIEWER_SYSTEM_PROMPT).not.toContain(
 			"The directory should be the narrow parent that contains the denied path",
 		);
+		expect(GRANT_REVIEWER_SYSTEM_PROMPT).toContain(
+			"When stderr has no usable path, accept a path from stdout",
+		);
 	});
 });
 
@@ -271,6 +274,48 @@ describe("reviewDirectoryGrant", () => {
 			cause: "unavailable",
 		});
 		expect(calls.map((call) => call.id)).toEqual(["reviewer", "active"]);
+	});
+
+	it("passes stdout to the grant reviewer as untrusted evidence", async () => {
+		const calls: string[] = [];
+		const review = reviewDirectoryGrant({
+			settings: {
+				approvalMode: "auto-review",
+				approvalInvalid: false,
+				autoReview: { model: "anthropic/reviewer", thinkingLevel: "low" },
+				autoReviewTimeoutMs: 50,
+			},
+			activeModel: model("openai", "active"),
+			activeThinkingLevel: "low",
+			findModel: () => model("anthropic", "reviewer"),
+			hasAuth: () => true,
+			complete: (_reviewed, request) => {
+				calls.push(request.userText);
+				return Promise.resolve(allow());
+			},
+			warn: () => {},
+			grant: {
+				backend: "bwrap",
+				mode: "workspace-write",
+				workspace: "/work",
+				writablePaths: ["/work", "/tmp"],
+				directory: "/work/store/v11/files",
+				justification: "the store is outside the workspace",
+				denials: [
+					{
+						...record,
+						stdout: 'at "/work/store/v11/files/97": Read-only file system',
+					},
+				],
+			},
+			dialogue: [{ user: "install the dependencies", assistant: "" }],
+		});
+		await expect(review).resolves.toEqual({
+			decision: "ALLOW",
+			cause: "allow",
+		});
+		expect(calls[0]).toContain('"stdout"');
+		expect(calls[0]).toContain("/work/store/v11/files/97");
 	});
 });
 
@@ -1016,6 +1061,53 @@ describe("resolveCall approval modes", () => {
 			`[pi-sandbox] Auto-review: DENY\n${DENY_REASON}`,
 			"warning",
 		);
+	});
+
+	it("DENY names the denied directory and the extraWritableRoots config path", async () => {
+		getDenialLedger().record({
+			...record,
+			sessionId: "session",
+			tool: "bash",
+			fingerprint: operationFingerprint({ command: "pnpm install" }),
+			cwd: "/work",
+			target: "pnpm install",
+			stderr:
+				'Failed to create the parent directory at "/work/store/v11/files/97": Read-only file system',
+			stdout: "",
+		});
+		const denied = ctx();
+		denied.complete.mockResolvedValueOnce({
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({ decision: "DENY", reason: DENY_REASON }),
+				},
+			],
+			stopReason: "stop",
+		});
+		let thrown: unknown;
+		try {
+			await resolveCall(
+				{
+					command: "pnpm install",
+					sandbox_permissions: "danger-full-access",
+					justification: "because",
+				},
+				denied.ctx,
+				deps(approvalConfig("auto-review")),
+				"command",
+				() => "pnpm install",
+				undefined,
+				"bash",
+			);
+		} catch (error) {
+			thrown = error;
+		}
+		const message = (thrown as Error).message;
+		expect(message).toContain("/work/store/v11/files");
+		expect(message).toContain("/work/.pi/pi-sandbox.json");
+		expect(message).toContain("pnpm store path");
+		expect(message).not.toContain(DENY_REASON);
 	});
 
 	it("keeps modelRegistry as this when calling complete", async () => {

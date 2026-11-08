@@ -132,27 +132,49 @@ function segmentCount(path: string): number {
 	return path.split(/[\\/]+/u).filter((segment) => segment.length > 0).length;
 }
 
-/** Extract absolute paths from denial text. Command text is excluded: the model wrote it, so it is not denial evidence. */
+/**
+ * Extract absolute paths from denial text. Command text is excluded: the model wrote it, so it is not denial evidence.
+ * A path containing a line break is not a path: pnpm and other tools wrap long paths at the terminal width, and joining
+ * the wrapped fragment back would guess at spaces that may belong to the path. When stderr yields no usable path,
+ * `denialPaths` below falls back to stdout instead of reconstructing the broken one.
+ */
 export function extractAbsolutePaths(text: string): string[] {
-	const found: string[] = [];
+	const found = new Set<string>();
 	for (const pattern of [QUOTED_ABSOLUTE, BARE_ABSOLUTE]) {
 		pattern.lastIndex = 0;
 		for (;;) {
 			const match = pattern.exec(text);
 			if (match === null) break;
 			const path = match[1]?.replace(/[),.;]+$/u, "") ?? "";
-			if (path.length > 1) found.push(path);
+			if (path.length > 1 && !/[\r\n]/u.test(path)) found.add(path);
 		}
 	}
-	return found;
+	return [...found];
 }
 
-/** For write/edit, target is the denied path. For a shell, only absolute paths in stderr / error count. */
+/**
+ * Paths for one denial: stderr is the denial channel, so it wins when it yields a usable path. stdout is the fallback
+ * when stderr has none (a wrapped path, or a tool that reports the path only on stdout). Keeping the streams separate
+ * avoids turning one real denial into a `split` hint because stdout also names unrelated paths.
+ */
+export function denialPaths(
+	stderr: string | undefined,
+	stdout: string | undefined,
+): string[] {
+	const fromStderr = extractAbsolutePaths(stderr ?? "");
+	return fromStderr.length > 0
+		? fromStderr
+		: extractAbsolutePaths(stdout ?? "");
+}
+
+/** For write/edit, target is the denied path. For a shell, absolute paths in stderr, then stdout, count. */
 export function deniedPaths(record: DenialRecord): string[] {
 	if (record.tool === "write" || record.tool === "edit") {
 		return record.target.trim().length > 0 ? [record.target] : [];
 	}
-	return extractAbsolutePaths(`${record.stderr ?? ""}\n${record.error ?? ""}`);
+	const fromStreams = denialPaths(record.stderr, record.stdout);
+	if (fromStreams.length > 0) return fromStreams;
+	return extractAbsolutePaths(record.error ?? "");
 }
 
 /** The requested directory covers at least one path in this denial (after canonicalization). */

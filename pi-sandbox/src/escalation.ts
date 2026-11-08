@@ -137,6 +137,19 @@ export function sandboxDenialMarker(mode: SandboxMode): string {
 }
 
 /**
+ * Commands only: a narrower form must be tried as its own call before the one-shot escalation. The narrower form gets
+ * its own denial record and its own approval; the denied command's record cannot be reused for it (denial-first).
+ */
+const NARROWER_FORM_HINT =
+	"If a narrower form of this command exists that still meets the request (fewer scripts or writes), run that form first as its own call; if it is also denied, escalate that exact form.";
+
+function hintBody(subject: "command" | "operation", body: string): string {
+	return subject === "command"
+		? `[sandbox: ${NARROWER_FORM_HINT} ${body}]`
+		: `[sandbox: ${body}]`;
+}
+
+/**
  * The next step at the moment of denial. The caller has already classified the path into: one directory that can be granted, too wide,
  * paths spread across several directories, a missing path, or a custom runner. This only writes the sentence the model sees.
  */
@@ -150,25 +163,43 @@ export function denialFollowupHint(args: {
 }): string {
 	const subject = args.subject;
 	if (args.customRunner) {
-		return `[sandbox: a custom runnerCommand cannot accept a directory grant. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
+		return hintBody(
+			subject,
+			`a custom runnerCommand cannot accept a directory grant. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.`,
+		);
 	}
 	if (
 		args.grantDirectory !== undefined &&
 		subject === "operation" &&
 		args.targetPath !== undefined
 	) {
-		return `[sandbox: to change only ${args.targetPath}, retry this exact call once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write in ${args.grantDirectory} again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.]`;
+		return hintBody(
+			subject,
+			`to change only ${args.targetPath}, retry this exact call once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write in ${args.grantDirectory} again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.`,
+		);
 	}
 	if (args.grantDirectory !== undefined) {
-		return `[sandbox: if this command writes in ${args.grantDirectory} only once, retry this exact command once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write there again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.]`;
+		return hintBody(
+			subject,
+			`if this command writes in ${args.grantDirectory} only once, retry this exact command once with sandbox_permissions "danger-full-access" and a justification. If later calls in this request will write there again, call sandbox_grant_write alone with that directory and a one-sentence justification, then retry. Do not grant a wider directory.`,
+		);
 	}
 	if (args.refusedDirectory !== undefined) {
-		return `[sandbox: sandbox_grant_write refuses ${args.refusedDirectory} because it is /, the home directory, or an ancestor of home. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
+		return hintBody(
+			subject,
+			`sandbox_grant_write refuses ${args.refusedDirectory} because it is /, the home directory, or an ancestor of home. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.`,
+		);
 	}
 	if (args.split) {
-		return `[sandbox: the denied paths are not in one directory. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification. Do not grant a wider directory.]`;
+		return hintBody(
+			subject,
+			`the denied paths are not in one directory. Retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification. Do not grant a wider directory.`,
+		);
 	}
-	return `[sandbox: this denial names no directory. Writable here: the workspace and /tmp. Otherwise retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.]`;
+	return hintBody(
+		subject,
+		`this denial names no directory. Writable here: the workspace and /tmp. Otherwise retry this exact ${subject} once with sandbox_permissions "danger-full-access" and a justification.`,
+	);
 }
 
 /**

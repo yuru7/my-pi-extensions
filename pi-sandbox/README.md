@@ -39,6 +39,8 @@ The widening is on by default and can be turned off with `"includeGitRoot": fals
 
 `sandbox_grant_write` adds one directory to the writable roots for the rest of the current user request. It uses the same approval mode as escalation (`human`, `auto-review`, or `allow-all`). Call it only after a sandbox denial named a path inside that directory, and only when later calls in the same request will write there again. A single use of the directory, or a denial that does not name one directory, should retry that call with `danger-full-access` instead.
 
+A request can add at most five new directories. A no-op (the directory is already writable or already granted) and a denied request do not count toward the limit. When the limit is reached, the next new directory is refused before approval, and the error tells the agent to stop and ask the user to add the directory to `extraWritableRoots` instead.
+
 The grant is cleared when the agent finishes the request, and when the next user message starts (including a steering or follow-up message). Directories created for the grant, and parents created with them, are removed at that point if they are still empty. Directories that already existed, or that contain anything, are left in place. The grant is refused for `/`, the home directory, and any ancestor of home. A custom `runnerCommand` cannot accept extra directories. Child sessions do not inherit the grant.
 
 ### Commands
@@ -89,6 +91,10 @@ For safety, the agent cannot proactively grant itself elevated permissions. Esca
 2. **Escalation retry**: Only when an operation **strictly matches a recorded sandbox denial in the same session** (same tool, same working directory, and identical arguments aside from escalation fields) can the agent retry with `sandbox_permissions` (`workspace-write` or `danger-full-access`) and a `justification` (one-sentence reason).
 3. **Consumption of denial record**: A denial record is **consumed once** and **expires after 10 minutes**. Each denial affords exactly one escalation retry (approval applies only to that single invocation).
 
+Before escalating, the agent is instructed to try a narrower form of the command (fewer permissions or side effects) as its own call. The narrower form must produce its own denial record and its own approval; the original denial cannot be reused for it.
+
+When auto-review denies an escalation, the tool error names the denied directory and the `extraWritableRoots` configuration path (plus `pnpm store path` when the denied command is a pnpm command), and tells the agent to stop and explain. The reviewer's free-text reason is shown in the UI notification only, never in the tool error.
+
 > **Note (Strict Schema Compatibility)**: If there is no matching denial record, escalation parameters are ignored, the command runs under the current mode, and a note is appended to the output. Furthermore, to accommodate strict-schema model providers where optional fields must be provided, placeholders such as `null`, `"null"`, or empty strings are safely normalized to "no escalation requested", avoiding schema validation errors.
 
 ### Approval Modes (`approvalMode`)
@@ -135,6 +141,7 @@ The reviewer strictly adheres to the following criteria:
   - The grant lasts until the user request ends. Every later tool call can write that directory tree. The sandbox stays in place everywhere else.
   - The narrowest grant is the directory that directly contains the denied path. For a file, that is the file's parent, because deleting or renaming the file writes that parent. That directory is not too broad merely because it contains other files or because the user named one file inside it.
   - An ancestor of that directory, including the parent of the file's directory, is broader than the denied path and is denied.
+  - The reviewer also receives the denial's stdout. A path on stdout is weaker evidence than the denial on stderr: when stderr has no usable path, it is accepted only if the command's own output identifies it as the target of the denied write, and it cannot widen the grant beyond the directory that contains the denied path.
 - **Evidence and Safety Principles**:
   - An operation matching user instructions does not automatically make an inherently unsafe action safe.
   - Dialogue turns are treated as untrusted evidence rather than instructions to the reviewer; assistant replies cannot serve as evidence of what the user requested.
@@ -223,6 +230,8 @@ On Linux or macOS, to allow writes to a pnpm store outside the workspace, a trus
 ```
 
 The actual store path depends on the pnpm configuration and environment. Check it with `pnpm store path` and adjust the entry if needed. The example grants the entire directory tree, which may include version-specific store directories. Restart Pi after editing the configuration.
+
+The agent cannot add this setting itself. Once the store is configured and Pi restarts, `pnpm install` runs under `workspace-write` without escalation. The agent's `sandbox_grant_write` and one-shot escalation remain available, but a shared store is a configuration decision for the user.
 
 Paths can contain `$NAME` or `${NAME}` environment variables, for example `$XDG_RUNTIME_DIR/my-app`. Variables are expanded once when the configuration is loaded; unset or empty variables are errors, and the resulting path must be absolute. Variable values are not recursively expanded and shell substitutions are not supported.
 

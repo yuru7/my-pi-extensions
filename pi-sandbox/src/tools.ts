@@ -5,6 +5,7 @@ import {
 	readFile as fsReadFile,
 	writeFile as fsWriteFile,
 } from "node:fs/promises";
+import { dirname } from "node:path";
 // Namespace import used only for the version-gate probe (createPowerShellToolDefinition is an export that exists only on pi ≥1.0.0):
 // pi is ESM, so a static named import of an export an old host does not have fails hard at **link time**; a property read is at worst undefined.
 import * as piHost from "@earendil-works/pi-coding-agent";
@@ -31,6 +32,7 @@ import {
 import { createSandboxBashOps, type SpawnFn } from "./bash-ops";
 import {
 	getSandboxConfig,
+	piSandboxConfigPaths,
 	readProjectTrusted,
 	type SandboxConfig,
 	selectApprovalSettings,
@@ -68,8 +70,10 @@ import { gitWritableRoots } from "./git-root";
 import {
 	assertCanCreateDirectory,
 	createMissingGrantDirectories,
+	deniedPaths,
 	grantCoversDenial,
 	grantTooWide,
+	removeEmptyCreatedDirectories,
 	resolveGrantRequest,
 } from "./grant-path";
 import type { PermissionState } from "./permission";
@@ -82,7 +86,7 @@ import {
 } from "./policy";
 import { createSandboxPowerShellOps } from "./powershell-ops";
 import { type RunnerHooks, selectRunner } from "./runners";
-import { getWritableGrants } from "./writable-grants";
+import { GRANT_LIMIT_PER_TURN, getWritableGrants } from "./writable-grants";
 
 /**
  * Structural type of the host pwsh tool factory (pi ≥1.0.0 exports `createPowerShellToolDefinition(cwd, options)`).
@@ -422,7 +426,7 @@ export async function resolveCall(
 			}
 			// denialReason は画面通知だけ。ツールエラーに入れるとエージェントが読んでしまう。
 			throw new Error(
-				autoReviewDeniedMessage(subject, requested, outcome.cause),
+				autoReviewDeniedMessage(subject, requested, outcome.cause, denial),
 			);
 		}
 	}
@@ -439,13 +443,45 @@ export async function resolveCall(
 	return { mode, escalated: mode !== effective, ignoredEscalation: false };
 }
 
+/**
+ * Concrete stop guidance. It names the directory and the config file but never asserts what the path is
+ * (a package store, a cache, ...) and never guesses a wider root: the user decides the width. `pnpm` is
+ * mentioned only when the denied command itself says so.
+ */
+function extraWritableRootsGuidance(
+	directory: string | undefined,
+	workspace: string,
+	command?: string,
+): string {
+	const { projectPath, globalPath } = piSandboxConfigPaths(workspace);
+	const target =
+		directory === undefined
+			? "the directory named in the denial"
+			: `${directory} (or the shared root that contains it)`;
+	const storeHint =
+		command !== undefined && /\bpnpm\b/u.test(command)
+			? " For the pnpm store, run `pnpm store path` and add that root."
+			: "";
+	return `If this is a permanent need, ask the user to add ${target} to extraWritableRoots in ${projectPath} (or ${globalPath} if the project is not trusted) and restart.${storeHint} After that, the operation runs under workspace-write without escalation.`;
+}
+
+function deniedDirectory(record: DenialRecord): string | undefined {
+	const first = deniedPaths(record)[0];
+	return first === undefined ? undefined : dirname(first);
+}
+
 function autoReviewDeniedMessage(
 	subject: "command" | "operation",
 	requested: string,
 	cause: string,
+	record: DenialRecord,
 ): string {
 	if (cause === "deny") {
-		return `the auto-reviewer rejected escalating this ${subject} to "${requested}"; it stays denied, so stop and explain instead of working around it — do not retry with a different mode or a rewritten command`;
+		const command =
+			record.tool === "bash" || record.tool === "powershell"
+				? record.target
+				: undefined;
+		return `the auto-reviewer rejected escalating this ${subject} to "${requested}"; it stays denied, so stop and explain instead of working around it — do not retry with a different mode or a rewritten command. ${extraWritableRootsGuidance(deniedDirectory(record), record.workspace, command)}`;
 	}
 	if (cause === "aborted") {
 		return `approval for escalating to "${requested}" was cancelled — nothing was executed`;
@@ -605,7 +641,7 @@ const DIRECTORY_GRANT_GUIDELINE =
 	"Call sandbox_grant_write alone only when later calls in this request will write the directory named in the denial hint again. Pass that directory, not a parent of it, with a one-sentence justification, then retry. One use of the directory is not enough. If the hint names no directory, do not call it.";
 
 const ESCALATION_GUIDELINE =
-	'When the denied call uses a directory only once, or the denial hint names no single directory, retry the exact same call once with sandbox_permissions "danger-full-access" and a justification. Escalation is denial-first and one-shot: it must match that denied operation, and the configured approval mode (human, auto-review, or allow-all) decides it. Never send escalation fields before a denial — such requests are ignored and the call runs confined. If denied or unavailable, stop and explain instead of working around it.';
+	'Before escalating, check whether a narrower operation (fewer permissions or side effects) still meets the request; run it normally first, then escalate that exact operation if it is also denied. Do not skip required work just to pass the sandbox. When the denied call uses a directory only once, or the denial hint names no single directory, retry the exact same call once with sandbox_permissions "danger-full-access" and a justification. Escalation is denial-first and one-shot: it must match that denied operation, and the configured approval mode (human, auto-review, or allow-all) decides it. Never send escalation fields before a denial — such requests are ignored and the call runs confined. If denied or unavailable, stop and explain instead of working around it.';
 
 function sandboxGuidelines(base: readonly string[] | undefined): string[] {
 	return [...(base ?? []), DIRECTORY_GRANT_GUIDELINE, ESCALATION_GUIDELINE];
@@ -615,13 +651,22 @@ function textResult(text: string): AgentToolResult<undefined> {
 	return { content: [{ type: "text", text }], details: undefined };
 }
 
-function grantDeniedMessage(directory: string, cause: string): string {
+function grantDeniedMessage(
+	directory: string,
+	cause: string,
+	workspace: string,
+): string {
+	const guidance = extraWritableRootsGuidance(directory, workspace);
 	if (cause === "deny") {
-		return `the auto-reviewer rejected the directory grant for "${directory}"; nothing was granted, so stop and explain instead of working around it — do not retry with a broader directory`;
+		return `the auto-reviewer rejected the directory grant for "${directory}"; nothing was granted, so stop and explain instead of working around it — do not retry with a broader directory. ${guidance}`;
 	}
 	if (cause === "aborted")
 		return "approval for the directory grant was cancelled — nothing was granted";
-	return `auto-review denied the directory grant for "${directory}" (${cause}) — nothing was granted. Stop and explain instead of working around it.`;
+	return `auto-review denied the directory grant for "${directory}" (${cause}) — nothing was granted. Stop and explain instead of working around it. ${guidance}`;
+}
+
+function grantLimitMessage(directory: string, workspace: string): string {
+	return `sandbox_grant_write has reached its limit of ${GRANT_LIMIT_PER_TURN} new directories for this request — nothing was granted. Existing grants still apply. ${extraWritableRootsGuidance(directory, workspace)}`;
 }
 
 /** The same approval modes as mode escalation (human / auto-review / allow-all). A bad config is a denial, not a drop to allow-all. */
@@ -678,7 +723,9 @@ async function approveDirectoryGrant(args: {
 			outcome.decision === "ALLOW" ? "info" : "warning",
 		);
 		if (outcome.decision === "ALLOW") return;
-		throw new Error(grantDeniedMessage(args.directory, outcome.cause));
+		throw new Error(
+			grantDeniedMessage(args.directory, outcome.cause, args.workspace),
+		);
 	}
 	const decision = await approvalChannelFor(args.ctx, args.signal).ask(
 		[
@@ -1244,6 +1291,9 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 					`Directory ${requested} is already writable under the current sandbox. Nothing new was granted.`,
 				);
 			}
+			if (getWritableGrants().count(sessionId) >= GRANT_LIMIT_PER_TURN) {
+				throw new Error(grantLimitMessage(requested, workspaceRoot));
+			}
 			const matching = getDenialLedger()
 				.list(sessionId)
 				.filter((record) => grantCoversDenial(requested, record));
@@ -1268,9 +1318,17 @@ export function createSandboxTools(deps: SandboxToolDeps) {
 				writablePaths: roots,
 				denials: matching,
 			});
+			// Re-check and register in one synchronous section: no await between the limit check and the
+			// registration, so two concurrent approvals cannot both add the sixth grant.
+			if (getWritableGrants().count(sessionId) >= GRANT_LIMIT_PER_TURN) {
+				throw new Error(grantLimitMessage(requested, workspaceRoot));
+			}
 			const created = createMissingGrantDirectories(requested);
 			const real = canonicalPath(requested);
-			getWritableGrants().grant(sessionId, real, created);
+			if (getWritableGrants().grant(sessionId, real, created) === "limit") {
+				removeEmptyCreatedDirectories(created);
+				throw new Error(grantLimitMessage(requested, workspaceRoot));
+			}
 			return textResult(
 				`Granted write access to ${real} until this request ends. Later tool calls in this run can write this directory. Retry the denied operation as its own call. The grant is cleared when this request ends or the next user message starts.`,
 			);
