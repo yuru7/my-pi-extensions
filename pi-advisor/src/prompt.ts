@@ -21,13 +21,13 @@ export const STANDARD_DESCRIPTION =
 	"Consult a stronger model for guidance. The conversation, including every tool call and result, is forwarded automatically; call advisor with no arguments, then resume the task with the advice.";
 
 export const STANDARD_SNIPPET =
-	"Consult a stronger model before substantive work, when stuck, or before declaring done";
+	"Consult a stronger model on large, complex, or high-impact work before committing, when stuck, or before done";
 
 export const STANDARD_GUIDELINES: readonly string[] = [
-	"Call `advisor` before substantive work or major decisions — writing, editing, committing to an interpretation, or building on an assumption; routine orientation (finding files, reading a source) does not require a call.",
-	"Call `advisor` before declaring completion, after the deliverable is durable (file written, result saved, or change committed). If the session ends during the call, only a durable result survives.",
+	"Call `advisor` before writing, editing, or committing to an approach or conclusion on large, complex, ambiguous, or high-impact work (architecture, multi-file changes, hard diagnosis, or non-obvious trade-offs); skip routine orientation (finding files, reading) and small, straightforward edits.",
+	"Before declaring completion on complex or high-risk tasks, or after editing based on advice, call `advisor` to verify alignment once the deliverable is durable (file written, saved, or change committed) so it survives interruption.",
 	"Consult when stuck — repeated failures, approach not converging, or results that do not fit — or when considering a different approach.",
-	"For multi-step tasks, consult before committing to an approach and before finishing. Most value is the first call, before the approach crystallizes; skip when tool output you just read dictates the next action.",
+	"Most value is the first call before an approach crystallizes; skip mid-task follow-up calls when tool output you just read dictates the next action.",
 	"Give advice serious weight unless empirical results or primary evidence contradict it. A passing self-test shows the test missed what the advice checks, not that the advice is wrong.",
 	'If advice conflicts with evidence already gathered, consult again ("I found X; you suggest Y; which constraint breaks the tie?") rather than switching silently; that is cheaper than the wrong branch.',
 	"Quote or paraphrase each advisor result's key guidance (plan, correction, or stop) in the next visible user-facing reply before continuing. Collapsed tool output is not a substitute.",

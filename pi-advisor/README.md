@@ -26,7 +26,7 @@ Choose **No advisor** to turn it off. Press Esc on the model picker to leave the
 
 ## What the executor is told
 
-`standard` is the only prompt mode. While the tool is active, Pi adds a one-line snippet and seven guidelines. They tell the executor to consult before substantive work (writing, editing, an interpretation, or an assumption), before declaring completion after the deliverable is durable, and when stuck, not converging, or facing results that do not fit. Routine orientation does not require a call. On multi-step work, the first call before the approach crystallizes carries most of the value, and a later call is skipped when tool output just read already dictates the next action. Advice outweighs a passing self-test. A conflict goes back with both sides stated, and the key guidance is quoted or paraphrased in the next visible reply. The tool description says the advisor already sees every tool call and result.
+`standard` is the only prompt mode. While the tool is active, Pi adds a one-line snippet and seven guidelines. They tell the executor to consult before writing, editing, or committing to an approach or conclusion on large, complex, ambiguous, or high-impact work (architecture, multi-file changes, hard diagnosis, or non-obvious trade-offs), before declaring completion on complex or high-risk tasks or after editing based on advice to verify alignment once the deliverable is durable, and when stuck, not converging, or facing results that do not fit. Routine orientation and small, straightforward edits are skipped. The first call before the approach crystallizes carries most of the value, and mid-task follow-up calls are skipped when tool output just read already dictates the next action. Advice outweighs a passing self-test. A conflict goes back with both sides stated, and the key guidance is quoted or paraphrased in the next visible reply. The tool description says the advisor already sees every tool call and result.
 
 The advisor's own instructions (return a plan, a correction, or a stop, and do not call tools) are sent only on the advisor request.
 
@@ -77,9 +77,9 @@ Compared with the rpiv-advisor 2.13.8 executor text, `standard` adds fewer token
 | | Original | Standard |
 | --- | ---: | ---: |
 | Tool definition | 95 | 52 |
-| Prompt guidance | 412 | 282 |
-| Total added by the extension | 507 | 334 |
-| Reduction from the original | — | 34.1% |
+| Prompt guidance | 412 | 301 |
+| Total added by the extension | 507 | 353 |
+| Reduction from the original | — | 30.4% |
 
 When advisor is off, that text is not added.
 

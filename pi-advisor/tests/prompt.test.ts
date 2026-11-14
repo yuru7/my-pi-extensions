@@ -73,20 +73,32 @@ async function measurePrompt(description: string, snippet: string, guidelines: r
 const scenarios: { name: string; marker: string }[] = [
 	{ name: "routine lookup does not require a call", marker: "routine orientation" },
 	{ name: "file orientation does not require a call", marker: "finding files" },
-	{ name: "substantive work requires a call", marker: "before substantive work or major decisions" },
-	{ name: "architecture choice is a major decision", marker: "major decisions" },
-	{ name: "ambiguous work is substantive", marker: "before substantive work or major decisions" },
+	{ name: "small straightforward edits do not require a call", marker: "small, straightforward edits" },
+	{
+		name: "large, complex, ambiguous, or high-impact work requires a call",
+		marker: "large, complex, ambiguous, or high-impact work",
+	},
+	{ name: "architecture choice requires a call", marker: "architecture" },
+	{ name: "multi-file changes require a call", marker: "multi-file changes" },
+	{ name: "hard non-editing diagnosis requires a call", marker: "hard diagnosis" },
+	{ name: "non-obvious trade-offs require a call", marker: "non-obvious trade-offs" },
 	{ name: "repeated failures require a call", marker: "repeated failures" },
 	{ name: "a change of approach requires a call", marker: "different approach" },
-	{ name: "a serious decision requires a call", marker: "major decisions" },
-	{ name: "an obvious next step does not require another call", marker: "tool output you just read" },
-	{ name: "completion requires a call after the result is durable", marker: "before declaring completion" },
+	{ name: "an obvious next step does not require a mid-task call", marker: "tool output you just read" },
+	{
+		name: "complex or high-risk completion requires a call after the result is durable",
+		marker: "Before declaring completion on complex or high-risk tasks",
+	},
+	{
+		name: "edits based on advice require a pre-completion alignment check",
+		marker: "after editing based on advice",
+	},
 	{ name: "a conflict with evidence requires another call", marker: "consult again" },
 	{ name: "the next reply must share the advice", marker: "next visible user-facing reply" },
 ];
 
 describe("standard prompt", () => {
-	test("keeps every call-decision condition from the baseline", () => {
+	test("keeps required call-decision and restraint conditions", () => {
 		const text = [STANDARD_SNIPPET, ...STANDARD_GUIDELINES].join("\n");
 		for (const scenario of scenarios) {
 			assert.match(text, new RegExp(scenario.marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), scenario.name);
@@ -95,8 +107,10 @@ describe("standard prompt", () => {
 		assert.match(STANDARD_DESCRIPTION, /every tool call and result/);
 		assert.match(STANDARD_DESCRIPTION, /forwarded automatically/);
 		assert.match(STANDARD_DESCRIPTION, /resume the task/);
-		assert.match(text, /committing to an interpretation/);
-		assert.match(text, /building on an assumption/);
+		assert.match(text, /committing to an approach or conclusion/);
+		assert.match(text, /small, straightforward edits/);
+		assert.match(text, /verify alignment/);
+		assert.match(text, /mid-task follow-up calls/);
 		assert.match(text, /file written/);
 		assert.match(text, /change committed/);
 		assert.match(text, /not converging/);
@@ -136,9 +150,9 @@ describe("standard prompt", () => {
 		});
 		assert.deepEqual(standard, {
 			toolDefinition: 52,
-			guidance: 282,
-			total: 334,
-			systemPromptDelta: 282,
+			guidance: 301,
+			total: 353,
+			systemPromptDelta: 301,
 		});
 	});
 });

@@ -19,23 +19,23 @@ The test `tests/prompt.test.ts` asserts these counts, so a prompt edit that chan
 | Item | Original | Standard |
 | --- | ---: | ---: |
 | Tool definition tokens | 95 | 52 |
-| Prompt guidance tokens | 412 | 282 |
-| Extension total | 507 | 334 |
-| Reduction from the original | baseline | 34.1% |
+| Prompt guidance tokens | 412 | 301 |
+| Extension total | 507 | 353 |
+| Reduction from the original | baseline | 30.4% |
 | Advisor call reproduction rate | not measured | not measured |
 
-34.1% is `(507 - 334) / 507`.
+30.4% is `(507 - 353) / 507`.
 
 With advisor disabled, Pi's prompt builder does not receive the snippet or guidelines, and the tool is not in the active set, so this total is not added.
 
 ## Call behavior
 
-The shortened guidelines still state each condition the plan requires:
+`standard` narrows consultation to larger, harder, or higher-stakes work while keeping explicit action hooks:
 
-1. Consult before substantive work or a major decision, including writing, editing, committing to an interpretation, or building on an assumption. Routine orientation does not require it.
-2. Consult before declaring completion, after the deliverable is durable (written, saved, or committed).
+1. Consult before writing, editing, or committing to an approach or conclusion on large, complex, ambiguous, or high-impact work (architecture, multi-file changes, hard diagnosis, or non-obvious trade-offs). Routine orientation and small, straightforward edits are skipped.
+2. Consult before declaring completion on complex or high-risk tasks, or after editing based on advice, to verify alignment once the deliverable is durable (file written, saved, or change committed).
 3. Consult when stuck, after repeated failures, when the approach is not converging, when results do not fit, or when changing approach.
-4. On multi-step work, consult before committing to an approach and before finishing. Most of the value is that first call, before the approach crystallizes. Skip a later call when tool output just read already dictates the next action.
+4. Most value is the first call, before the approach crystallizes. Skip mid-task follow-up calls when tool output just read already dictates the next action.
 5. Weight the advice unless empirical results or primary evidence contradict it. A passing self-test shows the test missed what the advice checks.
 6. If advice conflicts with evidence already gathered, consult again and state both sides, instead of changing direction silently.
 7. Quote or paraphrase the key guidance in the next visible reply. The tool description also says the advisor already sees every tool call and result.
